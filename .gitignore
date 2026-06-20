@@ -1,0 +1,51 @@
+# Dependencies (matches node_modules at any depth, incl. mobile/)
+node_modules
+.pnp
+.pnp.js
+
+# Secrets / environment — keep .example files, ignore everything real
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# Next.js (web app)
+.next
+out
+build
+dist
+next-env.d.ts
+*.tsbuildinfo
+
+# Expo / React Native (mobile app)
+.expo
+mobile/.expo
+dist-mobile
+web-build
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Vercel
+.vercel
+
+# Testing / coverage
+coverage
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.idea
+*.swp
+
+# Local agent tooling (not product code)
+.claude
+.agents

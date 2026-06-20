@@ -1,0 +1,17 @@
+{
+  "name": "DishData — Restaurant Intelligence",
+  "short_name": "DishData",
+  "description": "AI-powered restaurant management: POS, kitchen, inventory, insights.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08080d",
+  "theme_color": "#08080d",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

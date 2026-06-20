@@ -1,0 +1,507 @@
+// Hand-maintained row types mirroring supabase/setup.sql.
+// Keep this file and setup.sql in sync when the schema changes.
+
+export type Role = "owner" | "admin" | "manager" | "staff" | "accountant" | "viewer";
+export type OrderType = "dine_in" | "takeaway" | "delivery";
+export type OrderStatus = "open" | "paid" | "void" | "refunded";
+export type KitchenStatus = "new" | "preparing" | "ready" | "served";
+export type PaymentMethod = "card" | "cash" | "wallet" | "stripe";
+export type PoStatus = "draft" | "sent" | "confirmed" | "delivered" | "reconciled";
+export type InvReason = "sale" | "purchase" | "waste" | "adjustment" | "count";
+export type WasteReason = "spoiled" | "burnt" | "returned" | "overprep" | "other";
+export type TaskStatus = "todo" | "in_progress" | "done";
+export type TaskPriority = "low" | "medium" | "high";
+export type ReservationStatus = "booked" | "seated" | "completed" | "no_show" | "cancelled";
+export type DeliveryStatus = "pending" | "assigned" | "picked_up" | "delivered" | "failed";
+export type TableStatus = "open" | "seated" | "reserved" | "cleaning";
+export type CampaignStatus = "draft" | "scheduled" | "sent";
+export type CampaignChannel = "email" | "sms" | "in_store";
+export type LoyaltyTierBasis = "lifetime" | "rolling_12mo" | "spend";
+export type LoyaltyActionType =
+  | "purchase" | "signup" | "birthday" | "instagram_follow"
+  | "newsletter" | "review" | "referral" | "visit" | "custom";
+export type LoyaltyRewardType =
+  | "free_item" | "amount_discount" | "percent_discount" | "free_delivery" | "custom";
+export type LoyaltyRedemptionStatus = "issued" | "applied" | "expired" | "void";
+export type LoyaltyVerification = "auto" | "honor" | "verified";
+
+export interface Org {
+  id: string;
+  name: string;
+  slug: string;
+  logo_url: string | null;
+  accent_color: string | null;
+  currency: string;
+  tax_rate: number;
+  target_food_cost_pct: number;
+  onboarding_completed: boolean;
+  settings: Record<string, unknown>;
+}
+
+export interface Profile {
+  id: string;
+  email: string | null;
+  full_name: string | null;
+  active_org_id: string | null;
+  preferences: Record<string, unknown>;
+}
+
+export interface OrgMember {
+  org_id: string;
+  user_id: string;
+  role: Role;
+  joined_at: string;
+  // joined fields
+  email?: string | null;
+  full_name?: string | null;
+}
+
+export interface ModuleAccess {
+  org_id: string;
+  user_id: string;
+  module_id: string;
+  can_access: boolean;
+}
+
+export interface Invite {
+  id: string;
+  org_id: string;
+  email: string;
+  role: Role;
+  code: string;
+  expires_at: string;
+  accepted_at: string | null;
+}
+
+export interface Vendor {
+  id: string;
+  org_id: string;
+  name: string;
+  category: string;
+  contact_email: string | null;
+  contact_phone: string | null;
+  rating: number;
+  on_time_pct: number;
+  monthly_spend: number;
+  price_index: number;
+}
+
+export type ItemType = "ingredient" | "supply" | "equipment";
+export type AssetStatus = "in_service" | "maintenance" | "retired";
+
+export interface InventoryItem {
+  id: string;
+  org_id: string;
+  name: string;
+  category: string;
+  stock: number;
+  unit: string;
+  par_level: number;
+  unit_cost: number;
+  expires_at: string | null;
+  vendor_id: string | null;
+  // Multi-type + location + labeling
+  item_type: ItemType;
+  sku: string | null;
+  location_id: string | null;
+  // Equipment-only (null for consumables)
+  serial_number: string | null;
+  purchase_date: string | null;
+  purchase_cost: number | null;
+  depreciation_months: number | null;
+  asset_status: AssetStatus | null;
+}
+
+export interface StorageLocation {
+  id: string;
+  org_id: string;
+  name: string;
+  area: string;
+  shelf: string;
+  notes: string | null;
+}
+
+export type MaintenanceKind = "service" | "repair" | "inspection";
+
+export interface AssetMaintenance {
+  id: string;
+  org_id: string;
+  item_id: string;
+  performed_at: string;
+  kind: MaintenanceKind;
+  cost: number;
+  note: string | null;
+  next_due_at: string | null;
+  created_at: string;
+}
+
+export interface InventoryTransaction {
+  id: string;
+  org_id: string;
+  item_id: string | null;
+  item_name: string;
+  delta: number;
+  reason: InvReason;
+  waste_reason: WasteReason | null;
+  ref_order_id: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface Recipe {
+  id: string;
+  org_id: string;
+  name: string;
+  category: string;
+  price: number;
+  prep_minutes: number;
+  emoji: string;
+  image_url: string | null;
+  is_active: boolean;
+}
+
+export interface RecipeIngredient {
+  id: string;
+  org_id: string;
+  recipe_id: string;
+  inventory_item_id: string | null;
+  name: string;
+  qty_display: string;
+  qty_numeric: number;
+  cost: number;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  org_id: string;
+  po_number: string;
+  vendor_id: string | null;
+  vendor_name: string;
+  status: PoStatus;
+  expected_at: string;
+  total: number;
+  items_count: number;
+  created_at: string;
+}
+
+export interface PurchaseOrderItem {
+  id: string;
+  org_id: string;
+  po_id: string;
+  inventory_item_id: string | null;
+  name: string;
+  qty: number;
+  unit_cost: number;
+}
+
+export type PriceSource = "manual" | "po" | "invoice";
+export type BillStatus = "parsed" | "reviewed" | "confirmed";
+
+/** One observed price for an item from a vendor at a point in time. */
+export interface SupplierItemPrice {
+  id: string;
+  org_id: string;
+  inventory_item_id: string | null;
+  vendor_id: string | null;
+  item_name: string;
+  vendor_name: string;
+  price: number;
+  unit: string | null;
+  pack_qty: number;
+  source: PriceSource;
+  bill_item_id: string | null;
+  po_item_id: string | null;
+  effective_from: string;
+  created_at: string;
+}
+
+export interface SupplierBill {
+  id: string;
+  org_id: string;
+  vendor_id: string | null;
+  vendor_name: string;
+  bill_date: string | null;
+  total: number;
+  image_url: string | null;
+  status: BillStatus;
+  raw_extract: unknown;
+  created_at: string;
+}
+
+export interface SupplierBillItem {
+  id: string;
+  org_id: string;
+  bill_id: string;
+  inventory_item_id: string | null;
+  raw_name: string;
+  qty: number;
+  unit: string | null;
+  unit_price: number;
+}
+
+export interface RestaurantTable {
+  id: string;
+  org_id: string;
+  name: string;
+  seats: number;
+  zone: string;
+  status: TableStatus;
+}
+
+export interface Customer {
+  id: string;
+  org_id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  visits: number;
+  total_spend: number;
+  points: number;
+  tier: string;
+  last_visit_at: string | null;
+  // Loyalty (DB-defaulted columns — optional on the client so existing inserts stay valid)
+  birthday?: string | null;
+  status_points?: number;
+  tier_id?: string | null;
+  newsletter_opt_in?: boolean;
+  instagram_handle?: string | null;
+}
+
+export interface OrderLine {
+  recipe_id: string;
+  name: string;
+  qty: number;
+  price: number;
+}
+
+export interface Order {
+  id: string;
+  org_id: string;
+  order_number: string;
+  order_type: OrderType;
+  table_id: string | null;
+  customer_id: string | null;
+  guest_name: string | null;
+  items: OrderLine[];
+  subtotal: number;
+  tax: number;
+  tip: number;
+  total: number;
+  status: OrderStatus;
+  kitchen_status: KitchenStatus;
+  kitchen_notes: string | null;
+  source: string;
+  created_at: string;
+}
+
+export interface Payment {
+  id: string;
+  org_id: string;
+  order_id: string;
+  method: PaymentMethod;
+  amount: number;
+  tip_amount: number;
+  split_label: string | null;
+  created_at: string;
+}
+
+export interface Reservation {
+  id: string;
+  org_id: string;
+  table_id: string | null;
+  customer_id: string | null;
+  guest_name: string;
+  phone: string | null;
+  party_size: number;
+  starts_at: string;
+  duration_min: number;
+  status: ReservationStatus;
+  note: string | null;
+  source: string;
+}
+
+export interface Delivery {
+  id: string;
+  org_id: string;
+  order_id: string | null;
+  courier_employee_id: string | null;
+  address: string;
+  phone: string | null;
+  status: DeliveryStatus;
+  eta: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface Employee {
+  id: string;
+  org_id: string;
+  user_id: string | null;
+  name: string;
+  role_title: string;
+  hourly_rate: number;
+  pin: string | null;
+  shift_note: string | null;
+  avatar_hue: number;
+  is_active: boolean;
+}
+
+export interface TimeEntry {
+  id: string;
+  org_id: string;
+  employee_id: string;
+  clock_in: string;
+  clock_out: string | null;
+  break_seconds: number;
+  break_started_at: string | null;
+  note: string | null;
+}
+
+export interface Task {
+  id: string;
+  org_id: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assignee_employee_id: string | null;
+  partner_email: string | null;
+  due_date: string | null;
+  position: number;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface Campaign {
+  id: string;
+  org_id: string;
+  name: string;
+  channel: CampaignChannel;
+  segment: { tier?: string; min_visits?: number; inactive_days?: number };
+  status: CampaignStatus;
+  scheduled_at: string | null;
+  stats: { sent?: number; opened?: number; redeemed?: number };
+  created_at: string;
+}
+
+export interface Expense {
+  id: string;
+  org_id: string;
+  date: string;
+  category: string;
+  vendor_name: string;
+  amount: number;
+  tax_amount: number;
+  receipt_url: string | null;
+  note: string | null;
+}
+
+export interface LoyaltyProgram {
+  org_id: string;
+  enabled: boolean;
+  points_name: string;
+  earn_rate: number;
+  redeem_rate: number;
+  tier_basis: LoyaltyTierBasis;
+  rolling_window_days: number;
+  points_expiry_days: number | null;
+  settings: Record<string, unknown>;
+}
+
+export interface LoyaltyTierPerks {
+  earn_multiplier?: number;
+  free_delivery?: boolean;
+  birthday_bonus?: number;
+  custom?: string[];
+}
+
+export interface LoyaltyTier {
+  id: string;
+  org_id: string;
+  name: string;
+  threshold: number;
+  sort_order: number;
+  color: string | null;
+  icon: string | null;
+  perks: LoyaltyTierPerks;
+  created_at: string;
+}
+
+export interface LoyaltyEarnRule {
+  id: string;
+  org_id: string;
+  action_type: LoyaltyActionType;
+  label: string;
+  description: string | null;
+  points: number;
+  enabled: boolean;
+  verification: LoyaltyVerification;
+  repeatable: boolean;
+  cooldown_days: number | null;
+  config: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LoyaltyReward {
+  id: string;
+  org_id: string;
+  reward_type: LoyaltyRewardType;
+  label: string;
+  description: string | null;
+  cost_points: number;
+  value: number;
+  free_recipe_id: string | null;
+  min_tier_id: string | null;
+  enabled: boolean;
+  image_url: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface LoyaltyRedemption {
+  id: string;
+  org_id: string;
+  customer_id: string;
+  reward_id: string | null;
+  reward_snapshot: Record<string, unknown>;
+  points_spent: number;
+  code: string;
+  status: LoyaltyRedemptionStatus;
+  expires_at: string | null;
+  applied_order_id: string | null;
+  created_at: string;
+}
+
+export interface LoyaltyTransaction {
+  id: string;
+  org_id: string;
+  customer_id: string;
+  points_delta: number;
+  reason: string;
+  order_id: string | null;
+  action_type: LoyaltyActionType | null;
+  created_at: string;
+}
+
+export interface Notification {
+  id: string;
+  org_id: string;
+  user_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  ref: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  org_id: string;
+  actor: string | null;
+  table_name: string;
+  action: string;
+  row_id: string | null;
+  detail: Record<string, unknown> | null;
+  created_at: string;
+}

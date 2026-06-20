@@ -1,0 +1,919 @@
+import { useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import {
+  Search,
+  Plus,
+  Minus,
+  Trash2,
+  CreditCard,
+  Banknote,
+  Smartphone,
+  CheckCircle2,
+  ShoppingBag,
+  UtensilsCrossed,
+  ChefHat,
+  Receipt,
+  Users,
+  Clock,
+  SplitSquareHorizontal,
+} from "lucide-react";
+import {
+  Card,
+  SectionTitle,
+  Button,
+  Badge,
+  Modal,
+  Input,
+  Select,
+  EmptyState,
+  PageSkeleton,
+} from "@/components/ui";
+import { useRecipes, useCustomers, useTables, useOrders, useInvalidate } from "@/lib/hooks/data";
+import { useUi } from "@/lib/store";
+import { useOrg } from "@/lib/hooks/useOrg";
+import { useFmt } from "@/lib/hooks/useFmt";
+import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
+import { checkoutOrder, markOrderPaid, type CheckoutResult } from "@/lib/api/orders";
+import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
+import type { Order, OrderType, PaymentMethod } from "@/lib/api/database.types";
+
+const categories = ["All", "Mains", "Appetizers", "Desserts", "Beverages", "Specials"] as const;
+
+type PaymentInput = { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string };
+type BillLine = { name: string; qty: number; price: number };
+
+const methodMeta = [
+  ["card", CreditCard, "Card"],
+  ["cash", Banknote, "Cash"],
+  ["wallet", Smartphone, "Wallet"],
+] as [PaymentMethod, typeof CreditCard, string][];
+
+function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const h = Math.floor(mins / 60);
+  return `${h}h ${mins % 60}m ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Pay modal — single payer, even split, or split by dish, each payer can use a
+// different method. Returns the payments[] array plus the resolved tip amount.
+// ---------------------------------------------------------------------------
+function PayModal({
+  open,
+  onClose,
+  lines,
+  subtotal,
+  taxRate,
+  initialTipPct,
+  confirmLabel,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  lines: BillLine[];
+  subtotal: number;
+  taxRate: number;
+  initialTipPct: number;
+  confirmLabel: string;
+  pending: boolean;
+  onConfirm: (payments: PaymentInput[], tip: number) => void;
+}) {
+  const fmt = useFmt();
+  const [tipPct, setTipPct] = useState(initialTipPct);
+  const [mode, setMode] = useState<"single" | "even" | "item">("single");
+  const [guests, setGuests] = useState(2);
+  // assignments[lineIndex] = guest index (0-based) or "shared"
+  const [assign, setAssign] = useState<Record<number, number | "shared">>({});
+  const [methods, setMethods] = useState<PaymentMethod[]>(["card", "card", "card", "card", "card", "card"]);
+
+  const tax = +(subtotal * (taxRate / 100)).toFixed(2);
+  const tip = +(subtotal * (tipPct / 100)).toFixed(2);
+  const total = +(subtotal + tax + tip).toFixed(2);
+
+  const setMethod = (i: number, m: PaymentMethod) =>
+    setMethods((prev) => prev.map((x, idx) => (idx === i ? m : x)));
+
+  // Per-payer breakdown for split modes.
+  const payers = useMemo(() => {
+    if (mode === "single") return [{ label: null as string | null, sub: subtotal, tax, tip, amount: total }];
+
+    const n = guests;
+    const subs = Array(n).fill(0) as number[];
+    lines.forEach((l, i) => {
+      const lineTotal = l.price * l.qty;
+      const a = mode === "even" ? "shared" : assign[i] ?? "shared";
+      if (a === "shared") for (let g = 0; g < n; g++) subs[g] += lineTotal / n;
+      else subs[Math.min(a, n - 1)] += lineTotal;
+    });
+
+    const rows = subs.map((s) => {
+      const ratio = subtotal > 0 ? s / subtotal : 1 / n;
+      return {
+        sub: +s.toFixed(2),
+        tax: +(tax * ratio).toFixed(2),
+        tip: +(tip * ratio).toFixed(2),
+        amount: +((s + tax * ratio + tip * ratio)).toFixed(2),
+      };
+    });
+    // Absorb rounding drift into the first payer so the sum is exact.
+    const drift = +(total - rows.reduce((acc, r) => acc + r.amount, 0)).toFixed(2);
+    if (rows[0]) rows[0].amount = +(rows[0].amount + drift).toFixed(2);
+    return rows.map((r, i) => ({ label: `Guest ${i + 1}`, ...r }));
+  }, [mode, guests, assign, lines, subtotal, tax, tip, total]);
+
+  const confirm = () => {
+    const payments: PaymentInput[] = payers.map((p, i) => ({
+      method: mode === "single" ? methods[0] : methods[i],
+      amount: p.amount,
+      tip_amount: p.tip,
+      split_label: p.label ?? undefined,
+    }));
+    onConfirm(payments, tip);
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Take payment" wide>
+      <div className="space-y-5">
+        {/* Tip */}
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-zinc-400">Tip</p>
+          <div className="flex gap-1.5">
+            {[0, 10, 15, 18, 20].map((p) => (
+              <button
+                key={p}
+                onClick={() => setTipPct(p)}
+                className={cn(
+                  "flex-1 cursor-pointer rounded-lg border py-2 text-xs font-semibold transition-all",
+                  tipPct === p
+                    ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                    : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                )}
+              >
+                {p === 0 ? "No tip" : `${p}%`}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Split mode */}
+        <div>
+          <p className="mb-1.5 text-xs font-medium text-zinc-400">How are they paying?</p>
+          <div className="flex rounded-xl border border-line bg-white/[0.02] p-1">
+            {(
+              [
+                ["single", "One payment"],
+                ["even", "Split evenly"],
+                ["item", "Split by dish"],
+              ] as ["single" | "even" | "item", string][]
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={cn(
+                  "flex-1 cursor-pointer rounded-lg py-2 text-xs font-semibold transition-all",
+                  mode === m ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode !== "single" && (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-zinc-400">Number of guests</p>
+            <div className="flex gap-1.5">
+              {[2, 3, 4, 5, 6].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setGuests(n)}
+                  className={cn(
+                    "flex-1 cursor-pointer rounded-lg border py-2 text-xs font-semibold transition-all",
+                    guests === n
+                      ? "border-accent-400/50 bg-accent-400/10 text-accent-400"
+                      : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                  )}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Assign dishes to guests */}
+        {mode === "item" && (
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-zinc-400">Assign each dish</p>
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {lines.map((l, i) => (
+                <div key={i} className="rounded-xl border border-line bg-white/[0.02] p-2.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-white">
+                      {l.qty}× {l.name}
+                    </span>
+                    <span className="text-zinc-400">{fmt(l.price * l.qty, 2)}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {Array.from({ length: guests }, (_, g) => (
+                      <button
+                        key={g}
+                        onClick={() => setAssign((p) => ({ ...p, [i]: g }))}
+                        className={cn(
+                          "cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all",
+                          (assign[i] ?? "shared") === g
+                            ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                            : "border-line text-zinc-400 hover:text-white",
+                        )}
+                      >
+                        G{g + 1}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setAssign((p) => ({ ...p, [i]: "shared" }))}
+                      className={cn(
+                        "cursor-pointer rounded-lg border px-2.5 py-1 text-xs font-semibold transition-all",
+                        (assign[i] ?? "shared") === "shared"
+                          ? "border-accent-400/50 bg-accent-400/10 text-accent-400"
+                          : "border-line text-zinc-400 hover:text-white",
+                      )}
+                    >
+                      Shared
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Per-payer amounts + method */}
+        <div className="space-y-2 rounded-xl border border-line bg-white/[0.02] p-3">
+          {payers.map((p, i) => (
+            <div key={i} className="flex flex-col gap-2 border-b border-line/60 pb-2 last:border-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm">
+                <span className="font-semibold text-white">{p.label ?? "Total due"}</span>
+                <span className="ml-2 text-zinc-500">{fmt(p.amount, 2)}</span>
+              </div>
+              <div className="flex gap-1">
+                {methodMeta.map(([key, Icon, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setMethod(mode === "single" ? 0 : i, key)}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all",
+                      (mode === "single" ? methods[0] : methods[i]) === key
+                        ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                        : "border-line text-zinc-400 hover:text-white",
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" /> {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Totals */}
+        <div className="space-y-1 text-sm">
+          <div className="flex justify-between text-zinc-400">
+            <span>Subtotal</span>
+            <span>{fmt(subtotal, 2)}</span>
+          </div>
+          <div className="flex justify-between text-zinc-400">
+            <span>Tax ({taxRate}%)</span>
+            <span>{fmt(tax, 2)}</span>
+          </div>
+          {tip > 0 && (
+            <div className="flex justify-between text-zinc-400">
+              <span>Tip ({tipPct}%)</span>
+              <span>{fmt(tip, 2)}</span>
+            </div>
+          )}
+          <div className="flex justify-between pt-1 text-base font-bold text-white">
+            <span>Total</span>
+            <span className="text-gradient">{fmt(total, 2)}</span>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Button variant="ghost" className="flex-1" onClick={onClose} disabled={pending}>
+            Cancel
+          </Button>
+          <Button className="flex-[2]" onClick={confirm} disabled={pending}>
+            {pending ? "Processing…" : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export default function Pos() {
+  const { org } = useOrg();
+  const fmt = useFmt();
+  const recipesQ = useRecipes();
+  const customersQ = useCustomers();
+  const tablesQ = useTables();
+  const ordersQ = useOrders();
+  const invalidate = useInvalidate();
+  const { cart, addToCart, setCartQty, clearCart } = useUi();
+
+  const [tab, setTab] = useState<"order" | "tabs">("order");
+  const [category, setCategory] = useState<(typeof categories)[number]>("All");
+  const [query, setQuery] = useState("");
+  const [payment, setPayment] = useState<PaymentMethod>("card");
+  const [orderType, setOrderType] = useState<OrderType>("dine_in");
+  const [customerId, setCustomerId] = useState<string>("");
+  const [kitchenNotes, setKitchenNotes] = useState("");
+  const [tipPct, setTipPct] = useState<number>(0);
+  const [address, setAddress] = useState("");
+  const [tableId, setTableId] = useState("");
+  const [payOpen, setPayOpen] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [settling, setSettling] = useState<Order | null>(null);
+  const [receipt, setReceipt] = useState<
+    (CheckoutResult & { lines: BillLine[]; tax: number; tip: number; method: string }) | null
+  >(null);
+
+  const recipes = useMemo(() => (recipesQ.data ?? []).filter((r) => r.is_active), [recipesQ.data]);
+  const products = useMemo(
+    () =>
+      recipes.filter(
+        (r) =>
+          (category === "All" || r.category === category) &&
+          r.name.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [recipes, category, query],
+  );
+
+  const lines = cart
+    .map((l) => ({ ...l, recipe: recipes.find((r) => r.id === l.recipeId) }))
+    .filter((l) => l.recipe);
+  const billLines: BillLine[] = lines.map((l) => ({ name: l.recipe!.name, qty: l.qty, price: l.recipe!.price }));
+  const subtotal = lines.reduce((s, l) => s + l.recipe!.price * l.qty, 0);
+  const taxRate = org?.tax_rate ?? 8.5;
+  const tax = subtotal * (taxRate / 100);
+  const tip = +(subtotal * (tipPct / 100)).toFixed(2);
+  const total = +(subtotal + tax + tip).toFixed(2);
+  const cartCount = lines.reduce((s, l) => s + l.qty, 0);
+  // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
+  const isDesktopCart = useMediaQuery("(min-width: 768px)");
+
+  const openTabs = useMemo(
+    () =>
+      (ordersQ.data ?? [])
+        .filter((o) => o.status === "open")
+        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    [ordersQ.data],
+  );
+  const tableName = (id: string | null) =>
+    id ? (tablesQ.data ?? []).find((t) => t.id === id)?.name ?? null : null;
+
+  const resetOrder = () => {
+    clearCart();
+    setKitchenNotes("");
+    setTipPct(0);
+    setCustomerId("");
+    setAddress("");
+    setTableId("");
+    setCartOpen(false);
+  };
+
+  // --- Checkout the cart: either pay now, or open a tab (payments: []) ---
+  const checkout = useMutation({
+    mutationFn: (vars: { payments: PaymentInput[]; tip: number }) =>
+      checkoutOrder(org!.id, {
+        items: lines.map((l) => ({
+          recipe_id: l.recipeId,
+          name: l.recipe!.name,
+          qty: l.qty,
+          price: l.recipe!.price,
+        })),
+        orderType,
+        tableId: orderType === "dine_in" && tableId ? tableId : null,
+        customerId: customerId || null,
+        kitchenNotes: kitchenNotes || null,
+        tip: vars.tip,
+        address: orderType === "delivery" ? address : null,
+        payments: vars.payments,
+      }),
+    onSuccess: (result, vars) => {
+      const paid = vars.payments.length > 0;
+      const snapshot = billLines;
+      resetOrder();
+      setPayOpen(false);
+      invalidate(
+        "orders", "payments", "inventory", "inventory_tx",
+        "customers", "deliveries", "restaurant_tables",
+      );
+      if (paid) {
+        const method = vars.payments.length > 1 ? "split" : vars.payments[0].method;
+        setReceipt({ ...result, lines: snapshot, tax: +tax.toFixed(2), tip: vars.tip, method });
+        toast.success(`Order ${result.order_number} paid`, "Sent to kitchen · inventory updated");
+      } else {
+        toast.success(`Tab ${result.order_number} opened`, "Sent to kitchen · settle when guests are done");
+        setTab("tabs");
+      }
+    },
+    onError: (e) => toast.error("Checkout failed", e instanceof Error ? e.message : "Try again"),
+  });
+
+  // --- Settle an existing open tab ---
+  const settle = useMutation({
+    mutationFn: (vars: { order: Order; payments: PaymentInput[]; tip: number }) =>
+      markOrderPaid(org!.id, vars.order.id, vars.payments, vars.tip),
+    onSuccess: (_r, vars) => {
+      setSettling(null);
+      invalidate("orders", "payments", "customers");
+      toast.success(`Tab ${vars.order.order_number} settled`, fmt(vars.order.total, 2));
+    },
+    onError: (e) => toast.error("Settle failed", e instanceof Error ? e.message : "Try again"),
+  });
+
+  if (recipesQ.isLoading) return <PageSkeleton />;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <SectionTitle title="Point of Sale" subtitle="Sales flow straight into kitchen, inventory and analytics." />
+        <div className="flex rounded-xl border border-line bg-white/[0.02] p-1">
+          <button
+            onClick={() => setTab("order")}
+            className={cn(
+              "flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold transition-all",
+              tab === "order" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200",
+            )}
+          >
+            <ShoppingBag className="h-3.5 w-3.5" /> New order
+          </button>
+          <button
+            onClick={() => setTab("tabs")}
+            className={cn(
+              "flex cursor-pointer items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-semibold transition-all",
+              tab === "tabs" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200",
+            )}
+          >
+            <Receipt className="h-3.5 w-3.5" /> Open tabs
+            {openTabs.length > 0 && (
+              <span className="rounded-full bg-accent-400/20 px-1.5 text-[10px] font-bold text-accent-400">
+                {openTabs.length}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {tab === "tabs" ? (
+        <OpenTabsView
+          tabs={openTabs}
+          tableName={tableName}
+          onSettle={(o) => setSettling(o)}
+          loading={ordersQ.isLoading}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_370px]">
+          {/* Product grid */}
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative flex-1">
+                <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                <Input placeholder="Search menu…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
+              </div>
+              <div className="relative">
+                <div className="flex gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {categories.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCategory(c)}
+                      className={cn(
+                        "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
+                        category === c
+                          ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                          : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+                      )}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                {/* Right-edge fade hints that more categories can be scrolled into view */}
+                <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-base to-transparent sm:hidden" />
+              </div>
+            </div>
+
+            {recipes.length === 0 ? (
+              <Card>
+                <EmptyState
+                  icon={UtensilsCrossed}
+                  title="No menu items yet"
+                  hint="Add recipes first — they appear here automatically."
+                />
+              </Card>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+                {products.map((r) => (
+                  <button key={r.id} onClick={() => addToCart(r.id)} className="group cursor-pointer text-left">
+                    <Card className="overflow-hidden p-0 transition-all group-hover:border-brand-400/40 group-hover:shadow-lg group-hover:shadow-brand-500/10 group-active:scale-[0.97]">
+                      {r.image_url ? (
+                        <img src={r.image_url} alt={r.name} className="h-20 w-full object-cover" />
+                      ) : (
+                        <div className="flex h-20 items-center justify-center bg-white/[0.02] text-4xl">{r.emoji}</div>
+                      )}
+                      <div className="p-3">
+                        <p className="truncate text-sm font-semibold text-white">{r.name}</p>
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className="text-xs text-zinc-500">{r.category}</span>
+                          <span className="text-sm font-bold text-brand-300">{fmt(r.price)}</span>
+                        </div>
+                      </div>
+                    </Card>
+                  </button>
+                ))}
+                {products.length === 0 && (
+                  <p className="col-span-full py-10 text-center text-sm text-zinc-500">No items match “{query}”.</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Cart — side column on md+, slide-up bottom sheet on mobile */}
+          {!isDesktopCart && cartOpen && (
+            <div
+              className="animate-fade fixed inset-0 z-50 bg-black/60 backdrop-blur-sm md:hidden"
+              onClick={() => setCartOpen(false)}
+            />
+          )}
+          <Card
+            className={cn(
+              "h-fit flex-col p-5",
+              "md:flex md:!static md:inset-auto md:bottom-auto md:z-auto md:max-h-none md:overflow-visible lg:sticky lg:top-20",
+              cartOpen
+                ? "animate-rise fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-50 flex max-h-[78vh] overflow-y-auto"
+                : "hidden",
+            )}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 font-semibold text-white">
+                <ShoppingBag className="h-4 w-4 text-brand-300" /> Current Order
+              </h3>
+              {cart.length > 0 && (
+                <button onClick={resetOrder} className="cursor-pointer text-xs text-zinc-500 hover:text-rose-soft">
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Order type */}
+            <div className="mb-3 flex rounded-xl border border-line bg-white/[0.02] p-1">
+              {(
+                [
+                  ["dine_in", "Dine-in"],
+                  ["takeaway", "Takeaway"],
+                  ["delivery", "Delivery"],
+                ] as [OrderType, string][]
+              ).map(([t, label]) => (
+                <button
+                  key={t}
+                  onClick={() => setOrderType(t)}
+                  className={cn(
+                    "flex-1 cursor-pointer rounded-lg py-1.5 text-xs font-semibold transition-all",
+                    orderType === t ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {lines.length === 0 ? (
+              <p className="py-10 text-center text-sm text-zinc-500">Tap items to start an order.</p>
+            ) : (
+              <>
+                <div className="space-y-2.5">
+                  {lines.map((l) => (
+                    <div key={l.recipeId} className="flex items-center gap-3 rounded-xl border border-line bg-white/[0.02] p-2.5">
+                      <span className="text-xl">{l.recipe!.emoji}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-white">{l.recipe!.name}</p>
+                        <p className="text-xs text-zinc-500">{fmt(l.recipe!.price)} each</p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => setCartQty(l.recipeId, l.qty - 1)} className="cursor-pointer rounded-lg bg-white/5 p-1 text-zinc-300 hover:bg-white/10">
+                          {l.qty === 1 ? <Trash2 className="h-3.5 w-3.5 text-rose-soft" /> : <Minus className="h-3.5 w-3.5" />}
+                        </button>
+                        <span className="w-6 text-center text-sm font-semibold text-white">{l.qty}</span>
+                        <button onClick={() => addToCart(l.recipeId)} className="cursor-pointer rounded-lg bg-white/5 p-1 text-zinc-300 hover:bg-white/10">
+                          <Plus className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Customer + notes */}
+                <div className="mt-3 space-y-2">
+                  {orderType === "dine_in" && (tablesQ.data ?? []).length > 0 && (
+                    <Select value={tableId} onChange={(e) => setTableId(e.target.value)}>
+                      <option value="">No table</option>
+                      {(tablesQ.data ?? [])
+                        .filter((t) => t.status === "open" || t.id === tableId)
+                        .map((t) => (
+                          <option key={t.id} value={t.id}>
+                            Table {t.name} · {t.seats} seats · {t.zone}
+                          </option>
+                        ))}
+                    </Select>
+                  )}
+                  <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+                    <option value="">Walk-in guest</option>
+                    {(customersQ.data ?? []).map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} · {c.tier}
+                      </option>
+                    ))}
+                  </Select>
+                  <Input
+                    placeholder="Kitchen note (allergies, mods…)"
+                    value={kitchenNotes}
+                    onChange={(e) => setKitchenNotes(e.target.value)}
+                  />
+                  {orderType === "delivery" && (
+                    <Input
+                      placeholder="Delivery address"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                    />
+                  )}
+                </div>
+
+                {/* Tip */}
+                <div className="mt-3">
+                  <p className="mb-1.5 text-xs font-medium text-zinc-400">Tip</p>
+                  <div className="flex gap-1">
+                    {[0, 10, 15, 20].map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setTipPct(p)}
+                        className={cn(
+                          "flex-1 cursor-pointer rounded-lg border py-1.5 text-xs font-semibold transition-all",
+                          tipPct === p
+                            ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                            : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                        )}
+                      >
+                        {p === 0 ? "No tip" : `${p}%`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-1.5 border-t border-line pt-4 text-sm">
+                  <div className="flex justify-between text-zinc-400">
+                    <span>Subtotal</span>
+                    <span>{fmt(subtotal, 2)}</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-400">
+                    <span>Tax ({taxRate}%)</span>
+                    <span>{fmt(tax, 2)}</span>
+                  </div>
+                  {tip > 0 && (
+                    <div className="flex justify-between text-zinc-400">
+                      <span>Tip ({tipPct}%)</span>
+                      <span>{fmt(tip, 2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between pt-1 text-base font-bold text-white">
+                    <span>Total</span>
+                    <span className="text-gradient">{fmt(total, 2)}</span>
+                  </div>
+                </div>
+
+                {/* Quick payment method (for one-tap charge) */}
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {methodMeta.map(([key, Icon, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setPayment(key)}
+                      className={cn(
+                        "flex cursor-pointer flex-col items-center gap-1 rounded-xl border p-2.5 text-xs font-medium transition-all",
+                        payment === key
+                          ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                          : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Actions */}
+                {orderType === "dine_in" && (
+                  <Button
+                    variant="ghost"
+                    className="mt-3 w-full"
+                    onClick={() => checkout.mutate({ payments: [], tip: 0 })}
+                    disabled={checkout.isPending}
+                  >
+                    <ChefHat className="h-4 w-4" /> Send to kitchen · pay later
+                  </Button>
+                )}
+
+                <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                  <Button
+                    onClick={() => checkout.mutate({ payments: [{ method: payment, amount: total, tip_amount: tip }], tip })}
+                    disabled={checkout.isPending}
+                  >
+                    {checkout.isPending ? "Processing…" : `Charge ${fmt(total, 2)}`}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setPayOpen(true)} disabled={checkout.isPending} title="Split bill / multiple payers">
+                    <SplitSquareHorizontal className="h-4 w-4" /> Split
+                  </Button>
+                </div>
+              </>
+            )}
+          </Card>
+
+          {/* Mobile: collapsed cart bar that opens the sheet */}
+          {!isDesktopCart && !cartOpen && cartCount > 0 && (
+            <button
+              onClick={() => setCartOpen(true)}
+              className="animate-rise fixed inset-x-3 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] z-30 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-line bg-raised/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur md:hidden"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-white">
+                <span className="flex h-6 min-w-6 items-center justify-center rounded-full bg-gradient-to-r from-brand-500 to-accent-400 px-1.5 text-xs font-bold text-zinc-950">
+                  {cartCount}
+                </span>
+                View order
+              </span>
+              <span className="text-gradient text-sm font-bold">{fmt(total, 2)}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Split / pay modal for a new cart */}
+      <PayModal
+        open={payOpen}
+        onClose={() => setPayOpen(false)}
+        lines={billLines}
+        subtotal={subtotal}
+        taxRate={taxRate}
+        initialTipPct={tipPct}
+        confirmLabel={`Charge ${fmt(total, 2)}`}
+        pending={checkout.isPending}
+        onConfirm={(payments, t) => checkout.mutate({ payments, tip: t })}
+      />
+
+      {/* Settle modal for an open tab */}
+      {settling && (
+        <PayModal
+          open={!!settling}
+          onClose={() => setSettling(null)}
+          lines={settling.items as BillLine[]}
+          subtotal={settling.subtotal}
+          taxRate={taxRate}
+          initialTipPct={0}
+          confirmLabel={`Settle ${settling.order_number}`}
+          pending={settle.isPending}
+          onConfirm={(payments, t) => settle.mutate({ order: settling, payments, tip: t })}
+        />
+      )}
+
+      {/* Receipt modal */}
+      <Modal open={!!receipt} onClose={() => setReceipt(null)} title="Payment successful">
+        {receipt && (
+          <div className="space-y-4">
+            <div className="flex flex-col items-center gap-2 py-2">
+              <CheckCircle2 className="h-12 w-12 text-brand-400" />
+              <p className="font-display text-2xl font-bold text-white">{fmt(receipt.total, 2)}</p>
+              <Badge tone="green" className="capitalize">Paid · {receipt.method}</Badge>
+              <p className="text-xs text-zinc-500">{receipt.order_number} · sent to kitchen</p>
+            </div>
+            <div className="space-y-1.5 rounded-xl border border-line bg-white/[0.02] p-4 text-sm">
+              {receipt.lines.map((l) => (
+                <div key={l.name} className="flex justify-between text-zinc-300">
+                  <span>{l.qty}× {l.name}</span>
+                  <span>{fmt(l.price * l.qty, 2)}</span>
+                </div>
+              ))}
+              <div className="flex justify-between border-t border-line pt-2 text-zinc-400">
+                <span>Tax</span>
+                <span>{fmt(receipt.tax, 2)}</span>
+              </div>
+              {receipt.tip > 0 && (
+                <div className="flex justify-between text-zinc-400">
+                  <span>Tip</span>
+                  <span>{fmt(receipt.tip, 2)}</span>
+                </div>
+              )}
+            </div>
+            <Button className="w-full" onClick={() => setReceipt(null)}>
+              New Order
+            </Button>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Open tabs — dine-in orders sent to the kitchen but not yet paid.
+// ---------------------------------------------------------------------------
+function OpenTabsView({
+  tabs,
+  tableName,
+  onSettle,
+  loading,
+}: {
+  tabs: Order[];
+  tableName: (id: string | null) => string | null;
+  onSettle: (o: Order) => void;
+  loading: boolean;
+}) {
+  const fmt = useFmt();
+  const kitchenTone: Record<string, "neutral" | "amber" | "green" | "cyan"> = {
+    new: "neutral",
+    preparing: "amber",
+    ready: "cyan",
+    served: "green",
+  };
+
+  if (!loading && tabs.length === 0) {
+    return (
+      <Card>
+        <EmptyState
+          icon={Receipt}
+          title="No open tabs"
+          hint="Dine-in orders you send to the kitchen without paying show up here to settle later."
+        />
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {tabs.map((o) => {
+        const tn = tableName(o.table_id);
+        return (
+          <Card key={o.id} className="flex flex-col p-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="font-semibold text-white">
+                  {tn ? `Table ${tn}` : o.guest_name || "Walk-in"}
+                </p>
+                <p className="text-xs text-zinc-500">{o.order_number}</p>
+              </div>
+              <Badge tone={kitchenTone[o.kitchen_status] ?? "neutral"} className="capitalize">
+                {o.kitchen_status}
+              </Badge>
+            </div>
+
+            <div className="mt-3 space-y-1 text-sm">
+              {(o.items as BillLine[]).slice(0, 4).map((l, i) => (
+                <div key={i} className="flex justify-between text-zinc-400">
+                  <span className="truncate">{l.qty}× {l.name}</span>
+                  <span>{fmt(l.price * l.qty, 2)}</span>
+                </div>
+              ))}
+              {(o.items as BillLine[]).length > 4 && (
+                <p className="text-xs text-zinc-600">+{(o.items as BillLine[]).length - 4} more…</p>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
+              <span className="flex items-center gap-3 text-xs text-zinc-500">
+                <span className="flex items-center gap-1">
+                  <Clock className="h-3 w-3" /> {timeAgo(o.created_at)}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Users className="h-3 w-3" />
+                  {o.source === "storefront"
+                    ? "Online"
+                    : o.order_type === "dine_in"
+                      ? "Dine-in"
+                      : o.order_type === "takeaway"
+                        ? "Takeaway"
+                        : "Delivery"}
+                </span>
+              </span>
+              <span className="text-base font-bold text-white">{fmt(o.total, 2)}</span>
+            </div>
+
+            <Button className="mt-3 w-full" onClick={() => onSettle(o)}>
+              <CreditCard className="h-4 w-4" /> Settle bill
+            </Button>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}

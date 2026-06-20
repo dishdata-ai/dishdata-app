@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-inter), ui-sans-serif, sans-serif;
+
+  --color-base: #08080d;
+  --color-surface: #11131a;
+  --color-raised: #181b25;
+  --color-line: #262a38;
+
+  --color-brand-300: #6ee7b7;
+  --color-brand-400: #34d399;
+  --color-brand-500: #10b981;
+  --color-accent-400: #22d3ee;
+  --color-violet-soft: #a78bfa;
+  --color-amber-soft: #fbbf24;
+  --color-rose-soft: #fb7185;
+
+  --animate-rise: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-fade: fade 0.3s ease both;
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-base text-zinc-200 font-sans antialiased;
+  background-image:
+    radial-gradient(900px 500px at 85% -10%, rgba(16, 185, 129, 0.08), transparent 60%),
+    radial-gradient(700px 400px at -10% 20%, rgba(34, 211, 238, 0.06), transparent 60%);
+  background-attachment: fixed;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2b3040;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@utility glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  backdrop-filter: blur(14px);
+}
+
+@utility text-gradient {
+  background: linear-gradient(90deg, #6ee7b7, #22d3ee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
