@@ -1,10 +1,10 @@
 # DishData Mobile
 
-Native staff app for the DishData restaurant platform — Expo (SDK 56) + Expo Router + NativeWind, sharing the same Supabase schema as the web app.
+Native staff app for the DishData restaurant platform — Expo (SDK 54) + Expo Router + NativeWind, sharing the same Supabase schema as the web app.
 
 ## Stack
 
-- **Expo SDK 56** / React Native 0.85 (new architecture) / React 19
+- **Expo SDK 54** / React Native 0.81 (new architecture) / React 19 — SDK 54 is the latest version the public Expo Go client supports, so the app runs over the QR-code workflow with no custom dev build
 - **Expo Router** — file-based navigation with typed routes
 - **NativeWind v4** — Tailwind in RN; theme tokens mirror the web app (`tailwind.config.js` ↔ `src/app/globals.css`)
 - **@supabase/supabase-js** — AsyncStorage-backed sessions (vs. the web app's cookie sessions)
