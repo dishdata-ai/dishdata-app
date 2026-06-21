@@ -10,6 +10,7 @@ import type {
   Task,
   Order,
   TimeEntry,
+  Payment,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -206,6 +207,7 @@ export interface DemoState {
   inventory: InventoryItem[];
   tasks: Task[];
   orders: Order[];
+  payments: Payment[];
   timeEntry: TimeEntry | null; // open shift, if clocked in
 }
 
@@ -218,6 +220,7 @@ function build(): DemoState {
     inventory: seedInventory(),
     tasks: seedTasks(),
     orders: seedOrders(recipes),
+    payments: [],
     timeEntry: {
       id: uid(),
       org_id: DEMO_ORG.id,

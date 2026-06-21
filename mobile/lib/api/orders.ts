@@ -1,6 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demo, uid } from "@/lib/demo";
-import type { Order, OrderLine, KitchenStatus } from "@/lib/types";
+import type { Order, OrderLine, KitchenStatus, PaymentMethod } from "@/lib/types";
 
 export async function listOpenOrders(orgId: string): Promise<Order[]> {
   if (!isSupabaseConfigured) {
@@ -39,12 +39,15 @@ export interface NewOrderInput {
   items: OrderLine[];
   tip: number;
   table_id: string | null;
+  /** When set, the order is created already paid and a payment row is recorded. */
+  payment_method?: PaymentMethod | null;
 }
 
 export async function createOrder(orgId: string, input: NewOrderInput): Promise<Order> {
   const subtotal = input.items.reduce((s, l) => s + l.price * l.qty, 0);
   const tax = +(subtotal * (demo.org.tax_rate / 100)).toFixed(2);
   const total = +(subtotal + tax + input.tip).toFixed(2);
+  const paid = Boolean(input.payment_method);
 
   if (!isSupabaseConfigured) {
     const order: Order = {
@@ -60,16 +63,30 @@ export async function createOrder(orgId: string, input: NewOrderInput): Promise<
       tax,
       tip: input.tip,
       total,
-      status: "open",
+      status: paid ? "paid" : "open",
       kitchen_status: "new",
       kitchen_notes: null,
       source: "pos",
       created_at: new Date().toISOString(),
     };
     demo.orders.unshift(order);
+    if (paid) {
+      demo.payments.unshift({
+        id: uid(),
+        org_id: orgId,
+        order_id: order.id,
+        method: input.payment_method!,
+        amount: total,
+        tip_amount: input.tip,
+        split_label: null,
+        created_at: new Date().toISOString(),
+      });
+    }
     return order;
   }
-  const { data, error } = await getSupabase()
+
+  const sb = getSupabase();
+  const { data, error } = await sb
     .from("orders")
     .insert({
       org_id: orgId,
@@ -80,14 +97,24 @@ export async function createOrder(orgId: string, input: NewOrderInput): Promise<
       tax,
       tip: input.tip,
       total,
-      status: "open",
+      status: paid ? "paid" : "open",
       kitchen_status: "new",
       source: "pos",
     })
     .select("*")
     .single();
   if (error) throw error;
-  return data as Order;
+  const order = data as Order;
+  if (paid) {
+    await sb.from("payments").insert({
+      org_id: orgId,
+      order_id: order.id,
+      method: input.payment_method,
+      amount: total,
+      tip_amount: input.tip,
+    });
+  }
+  return order;
 }
 
 export async function setKitchenStatus(
