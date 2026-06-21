@@ -1,49 +1,394 @@
 import { useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, Modal, Alert } from "react-native";
+import { View, Text, ScrollView, Pressable, Modal } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Screen, Card, Button, Muted, Divider } from "@/components/ui";
-import { useMenu, useCreateOrder } from "@/lib/hooks";
+import {
+  Screen,
+  Card,
+  Button,
+  Badge,
+  Muted,
+  Divider,
+  Input,
+  Picker,
+  type PickerOption,
+} from "@/components/ui";
+import {
+  useMenu,
+  useCheckout,
+  useSettle,
+  useOpenOrders,
+  useCustomers,
+  useTables,
+} from "@/lib/hooks";
 import { useOrg } from "@/lib/org-context";
 import { money } from "@/lib/format";
 import { colors } from "@/lib/theme";
-import type { Recipe, OrderLine, PaymentMethod } from "@/lib/types";
+import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/types";
+import type { PaymentInput } from "@/lib/api/orders";
 
-const TIP_OPTIONS = [0, 10, 15, 20] as const;
+const TIP_OPTIONS = [0, 10, 15, 18, 20] as const;
 const METHODS: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "card", label: "Card", icon: "card" },
   { key: "cash", label: "Cash", icon: "cash" },
   { key: "wallet", label: "Wallet", icon: "wallet" },
 ];
+const ORDER_TYPES: { key: OrderType; label: string }[] = [
+  { key: "dine_in", label: "Dine-in" },
+  { key: "takeaway", label: "Takeaway" },
+  { key: "delivery", label: "Delivery" },
+];
+
+type BillLine = { name: string; qty: number; price: number };
+
+function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Pay / split modal — single payer, even split, or split by dish; each payer
+// can use a different method. Returns payments[] + the resolved tip.
+// ---------------------------------------------------------------------------
+function PayModal({
+  open,
+  onClose,
+  lines,
+  subtotal,
+  taxRate,
+  initialTipPct,
+  confirmLabel,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onClose: () => void;
+  lines: BillLine[];
+  subtotal: number;
+  taxRate: number;
+  initialTipPct: number;
+  confirmLabel: string;
+  pending: boolean;
+  onConfirm: (payments: PaymentInput[], tip: number) => void;
+}) {
+  const [tipPct, setTipPct] = useState(initialTipPct);
+  const [mode, setMode] = useState<"single" | "even" | "item">("single");
+  const [guests, setGuests] = useState(2);
+  const [assign, setAssign] = useState<Record<number, number | "shared">>({});
+  const [methods, setMethods] = useState<PaymentMethod[]>(Array(8).fill("card"));
+
+  const tax = +(subtotal * (taxRate / 100)).toFixed(2);
+  const tip = +(subtotal * (tipPct / 100)).toFixed(2);
+  const total = +(subtotal + tax + tip).toFixed(2);
+  const setMethod = (i: number, m: PaymentMethod) =>
+    setMethods((prev) => prev.map((x, idx) => (idx === i ? m : x)));
+
+  const payers = useMemo(() => {
+    if (mode === "single")
+      return [{ label: null as string | null, sub: subtotal, tax, tip, amount: total }];
+    const n = guests;
+    const subs = Array(n).fill(0) as number[];
+    lines.forEach((l, i) => {
+      const lineTotal = l.price * l.qty;
+      const a = mode === "even" ? "shared" : assign[i] ?? "shared";
+      if (a === "shared") for (let g = 0; g < n; g++) subs[g] += lineTotal / n;
+      else subs[Math.min(a, n - 1)] += lineTotal;
+    });
+    const rows = subs.map((s) => {
+      const ratio = subtotal > 0 ? s / subtotal : 1 / n;
+      return {
+        sub: +s.toFixed(2),
+        tax: +(tax * ratio).toFixed(2),
+        tip: +(tip * ratio).toFixed(2),
+        amount: +(s + tax * ratio + tip * ratio).toFixed(2),
+      };
+    });
+    const drift = +(total - rows.reduce((acc, r) => acc + r.amount, 0)).toFixed(2);
+    if (rows[0]) rows[0].amount = +(rows[0].amount + drift).toFixed(2);
+    return rows.map((r, i) => ({ label: `Guest ${i + 1}`, ...r }));
+  }, [mode, guests, assign, lines, subtotal, tax, tip, total]);
+
+  const confirm = () => {
+    const payments: PaymentInput[] = payers.map((p, i) => ({
+      method: mode === "single" ? methods[0] : methods[i],
+      amount: p.amount,
+      tip_amount: p.tip,
+      split_label: p.label ?? undefined,
+    }));
+    onConfirm(payments, tip);
+  };
+
+  return (
+    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
+      <View className="flex-1 justify-end bg-black/60">
+        <View className="max-h-[90%] rounded-t-3xl border-t border-line bg-surface">
+          <View className="flex-row items-center justify-between p-5 pb-2">
+            <Text className="text-lg font-bold text-white">Take payment</Text>
+            <Pressable onPress={onClose} className="p-1">
+              <Ionicons name="close" size={24} color={colors.zinc400} />
+            </Pressable>
+          </View>
+
+          <ScrollView className="px-5" contentContainerClassName="pb-4 gap-5">
+            {/* Tip */}
+            <View>
+              <Muted className="mb-2">Tip</Muted>
+              <View className="flex-row gap-1.5">
+                {TIP_OPTIONS.map((p) => (
+                  <Pressable
+                    key={p}
+                    onPress={() => setTipPct(p)}
+                    className={`flex-1 items-center rounded-lg border py-2.5 ${
+                      tipPct === p ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+                    }`}
+                  >
+                    <Text
+                      className={`text-xs font-bold ${tipPct === p ? "text-brand-300" : "text-zinc-300"}`}
+                    >
+                      {p === 0 ? "None" : `${p}%`}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            {/* Split mode */}
+            <View>
+              <Muted className="mb-2">How are they paying?</Muted>
+              <View className="flex-row rounded-xl border border-line bg-white/5 p-1">
+                {(
+                  [
+                    ["single", "One payment"],
+                    ["even", "Split evenly"],
+                    ["item", "By dish"],
+                  ] as ["single" | "even" | "item", string][]
+                ).map(([m, label]) => (
+                  <Pressable
+                    key={m}
+                    onPress={() => setMode(m)}
+                    className={`flex-1 items-center rounded-lg py-2 ${mode === m ? "bg-white/10" : ""}`}
+                  >
+                    <Text
+                      className={`text-xs font-semibold ${mode === m ? "text-white" : "text-zinc-500"}`}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            {mode !== "single" ? (
+              <View>
+                <Muted className="mb-2">Number of guests</Muted>
+                <View className="flex-row gap-1.5">
+                  {[2, 3, 4, 5, 6].map((n) => (
+                    <Pressable
+                      key={n}
+                      onPress={() => setGuests(n)}
+                      className={`flex-1 items-center rounded-lg border py-2.5 ${
+                        guests === n ? "border-accent-400 bg-accent-400/15" : "border-line bg-white/5"
+                      }`}
+                    >
+                      <Text
+                        className={`text-xs font-bold ${guests === n ? "text-accent-400" : "text-zinc-300"}`}
+                      >
+                        {n}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            {/* Assign dishes */}
+            {mode === "item" ? (
+              <View className="gap-2">
+                <Muted>Assign each dish</Muted>
+                {lines.map((l, i) => (
+                  <View key={i} className="rounded-xl border border-line bg-white/5 p-2.5">
+                    <View className="flex-row items-center justify-between">
+                      <Text className="text-sm text-white">
+                        {l.qty}× {l.name}
+                      </Text>
+                      <Text className="text-sm text-zinc-400">{money(l.price * l.qty)}</Text>
+                    </View>
+                    <View className="mt-2 flex-row flex-wrap gap-1">
+                      {Array.from({ length: guests }, (_, g) => (
+                        <Pressable
+                          key={g}
+                          onPress={() => setAssign((p) => ({ ...p, [i]: g }))}
+                          className={`rounded-lg border px-2.5 py-1 ${
+                            (assign[i] ?? "shared") === g
+                              ? "border-brand-500 bg-brand-500/15"
+                              : "border-line"
+                          }`}
+                        >
+                          <Text
+                            className={`text-xs font-semibold ${
+                              (assign[i] ?? "shared") === g ? "text-brand-300" : "text-zinc-400"
+                            }`}
+                          >
+                            G{g + 1}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      <Pressable
+                        onPress={() => setAssign((p) => ({ ...p, [i]: "shared" }))}
+                        className={`rounded-lg border px-2.5 py-1 ${
+                          (assign[i] ?? "shared") === "shared"
+                            ? "border-accent-400 bg-accent-400/15"
+                            : "border-line"
+                        }`}
+                      >
+                        <Text
+                          className={`text-xs font-semibold ${
+                            (assign[i] ?? "shared") === "shared" ? "text-accent-400" : "text-zinc-400"
+                          }`}
+                        >
+                          Shared
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ) : null}
+
+            {/* Per-payer amount + method */}
+            <View className="gap-2 rounded-xl border border-line bg-white/5 p-3">
+              {payers.map((p, i) => (
+                <View key={i} className="gap-2 border-b border-line pb-2 last:border-0 last:pb-0">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-sm font-semibold text-white">{p.label ?? "Total due"}</Text>
+                    <Text className="text-sm text-zinc-400">{money(p.amount)}</Text>
+                  </View>
+                  <View className="flex-row gap-1">
+                    {METHODS.map((m) => {
+                      const sel = (mode === "single" ? methods[0] : methods[i]) === m.key;
+                      return (
+                        <Pressable
+                          key={m.key}
+                          onPress={() => setMethod(mode === "single" ? 0 : i, m.key)}
+                          className={`flex-1 flex-row items-center justify-center gap-1 rounded-lg border py-1.5 ${
+                            sel ? "border-brand-500 bg-brand-500/15" : "border-line"
+                          }`}
+                        >
+                          <Ionicons
+                            name={m.icon}
+                            size={14}
+                            color={sel ? colors.brand400 : colors.zinc400}
+                          />
+                          <Text
+                            className={`text-xs font-medium ${sel ? "text-brand-300" : "text-zinc-400"}`}
+                          >
+                            {m.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* Totals */}
+            <View className="gap-1">
+              <View className="flex-row justify-between">
+                <Muted>Subtotal</Muted>
+                <Text className="text-zinc-300">{money(subtotal)}</Text>
+              </View>
+              <View className="flex-row justify-between">
+                <Muted>Tax ({taxRate}%)</Muted>
+                <Text className="text-zinc-300">{money(tax)}</Text>
+              </View>
+              {tip > 0 ? (
+                <View className="flex-row justify-between">
+                  <Muted>Tip ({tipPct}%)</Muted>
+                  <Text className="text-zinc-300">{money(tip)}</Text>
+                </View>
+              ) : null}
+              <Divider />
+              <View className="flex-row justify-between pt-1">
+                <Text className="text-base font-bold text-white">Total</Text>
+                <Text className="text-base font-bold text-brand-300">{money(total)}</Text>
+              </View>
+            </View>
+          </ScrollView>
+
+          <View className="flex-row gap-2 border-t border-line p-5 pt-3">
+            <Button title="Cancel" variant="ghost" className="flex-1" onPress={onClose} disabled={pending} />
+            <Button title={confirmLabel} className="flex-[2]" onPress={confirm} loading={pending} />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
 export default function Pos() {
   const menuQ = useMenu();
-  const createOrder = useCreateOrder();
+  const ordersQ = useOpenOrders();
+  const customersQ = useCustomers();
+  const tablesQ = useTables();
+  const checkout = useCheckout();
+  const settle = useSettle();
   const { ctx } = useOrg();
-  const taxRate = ctx?.org.tax_rate ?? 0;
+  const taxRate = ctx?.org.tax_rate ?? 8.5;
   const menu = menuQ.data ?? [];
+
+  const [view, setView] = useState<"order" | "tabs">("order");
+  const [query, setQuery] = useState("");
+  const [cat, setCat] = useState("All");
+  const [cart, setCart] = useState<Record<string, { rec: Recipe; qty: number }>>({});
+  const [cartOpen, setCartOpen] = useState(false);
+  const [orderType, setOrderType] = useState<OrderType>("dine_in");
+  const [tableId, setTableId] = useState("");
+  const [customerId, setCustomerId] = useState("");
+  const [kitchenNotes, setKitchenNotes] = useState("");
+  const [address, setAddress] = useState("");
+  const [tipPct, setTipPct] = useState(0);
+  const [method, setMethod] = useState<PaymentMethod>("card");
+  const [payOpen, setPayOpen] = useState(false);
+  const [settling, setSettling] = useState<Order | null>(null);
+  const [receipt, setReceipt] = useState<{
+    order_number: string;
+    total: number;
+    lines: BillLine[];
+    tax: number;
+    tip: number;
+    method: string;
+  } | null>(null);
 
   const categories = useMemo(
     () => ["All", ...Array.from(new Set(menu.map((m) => m.category)))],
     [menu],
   );
-  const [cat, setCat] = useState("All");
-  const [cart, setCart] = useState<Record<string, { rec: Recipe; qty: number }>>({});
-  const [cartOpen, setCartOpen] = useState(false);
-  const [checkoutOpen, setCheckoutOpen] = useState(false);
-  const [tipPct, setTipPct] = useState<number>(0);
-  const [method, setMethod] = useState<PaymentMethod>("card");
+  const visible = menu.filter(
+    (m) =>
+      (cat === "All" || m.category === cat) &&
+      m.name.toLowerCase().includes(query.toLowerCase()),
+  );
 
-  const visible = cat === "All" ? menu : menu.filter((m) => m.category === cat);
   const lines = Object.values(cart);
+  const billLines: BillLine[] = lines.map((l) => ({ name: l.rec.name, qty: l.qty, price: l.rec.price }));
   const count = lines.reduce((s, l) => s + l.qty, 0);
   const subtotal = lines.reduce((s, l) => s + l.rec.price * l.qty, 0);
   const tax = +(subtotal * (taxRate / 100)).toFixed(2);
   const tip = +(subtotal * (tipPct / 100)).toFixed(2);
   const total = +(subtotal + tax + tip).toFixed(2);
 
+  const openTabs = useMemo(
+    () => (ordersQ.data ?? []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    [ordersQ.data],
+  );
+  const tableName = (id: string | null) =>
+    id ? (tablesQ.data ?? []).find((t) => t.id === id)?.name ?? null : null;
+
   const add = (rec: Recipe) =>
     setCart((c) => ({ ...c, [rec.id]: { rec, qty: (c[rec.id]?.qty ?? 0) + 1 } }));
-  const remove = (rec: Recipe) =>
+  const dec = (rec: Recipe) =>
     setCart((c) => {
       const qty = (c[rec.id]?.qty ?? 0) - 1;
       const next = { ...c };
@@ -52,257 +397,547 @@ export default function Pos() {
       return next;
     });
 
-  const orderLines = (): OrderLine[] =>
-    lines.map((l) => ({ recipe_id: l.rec.id, name: l.rec.name, qty: l.qty, price: l.rec.price }));
-
   const reset = () => {
     setCart({});
     setCartOpen(false);
-    setCheckoutOpen(false);
     setTipPct(0);
+    setKitchenNotes("");
+    setCustomerId("");
+    setTableId("");
+    setAddress("");
+    setOrderType("dine_in");
   };
 
-  // Fire to the kitchen without taking payment (dine-in: pay later).
-  const sendToKitchen = () => {
-    createOrder.mutate(
-      { items: orderLines(), tip: 0, table_id: null },
-      {
-        onSuccess: (o) => {
-          reset();
-          Alert.alert("Sent to kitchen", `Order ${o.order_number} is firing. 🔥`);
-        },
-        onError: (e) => Alert.alert("Couldn’t send", String(e)),
-      },
-    );
-  };
+  const orderLines = (): OrderLine[] =>
+    lines.map((l) => ({ recipe_id: l.rec.id, name: l.rec.name, qty: l.qty, price: l.rec.price }));
 
-  // Take payment now → order is created already paid.
-  const charge = () => {
-    createOrder.mutate(
-      { items: orderLines(), tip, table_id: null, payment_method: method },
-      {
-        onSuccess: (o) => {
-          const label = METHODS.find((m) => m.key === method)?.label ?? "Card";
-          reset();
-          Alert.alert("Payment taken", `${money(total)} on ${label} · order ${o.order_number}.`);
-        },
-        onError: (e) => Alert.alert("Payment failed", String(e)),
+  const payload = (payments: PaymentInput[], tipAmount: number) => ({
+    items: orderLines(),
+    orderType,
+    tableId: orderType === "dine_in" && tableId ? tableId : null,
+    customerId: customerId || null,
+    kitchenNotes: kitchenNotes || null,
+    tip: tipAmount,
+    address: orderType === "delivery" ? address : null,
+    payments,
+  });
+
+  const finishCheckout = (payments: PaymentInput[], tipAmount: number) => {
+    const snapshot = billLines;
+    const snapTax = tax;
+    checkout.mutate(payload(payments, tipAmount), {
+      onSuccess: (res) => {
+        const paid = payments.length > 0;
+        reset();
+        setPayOpen(false);
+        if (paid) {
+          setReceipt({
+            order_number: res.order_number,
+            total: res.total,
+            lines: snapshot,
+            tax: snapTax,
+            tip: tipAmount,
+            method: payments.length > 1 ? "split" : payments[0].method,
+          });
+        } else {
+          setView("tabs");
+        }
       },
-    );
+    });
   };
 
   return (
     <Screen>
-      {/* Category pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerClassName="gap-2 py-3"
-      >
-        {categories.map((c) => (
-          <Pressable
-            key={c}
-            onPress={() => setCat(c)}
-            className={`rounded-full border px-4 py-2 ${
-              cat === c ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
-            }`}
+      {/* New order / Open tabs toggle */}
+      <View className="flex-row rounded-xl border border-line bg-white/5 p-1 my-3">
+        <Pressable
+          onPress={() => setView("order")}
+          className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-lg py-2 ${
+            view === "order" ? "bg-white/10" : ""
+          }`}
+        >
+          <Ionicons name="bag-add" size={15} color={view === "order" ? colors.white : colors.zinc500} />
+          <Text className={`text-sm font-semibold ${view === "order" ? "text-white" : "text-zinc-500"}`}>
+            New order
+          </Text>
+        </Pressable>
+        <Pressable
+          onPress={() => setView("tabs")}
+          className={`flex-1 flex-row items-center justify-center gap-1.5 rounded-lg py-2 ${
+            view === "tabs" ? "bg-white/10" : ""
+          }`}
+        >
+          <Ionicons name="receipt" size={15} color={view === "tabs" ? colors.white : colors.zinc500} />
+          <Text className={`text-sm font-semibold ${view === "tabs" ? "text-white" : "text-zinc-500"}`}>
+            Open tabs
+          </Text>
+          {openTabs.length > 0 ? (
+            <View className="rounded-full bg-accent-400/20 px-1.5">
+              <Text className="text-[10px] font-bold text-accent-400">{openTabs.length}</Text>
+            </View>
+          ) : null}
+        </Pressable>
+      </View>
+
+      {view === "tabs" ? (
+        <OpenTabs tabs={openTabs} tableName={tableName} onSettle={setSettling} />
+      ) : (
+        <>
+          {/* Search */}
+          <View className="relative mb-3">
+            <View className="absolute left-3.5 top-3 z-10">
+              <Ionicons name="search" size={18} color={colors.zinc500} />
+            </View>
+            <Input
+              placeholder="Search menu…"
+              value={query}
+              onChangeText={setQuery}
+              className="pl-10"
+            />
+          </View>
+
+          {/* Category pills */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerClassName="gap-2 pb-3"
           >
-            <Text className={`text-sm font-semibold ${cat === c ? "text-black" : "text-zinc-300"}`}>
-              {c}
-            </Text>
-          </Pressable>
-        ))}
-      </ScrollView>
-
-      {/* Menu grid */}
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-44">
-        <View className="flex-row flex-wrap justify-between">
-          {visible.map((item) => {
-            const inCart = cart[item.id]?.qty ?? 0;
-            return (
+            {categories.map((c) => (
               <Pressable
-                key={item.id}
-                onPress={() => add(item)}
-                className="mb-3 w-[48.5%] rounded-2xl border border-line bg-surface p-4 active:opacity-80"
+                key={c}
+                onPress={() => setCat(c)}
+                className={`rounded-full border px-4 py-2 ${
+                  cat === c ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
+                }`}
               >
-                <View className="flex-row items-start justify-between">
-                  <Text className="text-3xl">{item.emoji}</Text>
-                  {inCart > 0 ? (
-                    <View className="h-6 min-w-6 items-center justify-center rounded-full bg-brand-500 px-1.5">
-                      <Text className="text-xs font-bold text-black">{inCart}</Text>
-                    </View>
-                  ) : null}
-                </View>
-                <Text className="mt-2 text-base font-semibold text-white" numberOfLines={1}>
-                  {item.name}
+                <Text
+                  className={`text-sm font-semibold ${cat === c ? "text-black" : "text-zinc-300"}`}
+                >
+                  {c}
                 </Text>
-                <Text className="mt-0.5 text-sm font-bold text-brand-300">{money(item.price)}</Text>
               </Pressable>
-            );
-          })}
-        </View>
-      </ScrollView>
+            ))}
+          </ScrollView>
 
-      {/* Cart bottom bar */}
-      {count > 0 ? (
-        <View className="absolute inset-x-4 bottom-4">
-          {cartOpen ? (
-            <Card className="mb-2 max-h-80">
-              <View className="mb-2 flex-row items-center justify-between">
-                <Text className="text-base font-bold text-white">Order</Text>
-                <Pressable onPress={() => setCartOpen(false)}>
-                  <Ionicons name="chevron-down" size={22} color={colors.zinc400} />
+          {/* Product grid */}
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-28">
+            {visible.length === 0 ? (
+              <Card>
+                <Muted className="py-8 text-center">No items match “{query}”.</Muted>
+              </Card>
+            ) : (
+              <View className="flex-row flex-wrap justify-between">
+                {visible.map((item) => {
+                  const inCart = cart[item.id]?.qty ?? 0;
+                  return (
+                    <Pressable
+                      key={item.id}
+                      onPress={() => add(item)}
+                      className="mb-3 w-[48.5%] rounded-2xl border border-line bg-surface p-4 active:opacity-80"
+                    >
+                      <View className="flex-row items-start justify-between">
+                        <Text className="text-3xl">{item.emoji}</Text>
+                        {inCart > 0 ? (
+                          <View className="h-6 min-w-6 items-center justify-center rounded-full bg-brand-500 px-1.5">
+                            <Text className="text-xs font-bold text-black">{inCart}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text className="mt-2 text-base font-semibold text-white" numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <View className="mt-0.5 flex-row items-center justify-between">
+                        <Text className="text-xs text-zinc-500">{item.category}</Text>
+                        <Text className="text-sm font-bold text-brand-300">{money(item.price)}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </ScrollView>
+
+          {/* Collapsed cart bar */}
+          {count > 0 && !cartOpen ? (
+            <Pressable className="absolute inset-x-4 bottom-4" onPress={() => setCartOpen(true)}>
+              <View className="flex-row items-center justify-between rounded-2xl bg-raised px-4 py-3.5">
+                <View className="flex-row items-center gap-2">
+                  <View className="h-7 min-w-7 items-center justify-center rounded-full bg-brand-500 px-2">
+                    <Text className="text-sm font-bold text-black">{count}</Text>
+                  </View>
+                  <Text className="font-semibold text-white">View order</Text>
+                </View>
+                <Text className="font-bold text-brand-300">{money(total)}</Text>
+              </View>
+            </Pressable>
+          ) : null}
+        </>
+      )}
+
+      {/* Cart sheet — the full order form */}
+      <Modal visible={cartOpen} transparent animationType="slide" onRequestClose={() => setCartOpen(false)}>
+        <View className="flex-1 justify-end bg-black/60">
+          <View className="max-h-[92%] rounded-t-3xl border-t border-line bg-surface">
+            <View className="flex-row items-center justify-between p-5 pb-2">
+              <Text className="text-lg font-bold text-white">Current order</Text>
+              <View className="flex-row items-center gap-3">
+                {count > 0 ? (
+                  <Pressable onPress={reset}>
+                    <Text className="text-xs text-zinc-500">Clear</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable onPress={() => setCartOpen(false)} className="p-1">
+                  <Ionicons name="chevron-down" size={24} color={colors.zinc400} />
                 </Pressable>
               </View>
-              <ScrollView className="max-h-52">
-                {lines.map((l) => (
-                  <View key={l.rec.id} className="flex-row items-center gap-3 py-2">
-                    <Text className="text-xl">{l.rec.emoji}</Text>
-                    <Text className="flex-1 text-white" numberOfLines={1}>
-                      {l.rec.name}
+            </View>
+
+            <ScrollView className="px-5" contentContainerClassName="pb-4 gap-3">
+              {/* Order type */}
+              <View className="flex-row rounded-xl border border-line bg-white/5 p-1">
+                {ORDER_TYPES.map((t) => (
+                  <Pressable
+                    key={t.key}
+                    onPress={() => setOrderType(t.key)}
+                    className={`flex-1 items-center rounded-lg py-2 ${orderType === t.key ? "bg-white/10" : ""}`}
+                  >
+                    <Text
+                      className={`text-xs font-semibold ${orderType === t.key ? "text-white" : "text-zinc-500"}`}
+                    >
+                      {t.label}
                     </Text>
-                    <Pressable onPress={() => remove(l.rec)} className="p-1">
-                      <Ionicons name="remove-circle-outline" size={22} color={colors.rose} />
+                  </Pressable>
+                ))}
+              </View>
+
+              {/* Line items */}
+              {lines.length === 0 ? (
+                <Muted className="py-8 text-center">Tap items to start an order.</Muted>
+              ) : (
+                lines.map((l) => (
+                  <View
+                    key={l.rec.id}
+                    className="flex-row items-center gap-3 rounded-xl border border-line bg-white/5 p-2.5"
+                  >
+                    <Text className="text-xl">{l.rec.emoji}</Text>
+                    <View className="min-w-0 flex-1">
+                      <Text className="text-sm font-medium text-white" numberOfLines={1}>
+                        {l.rec.name}
+                      </Text>
+                      <Text className="text-xs text-zinc-500">{money(l.rec.price)} each</Text>
+                    </View>
+                    <Pressable onPress={() => dec(l.rec)} className="p-1">
+                      <Ionicons
+                        name={l.qty === 1 ? "trash-outline" : "remove-circle-outline"}
+                        size={22}
+                        color={colors.rose}
+                      />
                     </Pressable>
                     <Text className="w-6 text-center font-bold text-white">{l.qty}</Text>
                     <Pressable onPress={() => add(l.rec)} className="p-1">
                       <Ionicons name="add-circle-outline" size={22} color={colors.brand400} />
                     </Pressable>
-                    <Text className="w-16 text-right font-semibold text-zinc-300">
-                      {money(l.rec.price * l.qty)}
-                    </Text>
                   </View>
-                ))}
-              </ScrollView>
-            </Card>
-          ) : null}
+                ))
+              )}
 
-          <Pressable onPress={() => setCartOpen((o) => !o)}>
-            <View className="flex-row items-center justify-between rounded-2xl bg-raised px-4 py-3">
-              <View className="flex-row items-center gap-2">
-                <View className="h-7 min-w-7 items-center justify-center rounded-full bg-brand-500 px-2">
-                  <Text className="text-sm font-bold text-black">{count}</Text>
-                </View>
-                <Text className="font-semibold text-white">{money(subtotal)}</Text>
-                <Muted>+ tax</Muted>
-              </View>
-              <View className="flex-row items-center gap-2">
-                <Text className="text-sm font-semibold text-zinc-400">
-                  {cartOpen ? "Hide" : "View"}
-                </Text>
-                <Ionicons name="receipt-outline" size={18} color={colors.zinc400} />
-              </View>
-            </View>
-          </Pressable>
+              {lines.length > 0 ? (
+                <>
+                  {/* Table / customer / notes / address */}
+                  {orderType === "dine_in" && (tablesQ.data ?? []).length > 0 ? (
+                    <Picker
+                      title="Table"
+                      value={tableId}
+                      onChange={setTableId}
+                      placeholder="No table"
+                      options={[
+                        { label: "No table", value: "" },
+                        ...(tablesQ.data ?? [])
+                          .filter((t) => t.status === "open" || t.id === tableId)
+                          .map<PickerOption>((t) => ({
+                            label: `Table ${t.name} · ${t.seats} seats · ${t.zone}`,
+                            value: t.id,
+                          })),
+                      ]}
+                    />
+                  ) : null}
 
-          <View className="mt-2 flex-row gap-2">
-            <Button
-              title="Send to kitchen"
-              variant="ghost"
-              className="flex-1"
-              loading={createOrder.isPending}
-              onPress={sendToKitchen}
-            />
-            <Button
-              title="Review & Pay"
-              className="flex-1"
-              onPress={() => setCheckoutOpen(true)}
-            />
-          </View>
-        </View>
-      ) : null}
-
-      {/* Checkout / payment sheet */}
-      <Modal
-        visible={checkoutOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setCheckoutOpen(false)}
-      >
-        <View className="flex-1 justify-end bg-black/60">
-          <View className="rounded-t-3xl border-t border-line bg-surface p-5 pb-8">
-            <View className="mb-4 flex-row items-center justify-between">
-              <Text className="text-lg font-bold text-white">Checkout</Text>
-              <Pressable onPress={() => setCheckoutOpen(false)} className="p-1">
-                <Ionicons name="close" size={24} color={colors.zinc400} />
-              </Pressable>
-            </View>
-
-            {/* Summary */}
-            <View className="gap-1.5">
-              <View className="flex-row justify-between">
-                <Muted>Subtotal ({count} item{count === 1 ? "" : "s"})</Muted>
-                <Text className="text-zinc-200">{money(subtotal)}</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Muted>Tax ({taxRate}%)</Muted>
-                <Text className="text-zinc-200">{money(tax)}</Text>
-              </View>
-              <View className="flex-row justify-between">
-                <Muted>Tip</Muted>
-                <Text className="text-zinc-200">{money(tip)}</Text>
-              </View>
-              <Divider />
-              <View className="flex-row justify-between pt-1">
-                <Text className="text-base font-bold text-white">Total</Text>
-                <Text className="text-base font-bold text-brand-300">{money(total)}</Text>
-              </View>
-            </View>
-
-            {/* Tip */}
-            <Text className="mb-2 mt-5 text-sm font-semibold text-zinc-300">Add a tip</Text>
-            <View className="flex-row gap-2">
-              {TIP_OPTIONS.map((pct) => (
-                <Pressable
-                  key={pct}
-                  onPress={() => setTipPct(pct)}
-                  className={`flex-1 items-center rounded-xl border py-3 ${
-                    tipPct === pct ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
-                  }`}
-                >
-                  <Text
-                    className={`text-sm font-bold ${tipPct === pct ? "text-brand-300" : "text-zinc-300"}`}
-                  >
-                    {pct === 0 ? "No tip" : `${pct}%`}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {/* Payment method */}
-            <Text className="mb-2 mt-5 text-sm font-semibold text-zinc-300">Payment method</Text>
-            <View className="flex-row gap-2">
-              {METHODS.map((m) => (
-                <Pressable
-                  key={m.key}
-                  onPress={() => setMethod(m.key)}
-                  className={`flex-1 items-center gap-1 rounded-xl border py-3 ${
-                    method === m.key ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
-                  }`}
-                >
-                  <Ionicons
-                    name={m.icon}
-                    size={22}
-                    color={method === m.key ? colors.brand400 : colors.zinc400}
+                  <Picker
+                    title="Customer"
+                    value={customerId}
+                    onChange={setCustomerId}
+                    placeholder="Walk-in guest"
+                    options={[
+                      { label: "Walk-in guest", value: "" },
+                      ...(customersQ.data ?? []).map<PickerOption>((c) => ({
+                        label: `${c.name} · ${c.tier}`,
+                        value: c.id,
+                      })),
+                    ]}
                   />
-                  <Text
-                    className={`text-sm font-semibold ${method === m.key ? "text-brand-300" : "text-zinc-300"}`}
-                  >
-                    {m.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
 
-            <Button
-              title={`Charge ${money(total)}`}
-              className="mt-6"
-              loading={createOrder.isPending}
-              onPress={charge}
-            />
+                  <Input
+                    placeholder="Kitchen note (allergies, mods…)"
+                    value={kitchenNotes}
+                    onChangeText={setKitchenNotes}
+                  />
+                  {orderType === "delivery" ? (
+                    <Input
+                      placeholder="Delivery address"
+                      value={address}
+                      onChangeText={setAddress}
+                    />
+                  ) : null}
+
+                  {/* Tip */}
+                  <Muted className="mt-1">Tip</Muted>
+                  <View className="flex-row gap-1.5">
+                    {[0, 10, 15, 20].map((p) => (
+                      <Pressable
+                        key={p}
+                        onPress={() => setTipPct(p)}
+                        className={`flex-1 items-center rounded-lg border py-2 ${
+                          tipPct === p ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+                        }`}
+                      >
+                        <Text
+                          className={`text-xs font-bold ${tipPct === p ? "text-brand-300" : "text-zinc-300"}`}
+                        >
+                          {p === 0 ? "No tip" : `${p}%`}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+
+                  {/* Totals */}
+                  <View className="mt-2 gap-1 border-t border-line pt-3">
+                    <View className="flex-row justify-between">
+                      <Muted>Subtotal</Muted>
+                      <Text className="text-zinc-300">{money(subtotal)}</Text>
+                    </View>
+                    <View className="flex-row justify-between">
+                      <Muted>Tax ({taxRate}%)</Muted>
+                      <Text className="text-zinc-300">{money(tax)}</Text>
+                    </View>
+                    {tip > 0 ? (
+                      <View className="flex-row justify-between">
+                        <Muted>Tip ({tipPct}%)</Muted>
+                        <Text className="text-zinc-300">{money(tip)}</Text>
+                      </View>
+                    ) : null}
+                    <View className="flex-row justify-between pt-0.5">
+                      <Text className="text-base font-bold text-white">Total</Text>
+                      <Text className="text-base font-bold text-brand-300">{money(total)}</Text>
+                    </View>
+                  </View>
+
+                  {/* Quick payment method */}
+                  <View className="mt-1 flex-row gap-2">
+                    {METHODS.map((m) => {
+                      const sel = method === m.key;
+                      return (
+                        <Pressable
+                          key={m.key}
+                          onPress={() => setMethod(m.key)}
+                          className={`flex-1 items-center gap-1 rounded-xl border py-2.5 ${
+                            sel ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+                          }`}
+                        >
+                          <Ionicons name={m.icon} size={20} color={sel ? colors.brand400 : colors.zinc400} />
+                          <Text
+                            className={`text-xs font-semibold ${sel ? "text-brand-300" : "text-zinc-300"}`}
+                          >
+                            {m.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : null}
+            </ScrollView>
+
+            {/* Actions */}
+            {lines.length > 0 ? (
+              <View className="gap-2 border-t border-line p-5 pt-3">
+                {orderType === "dine_in" ? (
+                  <Button
+                    title="Send to kitchen · pay later"
+                    variant="ghost"
+                    loading={checkout.isPending}
+                    onPress={() => finishCheckout([], 0)}
+                  />
+                ) : null}
+                <View className="flex-row gap-2">
+                  <Button
+                    title={`Charge ${money(total)}`}
+                    className="flex-[2]"
+                    loading={checkout.isPending}
+                    onPress={() =>
+                      finishCheckout([{ method, amount: total, tip_amount: tip }], tip)
+                    }
+                  />
+                  <Button
+                    title="Split"
+                    variant="ghost"
+                    className="flex-1"
+                    onPress={() => {
+                      setCartOpen(false);
+                      setPayOpen(true);
+                    }}
+                  />
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
+
+      {/* Split / pay modal for the cart */}
+      <PayModal
+        open={payOpen}
+        onClose={() => setPayOpen(false)}
+        lines={billLines}
+        subtotal={subtotal}
+        taxRate={taxRate}
+        initialTipPct={tipPct}
+        confirmLabel={`Charge ${money(total)}`}
+        pending={checkout.isPending}
+        onConfirm={(payments, t) => finishCheckout(payments, t)}
+      />
+
+      {/* Settle an open tab */}
+      {settling ? (
+        <PayModal
+          open={!!settling}
+          onClose={() => setSettling(null)}
+          lines={settling.items as BillLine[]}
+          subtotal={settling.subtotal}
+          taxRate={taxRate}
+          initialTipPct={0}
+          confirmLabel={`Settle ${settling.order_number}`}
+          pending={settle.isPending}
+          onConfirm={(payments, t) =>
+            settle.mutate(
+              { orderId: settling.id, payments, tip: t },
+              { onSuccess: () => setSettling(null) },
+            )
+          }
+        />
+      ) : null}
+
+      {/* Receipt */}
+      <Modal visible={!!receipt} transparent animationType="fade" onRequestClose={() => setReceipt(null)}>
+        <View className="flex-1 items-center justify-center bg-black/70 p-6">
+          {receipt ? (
+            <Card className="w-full">
+              <View className="items-center gap-1 py-2">
+                <Ionicons name="checkmark-circle" size={56} color={colors.brand400} />
+                <Text className="text-3xl font-bold text-white">{money(receipt.total)}</Text>
+                <Badge tone="green">Paid · {receipt.method}</Badge>
+                <Muted>
+                  {receipt.order_number} · sent to kitchen
+                </Muted>
+              </View>
+              <View className="mt-3 gap-1.5 rounded-xl border border-line bg-white/5 p-4">
+                {receipt.lines.map((l) => (
+                  <View key={l.name} className="flex-row justify-between">
+                    <Text className="text-zinc-300">
+                      {l.qty}× {l.name}
+                    </Text>
+                    <Text className="text-zinc-300">{money(l.price * l.qty)}</Text>
+                  </View>
+                ))}
+                <View className="mt-1 flex-row justify-between border-t border-line pt-2">
+                  <Muted>Tax</Muted>
+                  <Text className="text-zinc-400">{money(receipt.tax)}</Text>
+                </View>
+                {receipt.tip > 0 ? (
+                  <View className="flex-row justify-between">
+                    <Muted>Tip</Muted>
+                    <Text className="text-zinc-400">{money(receipt.tip)}</Text>
+                  </View>
+                ) : null}
+              </View>
+              <Button title="New order" className="mt-4" onPress={() => setReceipt(null)} />
+            </Card>
+          ) : null}
+        </View>
+      </Modal>
     </Screen>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Open tabs — dine-in orders sent to the kitchen but not yet paid.
+// ---------------------------------------------------------------------------
+function OpenTabs({
+  tabs,
+  tableName,
+  onSettle,
+}: {
+  tabs: Order[];
+  tableName: (id: string | null) => string | null;
+  onSettle: (o: Order) => void;
+}) {
+  const kitchenTone: Record<string, "neutral" | "amber" | "green" | "accent"> = {
+    new: "neutral",
+    preparing: "amber",
+    ready: "accent",
+    served: "green",
+  };
+
+  if (tabs.length === 0) {
+    return (
+      <Card>
+        <Muted className="py-10 text-center">
+          No open tabs. Dine-in orders you send to the kitchen without paying show up here to settle
+          later.
+        </Muted>
+      </Card>
+    );
+  }
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="gap-3 pb-6">
+      {tabs.map((o) => {
+        const tn = tableName(o.table_id);
+        const items = o.items as BillLine[];
+        return (
+          <Card key={o.id}>
+            <View className="flex-row items-start justify-between">
+              <View>
+                <Text className="font-semibold text-white">
+                  {tn ? `Table ${tn}` : o.guest_name || "Walk-in"}
+                </Text>
+                <Muted>{o.order_number}</Muted>
+              </View>
+              <Badge tone={kitchenTone[o.kitchen_status] ?? "neutral"}>{o.kitchen_status}</Badge>
+            </View>
+
+            <View className="mt-3 gap-1">
+              {items.slice(0, 4).map((l, i) => (
+                <View key={i} className="flex-row justify-between">
+                  <Text className="text-sm text-zinc-400" numberOfLines={1}>
+                    {l.qty}× {l.name}
+                  </Text>
+                  <Text className="text-sm text-zinc-400">{money(l.price * l.qty)}</Text>
+                </View>
+              ))}
+              {items.length > 4 ? (
+                <Text className="text-xs text-zinc-600">+{items.length - 4} more…</Text>
+              ) : null}
+            </View>
+
+            <View className="mt-3 flex-row items-center justify-between border-t border-line pt-3">
+              <Muted>{timeAgo(o.created_at)}</Muted>
+              <Text className="text-base font-bold text-white">{money(o.total)}</Text>
+            </View>
+
+            <Button title="Settle bill" className="mt-3" onPress={() => onSettle(o)} />
+          </Card>
+        );
+      })}
+    </ScrollView>
   );
 }

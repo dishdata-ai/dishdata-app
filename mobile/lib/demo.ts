@@ -11,6 +11,8 @@ import type {
   Order,
   TimeEntry,
   Payment,
+  Customer,
+  RestaurantTable,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -200,6 +202,46 @@ function seedOrders(menu: Recipe[]): Order[] {
   ];
 }
 
+function seedTables(): RestaurantTable[] {
+  const t = (name: string, seats: number, zone: string): RestaurantTable => ({
+    id: uid(),
+    org_id: DEMO_ORG.id,
+    name,
+    seats,
+    zone,
+    status: "open",
+  });
+  return [
+    t("1", 2, "Window"),
+    t("2", 2, "Window"),
+    t("3", 4, "Main"),
+    t("4", 4, "Main"),
+    t("5", 6, "Patio"),
+    t("6", 8, "Private"),
+  ];
+}
+
+function seedCustomers(): Customer[] {
+  const c = (name: string, tier: string, visits: number, spend: number): Customer => ({
+    id: uid(),
+    org_id: DEMO_ORG.id,
+    name,
+    email: null,
+    phone: null,
+    visits,
+    total_spend: spend,
+    points: Math.floor(spend),
+    tier,
+    last_visit_at: hoursAgo(48),
+  });
+  return [
+    c("Maya Chen", "Gold", 18, 1240),
+    c("Diego Santos", "Silver", 9, 560),
+    c("Priya Nair", "Platinum", 31, 2480),
+    c("Tom Becker", "Bronze", 3, 145),
+  ];
+}
+
 export interface DemoState {
   org: Org;
   me: Employee;
@@ -208,6 +250,8 @@ export interface DemoState {
   tasks: Task[];
   orders: Order[];
   payments: Payment[];
+  customers: Customer[];
+  tables: RestaurantTable[];
   timeEntry: TimeEntry | null; // open shift, if clocked in
 }
 
@@ -221,6 +265,8 @@ function build(): DemoState {
     tasks: seedTasks(),
     orders: seedOrders(recipes),
     payments: [],
+    customers: seedCustomers(),
+    tables: seedTables(),
     timeEntry: {
       id: uid(),
       org_id: DEMO_ORG.id,

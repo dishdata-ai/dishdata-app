@@ -6,10 +6,14 @@ import { listMenu } from "@/lib/api/menu";
 import {
   listOpenOrders,
   listKitchenOrders,
-  createOrder,
+  checkoutOrder,
+  markOrderPaid,
   setKitchenStatus,
-  type NewOrderInput,
+  type CheckoutPayload,
+  type PaymentInput,
 } from "@/lib/api/orders";
+import { listCustomers } from "@/lib/api/customers";
+import { listTables } from "@/lib/api/tables";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
 import type { TaskStatus, KitchenStatus, TimeEntry } from "@/lib/types";
 
@@ -65,6 +69,24 @@ export function useInventory() {
   });
 }
 
+export function useCustomers() {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["customers", orgId],
+    queryFn: () => listCustomers(orgId),
+    enabled,
+  });
+}
+
+export function useTables() {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["tables", orgId],
+    queryFn: () => listTables(orgId),
+    enabled,
+  });
+}
+
 // ---- mutations ----
 
 export function useTaskMutations() {
@@ -95,15 +117,34 @@ export function useShiftMutations() {
   };
 }
 
-export function useCreateOrder() {
+function useOrderInvalidate() {
   const { orgId } = useIds();
   const qc = useQueryClient();
+  return () => {
+    qc.invalidateQueries({ queryKey: ["orders", orgId] });
+    qc.invalidateQueries({ queryKey: ["kitchen", orgId] });
+    qc.invalidateQueries({ queryKey: ["inventory", orgId] });
+    qc.invalidateQueries({ queryKey: ["customers", orgId] });
+    qc.invalidateQueries({ queryKey: ["tables", orgId] });
+  };
+}
+
+export function useCheckout() {
+  const { orgId } = useIds();
+  const invalidate = useOrderInvalidate();
   return useMutation({
-    mutationFn: (input: NewOrderInput) => createOrder(orgId, input),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["orders", orgId] });
-      qc.invalidateQueries({ queryKey: ["kitchen", orgId] });
-    },
+    mutationFn: (payload: CheckoutPayload) => checkoutOrder(orgId, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useSettle() {
+  const { orgId } = useIds();
+  const invalidate = useOrderInvalidate();
+  return useMutation({
+    mutationFn: (vars: { orderId: string; payments: PaymentInput[]; tip: number }) =>
+      markOrderPaid(orgId, vars.orderId, vars.payments, vars.tip),
+    onSuccess: invalidate,
   });
 }
 
