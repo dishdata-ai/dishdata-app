@@ -49,6 +49,23 @@ export interface CheckoutResult {
   sessionId: string;
 }
 
+export interface CardPresentParams {
+  /** The merchant's connected account id (charge happens on their behalf). */
+  accountId: string;
+  orgId: string;
+  orderId: string;
+  /** Gross amount in major units (e.g. 42.50). */
+  amount: number;
+  currency: string;
+  description: string;
+}
+
+export interface CardPresentIntent {
+  intentId: string;
+  /** PaymentIntent client secret the Terminal SDK confirms against. */
+  clientSecret: string;
+}
+
 export interface PaymentProvider {
   id: PaymentProviderId;
   /** Begin (or resume) merchant onboarding; returns an account id + hosted URL. */
@@ -57,4 +74,10 @@ export interface PaymentProvider {
   getAccountStatus(accountId: string): Promise<AccountStatus>;
   /** Create a hosted checkout for an order, charging the merchant's account with a platform fee. */
   createCheckout(params: CheckoutParams): Promise<CheckoutResult>;
+
+  // --- In-person (Terminal / Tap to Pay) — optional per provider ---
+  /** Short-lived token the mobile Terminal SDK uses to talk to the connected account. */
+  createConnectionToken?(accountId: string): Promise<string>;
+  /** Create a card-present PaymentIntent for an order (confirmed in-app by the reader). */
+  createCardPresentIntent?(params: CardPresentParams): Promise<CardPresentIntent>;
 }

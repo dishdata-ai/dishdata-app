@@ -29,7 +29,7 @@ export default function MyDay() {
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="gap-4 pb-6 pt-2">
+      <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="gap-4 pb-6 pt-2">
         <View>
           <Text className="text-2xl font-bold text-white">
             Hi {me?.name?.split(" ")[0] ?? "there"} 👋

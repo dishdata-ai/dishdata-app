@@ -147,6 +147,13 @@ export async function seedSampleData(orgId: string): Promise<void> {
   if (repairErr && !/does not exist|could not find|not find the function/i.test(repairErr.message)) {
     throw repairErr;
   }
+  // Layer on the rest of the feature data (reservations, deliveries, timeclock,
+  // marketing, supplier bills/price intel, loyalty history…). Ignored on DBs
+  // that predate the seed-extras migration (0009).
+  const { error: extrasErr } = await getSupabase().rpc("seed_demo_extras", { _org: orgId });
+  if (extrasErr && !/does not exist|could not find|not find the function/i.test(extrasErr.message)) {
+    throw extrasErr;
+  }
 }
 
 export async function acceptInvite(code: string): Promise<string> {

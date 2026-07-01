@@ -64,7 +64,7 @@ export default function Kitchen() {
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="py-3 pb-6">
+      <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="py-3 pb-6">
         <View className="mb-3 flex-row items-center justify-between">
           <Text className="text-lg font-bold text-white">Live tickets</Text>
           <Badge tone="accent">{orders.length} active</Badge>

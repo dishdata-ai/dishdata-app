@@ -496,17 +496,18 @@ export default function Pos() {
             />
           </View>
 
-          {/* Category pills */}
+          {/* Category pills — flex-none so it can't stretch to fill the column's remaining height */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
+            className="flex-none"
             contentContainerClassName="gap-2 pb-3"
           >
             {categories.map((c) => (
               <Pressable
                 key={c}
                 onPress={() => setCat(c)}
-                className={`rounded-full border px-4 py-2 ${
+                className={`self-start rounded-full border px-4 py-2 ${
                   cat === c ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
                 }`}
               >
@@ -519,8 +520,8 @@ export default function Pos() {
             ))}
           </ScrollView>
 
-          {/* Product grid */}
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-28">
+          {/* Product grid — flex-1 so it deterministically owns the remaining space */}
+          <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="pb-28">
             {visible.length === 0 ? (
               <Card>
                 <Muted className="py-8 text-center">No items match “{query}”.</Muted>

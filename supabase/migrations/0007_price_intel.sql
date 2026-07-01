@@ -71,8 +71,12 @@ begin
   execute 'create trigger set_updated_at before update on public.supplier_bills for each row execute function public.set_updated_at()';
 
   foreach t in array array['supplier_bills','supplier_bill_items','supplier_item_prices'] loop
-    execute format('drop trigger if exists set_created_by on public.%I', t);
-    execute format('create trigger set_created_by before insert on public.%I for each row execute function public.set_created_by()', t);
+    -- Only supplier_bills and supplier_item_prices have a created_by column;
+    -- supplier_bill_items is a plain child-of-bill line item without one.
+    if t <> 'supplier_bill_items' then
+      execute format('drop trigger if exists set_created_by on public.%I', t);
+      execute format('create trigger set_created_by before insert on public.%I for each row execute function public.set_created_by()', t);
+    end if;
 
     execute format('alter table public.%I enable row level security', t);
 

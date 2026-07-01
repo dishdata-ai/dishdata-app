@@ -3,6 +3,8 @@ import Stripe from "stripe";
 import { appUrl, applicationFeeAmount, isStripeConfigured } from "@/lib/payments/config";
 import type {
   AccountStatus,
+  CardPresentIntent,
+  CardPresentParams,
   CheckoutParams,
   CheckoutResult,
   OnboardingLink,
@@ -35,6 +37,11 @@ export const stripeProvider: PaymentProvider = {
         await sc.accounts.create({
           type: "express",
           metadata: { org_id: orgId },
+          // Required for direct charges on the connected account.
+          capabilities: {
+            card_payments: { requested: true },
+            transfers: { requested: true },
+          },
         })
       ).id;
 
@@ -91,5 +98,34 @@ export const stripeProvider: PaymentProvider = {
 
     if (!session.url) throw new Error("Stripe did not return a checkout URL");
     return { url: session.url, sessionId: session.id };
+  },
+
+  async createConnectionToken(accountId): Promise<string> {
+    // Created ON the connected account so the reader/charge belong to the merchant.
+    const token = await getStripe().terminal.connectionTokens.create({}, { stripeAccount: accountId });
+    return token.secret;
+  },
+
+  async createCardPresentIntent(params: CardPresentParams): Promise<CardPresentIntent> {
+    const sc = getStripe();
+    const amountInCents = Math.round(params.amount * 100);
+    const fee = applicationFeeAmount(amountInCents);
+
+    // Direct charge on the connected account (Tap to Pay = card_present).
+    const pi = await sc.paymentIntents.create(
+      {
+        amount: amountInCents,
+        currency: params.currency.toLowerCase(),
+        payment_method_types: ["card_present"],
+        capture_method: "automatic",
+        description: params.description,
+        ...(fee > 0 ? { application_fee_amount: fee } : {}),
+        metadata: { org_id: params.orgId, order_id: params.orderId },
+      },
+      { stripeAccount: params.accountId },
+    );
+
+    if (!pi.client_secret) throw new Error("Stripe did not return a client secret");
+    return { intentId: pi.id, clientSecret: pi.client_secret };
   },
 };

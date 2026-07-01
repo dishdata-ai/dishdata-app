@@ -73,13 +73,14 @@ export default function Tasks() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        className="flex-none"
         contentContainerClassName="gap-2 py-3"
       >
         {FILTERS.map((f) => (
           <Pressable
             key={f.key}
             onPress={() => setFilter(f.key)}
-            className={`rounded-full border px-4 py-2 ${
+            className={`self-start rounded-full border px-4 py-2 ${
               filter === f.key ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
             }`}
           >
@@ -94,7 +95,7 @@ export default function Tasks() {
         ))}
       </ScrollView>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerClassName="pb-6">
+      <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="pb-6">
         {shown.length === 0 ? (
           <Card>
             <Muted className="py-6 text-center">Nothing here.</Muted>
