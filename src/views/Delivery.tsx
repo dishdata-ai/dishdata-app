@@ -1,6 +1,10 @@
 import { useMemo } from "react";
+import dynamic from "next/dynamic";
 import { Bike, MapPin, ArrowRight, PackageCheck } from "lucide-react";
 import { Card, SectionTitle, Badge, Select, EmptyState, PageSkeleton, StatCard } from "@/components/ui";
+
+// react-leaflet touches `window` at import time — must never be server-rendered.
+const RiderMap = dynamic(() => import("@/components/RiderMap"), { ssr: false });
 import { useDeliveries, useOrders, useEmployees, useInvalidate } from "@/lib/hooks/data";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -138,6 +142,11 @@ export default function DeliveryPage() {
                           <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-accent-400" />
                           {d.address || "No address on file"}
                         </p>
+                        {d.status === "picked_up" && d.current_lat != null && d.current_lng != null && (
+                          <div className="mt-2">
+                            <RiderMap lat={d.current_lat} lng={d.current_lng} label={courier?.name} height={140} />
+                          </div>
+                        )}
                         {d.status !== "delivered" && (
                           <div className="mt-3 space-y-2">
                             <Select

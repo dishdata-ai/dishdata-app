@@ -2,17 +2,36 @@ import { ScrollView, View, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen, Card, Button, Badge, StatTile, Muted, Divider } from "@/components/ui";
 import { useOrg } from "@/lib/org-context";
-import { useShift, useShiftMutations, useTasks, useTaskMutations } from "@/lib/hooks";
+import {
+  useShift,
+  useShiftMutations,
+  useTasks,
+  useTaskMutations,
+  useOrgDeliveries,
+} from "@/lib/hooks";
 import { elapsed, clockTime, money } from "@/lib/format";
 import { colors } from "@/lib/theme";
+import type { DeliveryStatus } from "@/lib/types";
+
+const MANAGER_ROLES = new Set(["owner", "admin", "manager"]);
+
+const DELIVERY_STATUS_TONE: Record<DeliveryStatus, "neutral" | "amber" | "green" | "accent" | "rose"> = {
+  pending: "neutral",
+  assigned: "amber",
+  picked_up: "accent",
+  delivered: "green",
+  failed: "rose",
+};
 
 export default function MyDay() {
   const { ctx } = useOrg();
   const me = ctx?.me;
+  const isManager = Boolean(ctx?.role && MANAGER_ROLES.has(ctx.role));
   const shiftQ = useShift();
   const { clockIn, clockOut, toggleBreak } = useShiftMutations();
   const tasksQ = useTasks();
   const taskMut = useTaskMutations();
+  const orgDeliveriesQ = useOrgDeliveries(isManager);
 
   const shift = shiftQ.data ?? null;
   const onBreak = Boolean(shift?.break_started_at);
@@ -145,6 +164,48 @@ export default function MyDay() {
             )}
           </Card>
         </View>
+
+        {/* Manager view — all active deliveries org-wide, not just your own */}
+        {isManager ? (
+          <View>
+            <View className="mb-2 flex-row items-center justify-between">
+              <Text className="text-lg font-bold text-white">Active deliveries</Text>
+              <Badge tone="accent">{orgDeliveriesQ.data?.length ?? 0} in progress</Badge>
+            </View>
+            <Card className="p-0">
+              {(orgDeliveriesQ.data?.length ?? 0) === 0 ? (
+                <View className="p-6">
+                  <Muted className="text-center">No deliveries in progress right now.</Muted>
+                </View>
+              ) : (
+                orgDeliveriesQ.data!.map((d, i) => (
+                  <View key={d.id}>
+                    {i > 0 ? <Divider /> : null}
+                    <View className="p-4">
+                      <View className="flex-row items-center justify-between">
+                        <Text className="text-base font-semibold text-white">
+                          {d.order?.guest_name ?? "Guest"}
+                        </Text>
+                        <Badge tone={DELIVERY_STATUS_TONE[d.status]}>
+                          {d.status.replace("_", " ")}
+                        </Badge>
+                      </View>
+                      <Muted className="mt-0.5">{d.address}</Muted>
+                      <View className="mt-1.5 flex-row items-center justify-between">
+                        <Muted>{d.courier ? `Rider: ${d.courier.name}` : "Unassigned"}</Muted>
+                        {d.order ? (
+                          <Text className="text-sm font-semibold text-brand-300">
+                            {money(d.order.total)}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  </View>
+                ))
+              )}
+            </Card>
+          </View>
+        ) : null}
       </ScrollView>
     </Screen>
   );

@@ -1,16 +1,23 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demo } from "@/lib/demo";
-import type { Org, Employee } from "@/lib/types";
+import type { Org, Employee, Role } from "@/lib/types";
 
 export interface OrgContext {
   org: Org;
   me: Employee;
+  // From org_members.role — distinct from Employee.role_title (free text,
+  // e.g. "Floor Lead"). Gates admin/manager-only UI (e.g. the org-wide
+  // delivery view on My Day).
+  role: Role;
 }
 
-/** Resolve the signed-in user's active org + their employee record. */
+/** Resolve the signed-in user's active org, employee record, and org role. */
 export async function getOrgContext(): Promise<OrgContext | null> {
   if (!isSupabaseConfigured) {
-    return { org: demo.org, me: demo.me };
+    // "owner" so demo mode showcases the manager view too, alongside the
+    // rider's own assigned-deliveries view — same single-persona precedent
+    // as the rest of the mobile app's demo mode (no per-role tab gating yet).
+    return { org: demo.org, me: demo.me, role: "owner" };
   }
   const sb = getSupabase();
   const {
@@ -33,6 +40,12 @@ export async function getOrgContext(): Promise<OrgContext | null> {
     .eq("org_id", orgId)
     .eq("user_id", user.id)
     .maybeSingle();
+  const { data: member } = await sb
+    .from("org_members")
+    .select("role")
+    .eq("org_id", orgId)
+    .eq("user_id", user.id)
+    .maybeSingle();
   if (!org) return null;
 
   return {
@@ -49,6 +62,7 @@ export async function getOrgContext(): Promise<OrgContext | null> {
       avatar_hue: 160,
       is_active: true,
     },
+    role: (member?.role as Role) ?? "staff",
   };
 }
 

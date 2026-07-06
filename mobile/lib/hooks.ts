@@ -15,7 +15,7 @@ import {
 import { listCustomers } from "@/lib/api/customers";
 import { listTables } from "@/lib/api/tables";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
-import { listMyDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
+import { listMyDeliveries, listOrgDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
 import type { TaskStatus, KitchenStatus, TimeEntry } from "@/lib/types";
 
 function useIds() {
@@ -94,6 +94,18 @@ export function useMyDeliveries() {
     queryKey: ["my-deliveries", orgId, empId],
     queryFn: () => listMyDeliveries(orgId, empId),
     enabled,
+    refetchInterval: 8000,
+  });
+}
+
+/** Org-wide active deliveries — pass `enabled: false` when the caller isn't
+ * owner/admin/manager (role-gating happens at the call site). */
+export function useOrgDeliveries(enabled: boolean) {
+  const { orgId, enabled: orgEnabled } = useIds();
+  return useQuery({
+    queryKey: ["org-deliveries", orgId],
+    queryFn: () => listOrgDeliveries(orgId),
+    enabled: orgEnabled && enabled,
     refetchInterval: 8000,
   });
 }

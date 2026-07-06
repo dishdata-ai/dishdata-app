@@ -6,6 +6,10 @@ export interface DeliveryWithOrder extends Delivery {
   order: Pick<Order, "order_number" | "guest_name" | "total" | "items"> | null;
 }
 
+export interface DeliveryWithOrderAndCourier extends DeliveryWithOrder {
+  courier: { name: string } | null;
+}
+
 function attachOrder(d: Delivery): DeliveryWithOrder {
   const order = demo.orders.find((o) => o.id === d.order_id) ?? null;
   return {
@@ -14,6 +18,14 @@ function attachOrder(d: Delivery): DeliveryWithOrder {
       ? { order_number: order.order_number, guest_name: order.guest_name, total: order.total, items: order.items }
       : null,
   };
+}
+
+function attachOrderAndCourier(d: Delivery): DeliveryWithOrderAndCourier {
+  const withOrder = attachOrder(d);
+  // Demo mode is single-persona — demo.me is the only employee that could
+  // ever be assigned as courier_employee_id.
+  const courier = d.courier_employee_id === demo.me.id ? { name: demo.me.name } : null;
+  return { ...withOrder, courier };
 }
 
 /** Deliveries assigned to this rider, still in progress (not delivered/failed). */
@@ -37,6 +49,28 @@ export async function listMyDeliveries(orgId: string, employeeId: string): Promi
     .order("created_at");
   if (error) throw error;
   return (data ?? []).map((row: any) => ({ ...row, order: row.orders ?? null }));
+}
+
+/** All active (not delivered/failed) deliveries org-wide — for the
+ * admin/manager view, gated by role at the call site, not here. */
+export async function listOrgDeliveries(orgId: string): Promise<DeliveryWithOrderAndCourier[]> {
+  if (!isSupabaseConfigured) {
+    return demo.deliveries
+      .filter((d) => d.org_id === orgId && d.status !== "delivered" && d.status !== "failed")
+      .map(attachOrderAndCourier);
+  }
+  const { data, error } = await getSupabase()
+    .from("deliveries")
+    .select("*, orders(order_number, guest_name, total, items), employees(name)")
+    .eq("org_id", orgId)
+    .not("status", "in", "(delivered,failed)")
+    .order("created_at");
+  if (error) throw error;
+  return (data ?? []).map((row: any) => ({
+    ...row,
+    order: row.orders ?? null,
+    courier: row.employees ?? null,
+  }));
 }
 
 /** Rider taps "Start trip" — flips the delivery to picked_up. Org members
