@@ -15,6 +15,7 @@ import {
 import { listCustomers } from "@/lib/api/customers";
 import { listTables } from "@/lib/api/tables";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
+import { listMyDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
 import type { TaskStatus, KitchenStatus, TimeEntry } from "@/lib/types";
 
 function useIds() {
@@ -87,6 +88,16 @@ export function useTables() {
   });
 }
 
+export function useMyDeliveries() {
+  const { orgId, empId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["my-deliveries", orgId, empId],
+    queryFn: () => listMyDeliveries(orgId, empId),
+    enabled,
+    refetchInterval: 8000,
+  });
+}
+
 // ---- mutations ----
 
 export function useTaskMutations() {
@@ -156,6 +167,28 @@ export function useKitchenMutation() {
       setKitchenStatus(orgId, id, status),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["kitchen", orgId] }),
   });
+}
+
+export function useDeliveryMutations() {
+  const { orgId, empId } = useIds();
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["my-deliveries", orgId, empId] });
+  return {
+    startTrip: useMutation({
+      mutationFn: (deliveryId: string) => startTrip(orgId, deliveryId),
+      onSuccess: invalidate,
+    }),
+    // No invalidate here — this fires every ~15s while a trip is active and
+    // only updates lat/lng, not anything the deliveries list needs to refetch.
+    reportLocation: useMutation({
+      mutationFn: (vars: { deliveryId: string; lat: number; lng: number }) =>
+        reportLocation(vars.deliveryId, vars.lat, vars.lng),
+    }),
+    markDelivered: useMutation({
+      mutationFn: (deliveryId: string) => markDelivered(orgId, deliveryId),
+      onSuccess: invalidate,
+    }),
+  };
 }
 
 export function useStockAdjust() {

@@ -140,7 +140,9 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       demoTable<Delivery>("deliveries").insert({
         id: uid(), org_id: orgId, order_id: order.id, courier_employee_id: null,
         address: payload.address ?? "", phone: null, status: "pending", eta: null,
-        notes: null, created_at: now,
+        notes: null, created_at: now, updated_at: now, created_by: null,
+        postcode: null, delivery_fee: 0, current_lat: null, current_lng: null,
+        location_updated_at: null,
       });
     }
     // Loyalty

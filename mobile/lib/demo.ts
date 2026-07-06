@@ -13,6 +13,7 @@ import type {
   Payment,
   Customer,
   RestaurantTable,
+  Delivery,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -186,7 +187,7 @@ function seedOrders(menu: Recipe[]): Order[] {
     };
   };
   const byName = (n: string) => menu.find((m) => m.name === n)!;
-  return [
+  const orders = [
     build("A-104", "T4", [
       { rec: byName("Smash Burger"), qty: 2 },
       { rec: byName("Truffle Fries"), qty: 1 },
@@ -199,6 +200,60 @@ function seedOrders(menu: Recipe[]): Order[] {
       { rec: byName("Margherita Pizza"), qty: 1 },
       { rec: byName("Negroni"), qty: 2 },
     ], "ready", 14),
+  ];
+  // One delivery-type order, ready for pickup, so the demo Delivery tab has
+  // a real order (address/items/total) to attach a rider trip to.
+  const deliveryLines = [
+    { rec: byName("Margherita Pizza"), qty: 1 },
+    { rec: byName("House Lemonade"), qty: 2 },
+  ].map((x) => line(x.rec, x.qty));
+  const deliverySubtotal = deliveryLines.reduce((s, l) => s + l.price * l.qty, 0);
+  const deliveryTax = +(deliverySubtotal * (DEMO_ORG.tax_rate / 100)).toFixed(2);
+  orders.push({
+    id: uid(),
+    org_id: DEMO_ORG.id,
+    order_number: "A-101",
+    order_type: "delivery",
+    table_id: null,
+    customer_id: null,
+    guest_name: "Jordan Reyes",
+    items: deliveryLines,
+    subtotal: deliverySubtotal,
+    tax: deliveryTax,
+    tip: 0,
+    total: +(deliverySubtotal + deliveryTax).toFixed(2),
+    status: "open",
+    kitchen_status: "ready",
+    kitchen_notes: null,
+    source: "pos",
+    created_at: minsAgo(18),
+  });
+  return orders;
+}
+
+function seedDeliveries(orders: Order[]): Delivery[] {
+  const deliveryOrder = orders.find((o) => o.order_type === "delivery")!;
+  const now = nowISO();
+  return [
+    {
+      id: uid(),
+      org_id: DEMO_ORG.id,
+      order_id: deliveryOrder.id,
+      courier_employee_id: DEMO_ME.id,
+      address: "482 Riverside Ave, Apt 3B",
+      phone: "+1 555-0142",
+      status: "assigned",
+      eta: null,
+      notes: "Ring doorbell, leave at door if no answer",
+      created_at: minsAgo(15),
+      updated_at: now,
+      created_by: null,
+      postcode: "10115",
+      delivery_fee: 2.5,
+      current_lat: null,
+      current_lng: null,
+      location_updated_at: null,
+    },
   ];
 }
 
@@ -252,21 +307,24 @@ export interface DemoState {
   payments: Payment[];
   customers: Customer[];
   tables: RestaurantTable[];
+  deliveries: Delivery[];
   timeEntry: TimeEntry | null; // open shift, if clocked in
 }
 
 function build(): DemoState {
   const recipes = seedRecipes();
+  const orders = seedOrders(recipes);
   return {
     org: DEMO_ORG,
     me: DEMO_ME,
     recipes,
     inventory: seedInventory(),
     tasks: seedTasks(),
-    orders: seedOrders(recipes),
+    orders,
     payments: [],
     customers: seedCustomers(),
     tables: seedTables(),
+    deliveries: seedDeliveries(orders),
     timeEntry: {
       id: uid(),
       org_id: DEMO_ORG.id,

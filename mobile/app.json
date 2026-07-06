@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.dishdata.mobile",
       "infoPlist": {
-        "NSCameraUsageDescription": "DishData uses the camera to scan barcodes and capture supplier bills."
+        "NSCameraUsageDescription": "DishData uses the camera to scan barcodes and capture supplier bills.",
+        "NSLocationWhenInUseUsageDescription": "DishData shares your location with customers while you're out on a delivery."
       }
     },
     "android": {
@@ -36,6 +37,12 @@
         "expo-camera",
         {
           "cameraPermission": "DishData uses the camera to scan barcodes and capture supplier bills."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "DishData shares your location with customers while you're out on a delivery."
         }
       ]
     ],

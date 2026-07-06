@@ -331,6 +331,15 @@ export interface Delivery {
   eta: string | null;
   notes: string | null;
   created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  // Added in 0010_delivery_tracking.sql — server-validated fee/postcode and
+  // the rider's live position for get_public_order_status/report_courier_location.
+  postcode: string | null;
+  delivery_fee: number;
+  current_lat: number | null;
+  current_lng: number | null;
+  location_updated_at: string | null;
 }
 
 export interface Employee {
