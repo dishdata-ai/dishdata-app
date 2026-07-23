@@ -5,7 +5,7 @@
 
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 
-/** Base URL of the Next.js app exposing /api/payments/* (e.g. https://app.dishdata.com). */
+/** Base URL of the Next.js app exposing /api/payments/* (e.g. https://app.dishdata.de). */
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 async function authHeader(): Promise<Record<string, string>> {
