@@ -520,6 +520,10 @@ export interface EventMenu {
   org_id: string;
   name: string;
   is_active: boolean;
+  /** Public storefront shows this menu instead of the full catalog. */
+  show_on_website: boolean;
+  /** Food is pre-prepared: POS marks orders served, skipping the kitchen board. */
+  skip_kitchen: boolean;
   created_at: string;
   updated_at: string;
   created_by: string | null;

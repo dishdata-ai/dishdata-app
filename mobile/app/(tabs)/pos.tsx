@@ -25,7 +25,7 @@ import { useOrg } from "@/lib/org-context";
 import { money } from "@/lib/format";
 import { colors } from "@/lib/theme";
 import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/types";
-import type { PaymentInput } from "@/lib/api/orders";
+import { setKitchenStatus, type PaymentInput } from "@/lib/api/orders";
 
 const TIP_OPTIONS = [0, 10, 15, 18, 20] as const;
 const METHODS: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -301,7 +301,7 @@ function PayModal({
                 <Text className="text-zinc-300">{money(subtotal)}</Text>
               </View>
               <View className="flex-row justify-between">
-                <Muted>Tax ({taxRate}%)</Muted>
+                <Muted>Incl. tax ({taxRate}%)</Muted>
                 <Text className="text-zinc-300">{money(tax)}</Text>
               </View>
               {tip > 0 ? (
@@ -371,6 +371,9 @@ export default function Pos() {
     return m ? new Set(m.recipe_ids) : null;
   }, [eventMenus, eventMenuId]);
 
+  // Pre-prepared event menu → orders skip the Kitchen board entirely.
+  const skipKitchen = !!eventMenus.find((x) => x.id === eventMenuId)?.skip_kitchen;
+
   const inMenu = useMemo(
     () => menu.filter((m) => !eventMenuIds || eventMenuIds.has(m.id)),
     [menu, eventMenuIds],
@@ -392,10 +395,15 @@ export default function Pos() {
   const lines = Object.values(cart);
   const billLines: BillLine[] = lines.map((l) => ({ name: l.rec.name, qty: l.qty, price: l.rec.price }));
   const count = lines.reduce((s, l) => s + l.qty, 0);
-  const subtotal = lines.reduce((s, l) => s + l.rec.price * l.qty, 0);
-  const tax = +(subtotal * (taxRate / 100)).toFixed(2);
-  const tip = +(subtotal * (tipPct / 100)).toFixed(2);
-  const total = +(subtotal + tax + tip).toFixed(2);
+  // VAT-included (gross) pricing, mirroring checkout_order (migration 0017):
+  // menu prices already contain VAT, so break it out rather than adding on top.
+  // `subtotal` is NET — which is what PayModal expects, since net × rate/100
+  // equals the VAT contained in the gross price.
+  const gross = lines.reduce((s, l) => s + l.rec.price * l.qty, 0);
+  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
+  const subtotal = +(gross - tax).toFixed(2);
+  const tip = +(gross * (tipPct / 100)).toFixed(2);
+  const total = +(gross + tip).toFixed(2);
 
   const openTabs = useMemo(
     () => (ordersQ.data ?? []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at)),
@@ -446,6 +454,11 @@ export default function Pos() {
     checkout.mutate(payload(payments, tipAmount), {
       onSuccess: (res) => {
         const paid = payments.length > 0;
+        // Pre-prepared event menu: hand-over is immediate, so don't queue a
+        // ticket on the Kitchen board. Non-fatal — the sale is already recorded.
+        if (skipKitchen && res.order_id && ctx?.org.id) {
+          setKitchenStatus(ctx.org.id, res.order_id, "served").catch(() => {});
+        }
         reset();
         setPayOpen(false);
         if (paid) {
@@ -773,7 +786,7 @@ export default function Pos() {
                       <Text className="text-zinc-300">{money(subtotal)}</Text>
                     </View>
                     <View className="flex-row justify-between">
-                      <Muted>Tax ({taxRate}%)</Muted>
+                      <Muted>Incl. tax ({taxRate}%)</Muted>
                       <Text className="text-zinc-300">{money(tax)}</Text>
                     </View>
                     {tip > 0 ? (

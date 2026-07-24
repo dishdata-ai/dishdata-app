@@ -33,7 +33,7 @@ import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
-import { checkoutOrder, markOrderPaid, type CheckoutResult } from "@/lib/api/orders";
+import { checkoutOrder, markOrderPaid, setKitchenStatus, type CheckoutResult } from "@/lib/api/orders";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, OrderType, PaymentMethod } from "@/lib/api/database.types";
@@ -290,7 +290,7 @@ function PayModal({
             <span>{fmt(subtotal, 2)}</span>
           </div>
           <div className="flex justify-between text-zinc-400">
-            <span>Tax ({taxRate}%)</span>
+            <span>Incl. tax ({taxRate}%)</span>
             <span>{fmt(tax, 2)}</span>
           </div>
           {tip > 0 && (
@@ -359,6 +359,9 @@ export default function Pos() {
     return m ? new Set(m.recipe_ids) : null;
   }, [activeEventMenus, eventMenuId]);
 
+  // Pre-prepared event menu → orders skip the Kitchen board entirely.
+  const skipKitchen = !!activeEventMenus.find((x) => x.id === eventMenuId)?.skip_kitchen;
+
   // Dishes in scope for the current menu selection (before category/search).
   const inMenu = useMemo(
     () => recipes.filter((r) => !eventMenuIds || eventMenuIds.has(r.id)),
@@ -389,11 +392,16 @@ export default function Pos() {
     .map((l) => ({ ...l, recipe: recipes.find((r) => r.id === l.recipeId) }))
     .filter((l) => l.recipe);
   const billLines: BillLine[] = lines.map((l) => ({ name: l.recipe!.name, qty: l.qty, price: l.recipe!.price }));
-  const subtotal = lines.reduce((s, l) => s + l.recipe!.price * l.qty, 0);
+  // VAT-included (gross) pricing, mirroring checkout_order (migration 0017):
+  // menu prices already contain VAT, so break it out rather than adding on top.
+  // `subtotal` is the NET amount — which is also what PayModal and the settle
+  // path expect, since net × rate/100 == the VAT contained in the gross price.
   const taxRate = org?.tax_rate ?? 8.5;
-  const tax = subtotal * (taxRate / 100);
-  const tip = +(subtotal * (tipPct / 100)).toFixed(2);
-  const total = +(subtotal + tax + tip).toFixed(2);
+  const gross = lines.reduce((s, l) => s + l.recipe!.price * l.qty, 0);
+  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
+  const subtotal = +(gross - tax).toFixed(2);
+  const tip = +(gross * (tipPct / 100)).toFixed(2);
+  const total = +(gross + tip).toFixed(2);
   const cartCount = lines.reduce((s, l) => s + l.qty, 0);
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
@@ -435,6 +443,18 @@ export default function Pos() {
         tip: vars.tip,
         address: orderType === "delivery" ? address : null,
         payments: vars.payments,
+      }).then(async (result) => {
+        // Pre-prepared event menu: hand-over is immediate, so don't queue a
+        // ticket on the Kitchen board. Non-fatal if it fails — the order is
+        // already placed; it would just show up in Kitchen as usual.
+        if (skipKitchen && result.order_id) {
+          try {
+            await setKitchenStatus(org!.id, result.order_id, "served");
+          } catch {
+            /* leave it on the board rather than failing the sale */
+          }
+        }
+        return result;
       }),
     onSuccess: (result, vars) => {
       const paid = vars.payments.length > 0;
@@ -746,7 +766,7 @@ export default function Pos() {
                     <span>{fmt(subtotal, 2)}</span>
                   </div>
                   <div className="flex justify-between text-zinc-400">
-                    <span>Tax ({taxRate}%)</span>
+                    <span>Incl. tax ({taxRate}%)</span>
                     <span>{fmt(tax, 2)}</span>
                   </div>
                   {tip > 0 && (
