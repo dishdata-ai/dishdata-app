@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { CalendarRange, Plus, Pencil, Trash2, Check, Globe } from "lucide-react";
+import { CalendarRange, Plus, Pencil, Trash2, Check, Globe, ChefHat } from "lucide-react";
 import { Card, Button, Badge, Modal, Input, Field, EmptyState } from "@/components/ui";
 import { useEventMenus, useRecipes, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -317,5 +317,44 @@ function EventMenuEditor({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** A checkbox-style row used for the event menu's behaviour options. */
+function ToggleRow({
+  on,
+  onToggle,
+  icon,
+  label,
+  hint,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-full cursor-pointer items-start gap-3 rounded-xl border border-line bg-white/[0.02] p-3 text-left hover:border-zinc-600"
+    >
+      <span
+        className={cn(
+          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+          on ? "border-brand-400 bg-brand-500 text-zinc-950" : "border-zinc-600",
+        )}
+      >
+        {on && <Check className="h-3 w-3" />}
+      </span>
+      <span>
+        <span className="flex items-center gap-2 text-sm font-medium text-white">
+          {icon}
+          {label}
+        </span>
+        <span className="mt-0.5 block text-xs text-zinc-500">{hint}</span>
+      </span>
+    </button>
   );
 }
