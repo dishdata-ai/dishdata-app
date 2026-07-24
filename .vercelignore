@@ -1,0 +1,14 @@
+# Keep the Vercel upload to what the Next.js build actually needs.
+#
+# The Expo app lives in this repo but is not part of the web build, and its
+# dependency tree is ~380 MB — Vercel excludes the ROOT node_modules by default
+# but not nested ones, so without this the CLI upload stalls before the build
+# ever starts (deployment sits at "Building…" with a 0ms build).
+mobile
+
+# SQL migrations/seeds are applied by hand in the Supabase SQL editor.
+supabase
+
+# Build output and deps are rebuilt on Vercel.
+node_modules
+.next
