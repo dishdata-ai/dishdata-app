@@ -49,3 +49,4 @@ yarn-error.log*
 # Local agent tooling (not product code)
 .claude
 .agents
+.env*
