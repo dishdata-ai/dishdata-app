@@ -514,3 +514,39 @@ export interface AuditEntry {
   detail: Record<string, unknown> | null;
   created_at: string;
 }
+
+export interface Receipt {
+  id: string;
+  org_id: string;
+  order_id: string;
+  receipt_number: string;
+  customer_email: string | null;
+  customer_name: string | null;
+  status: 'generated' | 'emailed';
+  emailed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface EventMenu {
+  id: string;
+  org_id: string;
+  name: string;
+  is_active: boolean;
+  /** When true (and active), the public storefront shows this menu instead of the full catalog. */
+  show_on_website: boolean;
+  /** Food is pre-prepared: POS marks these orders served at checkout, skipping the kitchen board. */
+  skip_kitchen: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface EventMenuItem {
+  id: string;
+  org_id: string;
+  event_menu_id: string;
+  recipe_id: string;
+  created_at: string;
+}

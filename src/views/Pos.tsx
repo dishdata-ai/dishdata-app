@@ -28,7 +28,7 @@ import {
   EmptyState,
   PageSkeleton,
 } from "@/components/ui";
-import { useRecipes, useCustomers, useTables, useOrders, useInvalidate } from "@/lib/hooks/data";
+import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useInvalidate } from "@/lib/hooks/data";
 import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -38,7 +38,10 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, OrderType, PaymentMethod } from "@/lib/api/database.types";
 
-const categories = ["All", "Mains", "Appetizers", "Desserts", "Beverages", "Specials"] as const;
+// Category pills are derived from the menu actually loaded (see `categories`
+// below) rather than a fixed list — restaurants use their own taxonomies
+// (e.g. Breakfast/Lunch/Dinner for an event), and a hardcoded list would hide
+// those dishes behind "All".
 
 type PaymentInput = { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string };
 type BillLine = { name: string; qty: number; price: number };
@@ -319,6 +322,7 @@ export default function Pos() {
   const { org } = useOrg();
   const fmt = useFmt();
   const recipesQ = useRecipes();
+  const eventMenusQ = useEventMenus();
   const customersQ = useCustomers();
   const tablesQ = useTables();
   const ordersQ = useOrders();
@@ -326,7 +330,8 @@ export default function Pos() {
   const { cart, addToCart, setCartQty, clearCart } = useUi();
 
   const [tab, setTab] = useState<"order" | "tabs">("order");
-  const [category, setCategory] = useState<(typeof categories)[number]>("All");
+  const [category, setCategory] = useState<string>("All");
+  const [eventMenuId, setEventMenuId] = useState<string>(""); // "" = full menu
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState<PaymentMethod>("card");
   const [orderType, setOrderType] = useState<OrderType>("dine_in");
@@ -343,14 +348,41 @@ export default function Pos() {
   >(null);
 
   const recipes = useMemo(() => (recipesQ.data ?? []).filter((r) => r.is_active), [recipesQ.data]);
+
+  // Event/popup menus: when one is picked, the grid shows only its dishes.
+  const activeEventMenus = useMemo(
+    () => (eventMenusQ.data ?? []).filter((m) => m.is_active),
+    [eventMenusQ.data],
+  );
+  const eventMenuIds = useMemo(() => {
+    const m = activeEventMenus.find((x) => x.id === eventMenuId);
+    return m ? new Set(m.recipe_ids) : null;
+  }, [activeEventMenus, eventMenuId]);
+
+  // Dishes in scope for the current menu selection (before category/search).
+  const inMenu = useMemo(
+    () => recipes.filter((r) => !eventMenuIds || eventMenuIds.has(r.id)),
+    [recipes, eventMenuIds],
+  );
+
+  // Category pills reflect what's actually on the selected menu.
+  const categories = useMemo(
+    () => ["All", ...[...new Set(inMenu.map((r) => r.category).filter(Boolean))].sort()],
+    [inMenu],
+  );
+
+  // Switching menus can strand a category that no longer exists — fall back to
+  // "All" so the grid never silently renders empty.
+  const effectiveCategory = categories.includes(category) ? category : "All";
+
   const products = useMemo(
     () =>
-      recipes.filter(
+      inMenu.filter(
         (r) =>
-          (category === "All" || r.category === category) &&
+          (effectiveCategory === "All" || r.category === effectiveCategory) &&
           r.name.toLowerCase().includes(query.toLowerCase()),
       ),
-    [recipes, category, query],
+    [inMenu, effectiveCategory, query],
   );
 
   const lines = cart
@@ -481,6 +513,40 @@ export default function Pos() {
         <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_300px] lg:grid-cols-[minmax(0,1fr)_370px]">
           {/* Product grid */}
           <div className="space-y-4">
+            {activeEventMenus.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-white/[0.02] p-1.5">
+                <span className="px-1.5 text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
+                  Menu
+                </span>
+                <button
+                  onClick={() => setEventMenuId("")}
+                  className={cn(
+                    "cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                    eventMenuId === ""
+                      ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                      : "text-zinc-400 hover:text-white",
+                  )}
+                >
+                  Full menu
+                </button>
+                {activeEventMenus.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setEventMenuId(m.id)}
+                    className={cn(
+                      "cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                      eventMenuId === m.id
+                        ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                        : "text-zinc-400 hover:text-white",
+                    )}
+                  >
+                    {m.name}
+                    <span className="ml-1.5 opacity-60">{m.recipe_ids.length}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="relative flex-1">
                 <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />

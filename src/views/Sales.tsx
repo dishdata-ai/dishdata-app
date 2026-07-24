@@ -22,6 +22,7 @@ import {
   chartTooltipStyle,
 } from "@/components/ui";
 import { useOrders, useRecipes } from "@/lib/hooks/data";
+import { ReceiptButton } from "@/components/ReceiptButton";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
   revenueByDay,
@@ -201,11 +202,14 @@ export default function Sales() {
                       {o.items.map((l) => `${l.qty}× ${l.name}`).join(", ")}
                     </p>
                   </div>
-                  <div className="shrink-0 text-right">
-                    <p className="text-sm font-semibold text-brand-300">{fmt(o.total, 2)}</p>
-                    <Badge tone={o.status === "paid" ? "green" : "amber"} className="mt-0.5 capitalize">
-                      {o.status}
-                    </Badge>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-brand-300">{fmt(o.total, 2)}</p>
+                      <Badge tone={o.status === "paid" ? "green" : "amber"} className="mt-0.5 capitalize">
+                        {o.status}
+                      </Badge>
+                    </div>
+                    {o.status === "paid" && <ReceiptButton order={o} />}
                   </div>
                 </div>
               ))}
