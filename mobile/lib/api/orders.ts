@@ -70,11 +70,14 @@ export async function checkoutOrder(
   orgId: string,
   payload: CheckoutPayload,
 ): Promise<CheckoutResult> {
-  const subtotal = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
+  // VAT-included (gross) pricing: menu prices already include VAT. Break it out
+  // of the price rather than adding on top; store subtotal NET (see 0017 migration).
+  const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
   const taxRate = demo.org.tax_rate ?? 8.5;
-  const tax = +(subtotal * (taxRate / 100)).toFixed(2);
+  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
   const tip = payload.tip ?? 0;
-  const total = +(subtotal + tax + tip).toFixed(2);
+  const total = +(gross + tip).toFixed(2);
+  const subtotal = +(gross - tax).toFixed(2);
 
   if (!isSupabaseConfigured) {
     const now = new Date().toISOString();

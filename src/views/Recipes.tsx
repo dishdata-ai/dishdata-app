@@ -15,6 +15,7 @@ import {
   PageSkeleton,
 } from "@/components/ui";
 import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/data";
+import { EventMenusCard } from "@/components/EventMenus";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { createRecipe, deleteRecipe, updateRecipe, type NewRecipeInput } from "@/lib/api/recipes";
@@ -400,6 +401,8 @@ export default function Recipes() {
           </div>
         )}
       </Modal>
+
+      <EventMenusCard />
 
       <Modal open={adding} onClose={() => setAdding(false)} title="New Recipe" wide>
         <AddRecipeForm onDone={() => setAdding(false)} />

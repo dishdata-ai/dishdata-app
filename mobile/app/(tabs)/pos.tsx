@@ -14,6 +14,7 @@ import {
 } from "@/components/ui";
 import {
   useMenu,
+  useEventMenus,
   useCheckout,
   useSettle,
   useOpenOrders,
@@ -329,6 +330,7 @@ function PayModal({
 
 export default function Pos() {
   const menuQ = useMenu();
+  const eventMenusQ = useEventMenus();
   const ordersQ = useOpenOrders();
   const customersQ = useCustomers();
   const tablesQ = useTables();
@@ -341,6 +343,7 @@ export default function Pos() {
   const [view, setView] = useState<"order" | "tabs">("order");
   const [query, setQuery] = useState("");
   const [cat, setCat] = useState("All");
+  const [eventMenuId, setEventMenuId] = useState<string>(""); // "" = full menu
   const [cart, setCart] = useState<Record<string, { rec: Recipe; qty: number }>>({});
   const [cartOpen, setCartOpen] = useState(false);
   const [orderType, setOrderType] = useState<OrderType>("dine_in");
@@ -361,13 +364,28 @@ export default function Pos() {
     method: string;
   } | null>(null);
 
-  const categories = useMemo(
-    () => ["All", ...Array.from(new Set(menu.map((m) => m.category)))],
-    [menu],
+  // Event/popup menus: when one is picked, the grid shows only its dishes.
+  const eventMenus = eventMenusQ.data ?? [];
+  const eventMenuIds = useMemo(() => {
+    const m = eventMenus.find((x) => x.id === eventMenuId);
+    return m ? new Set(m.recipe_ids) : null;
+  }, [eventMenus, eventMenuId]);
+
+  const inMenu = useMemo(
+    () => menu.filter((m) => !eventMenuIds || eventMenuIds.has(m.id)),
+    [menu, eventMenuIds],
   );
-  const visible = menu.filter(
+
+  const categories = useMemo(
+    () => ["All", ...Array.from(new Set(inMenu.map((m) => m.category)))],
+    [inMenu],
+  );
+  // Switching menus can strand a category that no longer exists — fall back to
+  // "All" so the grid never silently renders empty.
+  const effectiveCat = categories.includes(cat) ? cat : "All";
+  const visible = inMenu.filter(
     (m) =>
-      (cat === "All" || m.category === cat) &&
+      (effectiveCat === "All" || m.category === effectiveCat) &&
       m.name.toLowerCase().includes(query.toLowerCase()),
   );
 
@@ -496,6 +514,44 @@ export default function Pos() {
             />
           </View>
 
+          {/* Event/popup menu switcher — only when the org has active event menus */}
+          {eventMenus.length > 0 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              className="flex-none"
+              contentContainerClassName="gap-2 pb-3"
+            >
+              <Pressable
+                onPress={() => setEventMenuId("")}
+                className={`self-start rounded-lg border px-3.5 py-2 ${
+                  eventMenuId === "" ? "border-accent-400 bg-accent-400" : "border-line bg-white/5"
+                }`}
+              >
+                <Text
+                  className={`text-xs font-bold ${eventMenuId === "" ? "text-black" : "text-zinc-300"}`}
+                >
+                  Full menu
+                </Text>
+              </Pressable>
+              {eventMenus.map((m) => (
+                <Pressable
+                  key={m.id}
+                  onPress={() => setEventMenuId(m.id)}
+                  className={`self-start rounded-lg border px-3.5 py-2 ${
+                    eventMenuId === m.id ? "border-accent-400 bg-accent-400" : "border-line bg-white/5"
+                  }`}
+                >
+                  <Text
+                    className={`text-xs font-bold ${eventMenuId === m.id ? "text-black" : "text-zinc-300"}`}
+                  >
+                    {m.name} · {m.recipe_ids.length}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+
           {/* Category pills — flex-none so it can't stretch to fill the column's remaining height */}
           <ScrollView
             horizontal
@@ -508,11 +564,11 @@ export default function Pos() {
                 key={c}
                 onPress={() => setCat(c)}
                 className={`self-start rounded-full border px-4 py-2 ${
-                  cat === c ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
+                  effectiveCat === c ? "border-brand-500 bg-brand-500" : "border-line bg-white/5"
                 }`}
               >
                 <Text
-                  className={`text-sm font-semibold ${cat === c ? "text-black" : "text-zinc-300"}`}
+                  className={`text-sm font-semibold ${effectiveCat === c ? "text-black" : "text-zinc-300"}`}
                 >
                   {c}
                 </Text>

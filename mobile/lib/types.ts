@@ -514,3 +514,21 @@ export interface AuditEntry {
   detail: Record<string, unknown> | null;
   created_at: string;
 }
+
+export interface EventMenu {
+  id: string;
+  org_id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface EventMenuItem {
+  id: string;
+  org_id: string;
+  event_menu_id: string;
+  recipe_id: string;
+  created_at: string;
+}

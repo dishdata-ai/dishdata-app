@@ -164,8 +164,10 @@ function seedOrders(menu: Recipe[]): Order[] {
     mins: number,
   ): Order => {
     const lines = items.map((x) => line(x.rec, x.qty));
-    const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
-    const tax = +(subtotal * (DEMO_ORG.tax_rate / 100)).toFixed(2);
+    // VAT-included (gross): break VAT out of the price; subtotal is NET.
+    const gross = lines.reduce((s, l) => s + l.price * l.qty, 0);
+    const tax = +(gross * (DEMO_ORG.tax_rate / (100 + DEMO_ORG.tax_rate))).toFixed(2);
+    const subtotal = +(gross - tax).toFixed(2);
     return {
       id: uid(),
       org_id: DEMO_ORG.id,
@@ -178,7 +180,7 @@ function seedOrders(menu: Recipe[]): Order[] {
       subtotal,
       tax,
       tip: 0,
-      total: +(subtotal + tax).toFixed(2),
+      total: gross,
       status: "open",
       kitchen_status: kitchen,
       kitchen_notes: null,
@@ -207,8 +209,10 @@ function seedOrders(menu: Recipe[]): Order[] {
     { rec: byName("Margherita Pizza"), qty: 1 },
     { rec: byName("House Lemonade"), qty: 2 },
   ].map((x) => line(x.rec, x.qty));
-  const deliverySubtotal = deliveryLines.reduce((s, l) => s + l.price * l.qty, 0);
-  const deliveryTax = +(deliverySubtotal * (DEMO_ORG.tax_rate / 100)).toFixed(2);
+  // VAT-included (gross): break VAT out of the price; subtotal is NET.
+  const deliveryGross = deliveryLines.reduce((s, l) => s + l.price * l.qty, 0);
+  const deliveryTax = +(deliveryGross * (DEMO_ORG.tax_rate / (100 + DEMO_ORG.tax_rate))).toFixed(2);
+  const deliverySubtotal = +(deliveryGross - deliveryTax).toFixed(2);
   orders.push({
     id: uid(),
     org_id: DEMO_ORG.id,
@@ -221,7 +225,7 @@ function seedOrders(menu: Recipe[]): Order[] {
     subtotal: deliverySubtotal,
     tax: deliveryTax,
     tip: 0,
-    total: +(deliverySubtotal + deliveryTax).toFixed(2),
+    total: deliveryGross,
     status: "open",
     kitchen_status: "ready",
     kitchen_notes: null,

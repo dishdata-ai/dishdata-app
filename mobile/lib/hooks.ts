@@ -3,6 +3,7 @@ import { useOrg } from "@/lib/org-context";
 import { listTasks, setTaskStatus } from "@/lib/api/tasks";
 import { getOpenShift, clockIn, clockOut, toggleBreak } from "@/lib/api/timeclock";
 import { listMenu } from "@/lib/api/menu";
+import { listEventMenus } from "@/lib/api/eventMenus";
 import {
   listOpenOrders,
   listKitchenOrders,
@@ -40,6 +41,15 @@ export function useShift() {
 export function useMenu() {
   const { orgId, enabled } = useIds();
   return useQuery({ queryKey: ["menu", orgId], queryFn: () => listMenu(orgId), enabled });
+}
+
+export function useEventMenus() {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["event_menus", orgId],
+    queryFn: () => listEventMenus(orgId),
+    enabled,
+  });
 }
 
 export function useOpenOrders() {

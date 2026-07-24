@@ -85,10 +85,13 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     await demoDelay();
     const org = dOrgs.get(orgId);
     const taxRate = org?.tax_rate ?? 8.5;
-    const subtotal = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
-    const tax = +(subtotal * (taxRate / 100)).toFixed(2);
+    // VAT-included (gross) pricing: menu prices already include VAT. Break it out
+    // of the price rather than adding on top; store subtotal NET (see 0017 migration).
+    const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
+    const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
     const tip = payload.tip ?? 0;
-    const total = +(subtotal + tax + tip).toFixed(2);
+    const total = +(gross + tip).toFixed(2);
+    const subtotal = +(gross - tax).toFixed(2);
     const orderNumber = `ORD-${String(dOrders.list({ org_id: orgId } as Partial<Order>).length + 1).padStart(4, "0")}`;
     const now = new Date().toISOString();
     const order: Order = {
