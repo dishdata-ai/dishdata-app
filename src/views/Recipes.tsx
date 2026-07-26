@@ -302,7 +302,7 @@ export default function Recipes() {
                       <span className="text-zinc-400">
                         Cost <span className="font-semibold text-white">{fmt(cost, 2)}</span>
                       </span>
-                      <span className="font-bold text-brand-300">{fmt(r.price)}</span>
+                      <span className="font-bold text-brand-300">{fmt(r.price, 2)}</span>
                     </div>
                     <div className="mt-3 flex items-center gap-4 text-xs text-zinc-500">
                       <span className="inline-flex items-center gap-1">
@@ -338,7 +338,7 @@ export default function Recipes() {
                 </p>
               </div>
               <div className="ml-auto text-right">
-                <p className="font-display text-gradient text-2xl font-bold">{fmt(selected.price)}</p>
+                <p className="font-display text-gradient text-2xl font-bold">{fmt(selected.price, 2)}</p>
                 <p className="text-xs text-zinc-500">menu price</p>
               </div>
             </div>

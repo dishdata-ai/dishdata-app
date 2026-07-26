@@ -217,7 +217,7 @@ export default function Storefront({
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-white">{r.name}</p>
-                        <p className="text-sm font-bold text-brand-300">{fmt(r.price)}</p>
+                        <p className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>
                       {qty === 0 ? (
                         <button

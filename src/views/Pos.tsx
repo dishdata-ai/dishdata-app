@@ -616,7 +616,7 @@ export default function Pos() {
                         <p className="truncate text-sm font-semibold text-white">{r.name}</p>
                         <div className="mt-1 flex items-center justify-between">
                           <span className="text-xs text-zinc-500">{r.category}</span>
-                          <span className="text-sm font-bold text-brand-300">{fmt(r.price)}</span>
+                          <span className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</span>
                         </div>
                       </div>
                     </Card>
@@ -688,7 +688,7 @@ export default function Pos() {
                       <span className="text-xl">{l.recipe!.emoji}</span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-white">{l.recipe!.name}</p>
-                        <p className="text-xs text-zinc-500">{fmt(l.recipe!.price)} each</p>
+                        <p className="text-xs text-zinc-500">{fmt(l.recipe!.price, 2)} each</p>
                       </div>
                       <div className="flex items-center gap-1.5">
                         <button onClick={() => setCartQty(l.recipeId, l.qty - 1)} className="cursor-pointer rounded-lg bg-white/5 p-1 text-zinc-300 hover:bg-white/10">
