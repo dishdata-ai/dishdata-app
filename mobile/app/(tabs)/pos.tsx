@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, Modal } from "react-native";
+import { View, Text, ScrollView, Pressable, Modal, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   Screen,
@@ -26,6 +26,7 @@ import { money } from "@/lib/format";
 import { colors } from "@/lib/theme";
 import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/types";
 import { setKitchenStatus, type PaymentInput } from "@/lib/api/orders";
+import { emailReceipt } from "@/lib/api/receipts";
 
 const TIP_OPTIONS = [0, 10, 15, 18, 20] as const;
 const METHODS: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -356,13 +357,18 @@ export default function Pos() {
   const [payOpen, setPayOpen] = useState(false);
   const [settling, setSettling] = useState<Order | null>(null);
   const [receipt, setReceipt] = useState<{
+    order_id: string;
     order_number: string;
     total: number;
     lines: BillLine[];
     tax: number;
     tip: number;
     method: string;
+    sentToKitchen: boolean;
   } | null>(null);
+  const [belegEmail, setBelegEmail] = useState("");
+  const [belegSending, setBelegSending] = useState(false);
+  const [belegNote, setBelegNote] = useState("");
 
   // Event/popup menus: when one is picked, the grid shows only its dishes.
   const eventMenus = eventMenusQ.data ?? [];
@@ -462,13 +468,17 @@ export default function Pos() {
         reset();
         setPayOpen(false);
         if (paid) {
+          setBelegEmail("");
+          setBelegNote("");
           setReceipt({
+            order_id: res.order_id,
             order_number: res.order_number,
             total: res.total,
             lines: snapshot,
             tax: snapTax,
             tip: tipAmount,
             method: payments.length > 1 ? "split" : payments[0].method,
+            sentToKitchen: !skipKitchen,
           });
         } else {
           setView("tabs");
@@ -591,9 +601,25 @@ export default function Pos() {
 
           {/* Product grid — flex-1 so it deterministically owns the remaining space */}
           <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="pb-28">
-            {visible.length === 0 ? (
+            {menuQ.isLoading ? (
               <Card>
-                <Muted className="py-8 text-center">No items match “{query}”.</Muted>
+                <View className="flex-row items-center justify-center gap-2 py-8">
+                  <ActivityIndicator color={colors.zinc400} />
+                  <Muted>Loading menu…</Muted>
+                </View>
+              </Card>
+            ) : menuQ.isError ? (
+              <Card>
+                <Muted className="pt-8 text-center">Couldn’t load the menu.</Muted>
+                <Pressable onPress={() => menuQ.refetch()} className="mx-auto mt-3 mb-8 rounded-lg border border-line bg-white/5 px-4 py-2">
+                  <Text className="text-sm font-semibold text-zinc-200">Tap to retry</Text>
+                </Pressable>
+              </Card>
+            ) : visible.length === 0 ? (
+              <Card>
+                <Muted className="py-8 text-center">
+                  {menu.length === 0 ? "No menu items yet." : `No items match “${query}”.`}
+                </Muted>
               </Card>
             ) : (
               <View className="flex-row flex-wrap justify-between">
@@ -906,7 +932,8 @@ export default function Pos() {
                 <Text className="text-3xl font-bold text-white">{money(receipt.total)}</Text>
                 <Badge tone="green">Paid · {receipt.method}</Badge>
                 <Muted>
-                  {receipt.order_number} · sent to kitchen
+                  {receipt.order_number}
+                  {receipt.sentToKitchen ? " · sent to kitchen" : " · ready to serve"}
                 </Muted>
               </View>
               <View className="mt-3 gap-1.5 rounded-xl border border-line bg-white/5 p-4">
@@ -919,7 +946,7 @@ export default function Pos() {
                   </View>
                 ))}
                 <View className="mt-1 flex-row justify-between border-t border-line pt-2">
-                  <Muted>Tax</Muted>
+                  <Muted>Incl. tax ({taxRate}%)</Muted>
                   <Text className="text-zinc-400">{money(receipt.tax)}</Text>
                 </View>
                 {receipt.tip > 0 ? (
@@ -929,6 +956,41 @@ export default function Pos() {
                   </View>
                 ) : null}
               </View>
+
+              {/* Beleg — email a German receipt if the guest asks for one */}
+              <View className="mt-3 gap-2">
+                <Muted>Beleg per E-Mail (optional)</Muted>
+                <View className="flex-row gap-2">
+                  <View className="flex-1">
+                    <Input
+                      placeholder="gast@example.com"
+                      value={belegEmail}
+                      onChangeText={setBelegEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  </View>
+                  <Pressable
+                    disabled={belegSending || !belegEmail.trim()}
+                    onPress={async () => {
+                      setBelegSending(true);
+                      setBelegNote("");
+                      const r = await emailReceipt(receipt.order_id, belegEmail);
+                      setBelegNote(r.message);
+                      setBelegSending(false);
+                    }}
+                    className={`items-center justify-center rounded-xl px-4 ${
+                      belegSending || !belegEmail.trim() ? "bg-white/10" : "bg-brand-500"
+                    }`}
+                  >
+                    <Text className={`text-sm font-bold ${belegSending || !belegEmail.trim() ? "text-zinc-500" : "text-black"}`}>
+                      {belegSending ? "…" : "Senden"}
+                    </Text>
+                  </Pressable>
+                </View>
+                {belegNote ? <Muted>{belegNote}</Muted> : null}
+              </View>
+
               <Button title="New order" className="mt-4" onPress={() => setReceipt(null)} />
             </Card>
           ) : null}

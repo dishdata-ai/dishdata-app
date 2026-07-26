@@ -20,20 +20,35 @@ export async function getOrgContext(): Promise<OrgContext | null> {
     return { org: demo.org, me: demo.me, role: "owner" };
   }
   const sb = getSupabase();
+  // Use getSession() (local read from AsyncStorage, auto-refreshes the token
+  // only if needed) rather than getUser() (a hard network call to re-validate).
+  // getUser() on every app reopen was the cause of "works first time, blank on
+  // every reopen after": on a cold start / flaky network it returned null (or
+  // threw), nulling the whole context. getSession() restores reliably offline.
   const {
-    data: { user },
-  } = await sb.auth.getUser();
-  if (!user) return null;
+    data: { session },
+  } = await sb.auth.getSession();
+  const user = session?.user;
+  if (!user) return null; // genuinely no session → logged out
 
-  const { data: profile } = await sb
+  // With a valid session, a query error means a transient network/DB hiccup,
+  // NOT "logged out" — throw so the provider keeps the existing context instead
+  // of blanking the app. Returning null is reserved for a real no-session state.
+  const { data: profile, error: profileErr } = await sb
     .from("profiles")
     .select("active_org_id")
     .eq("id", user.id)
     .single();
+  if (profileErr) throw profileErr;
   const orgId = profile?.active_org_id;
   if (!orgId) return null;
 
-  const { data: org } = await sb.from("orgs").select("*").eq("id", orgId).single();
+  const { data: org, error: orgErr } = await sb
+    .from("orgs")
+    .select("*")
+    .eq("id", orgId)
+    .single();
+  if (orgErr) throw orgErr;
   const { data: emp } = await sb
     .from("employees")
     .select("*")

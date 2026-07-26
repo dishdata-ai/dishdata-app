@@ -1,9 +1,47 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { generateReceiptHTML } from "@/lib/receipts";
 import type { Order, Org, Payment } from "@/lib/api/database.types";
 
 export const runtime = "nodejs";
+
+/**
+ * Resolve an authenticated Supabase client + user from the request.
+ * Supports BOTH the web app (cookie session) and the mobile app, which sends
+ * `Authorization: Bearer <supabase access token>`. Either way the returned
+ * client carries the user's identity, so RLS and the member-gated
+ * generate_receipt RPC apply.
+ */
+async function authClient(
+  req: NextRequest,
+): Promise<{ supabase: SupabaseClient; userId: string } | { error: string; status: number }> {
+  const authz = req.headers.get("authorization");
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (authz?.startsWith("Bearer ")) {
+    if (!url || !anon) return { error: "Backend not configured.", status: 400 };
+    const token = authz.slice(7);
+    const supabase = createClient(url, anon, {
+      global: { headers: { Authorization: authz } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const {
+      data: { user },
+    } = await supabase.auth.getUser(token);
+    if (!user) return { error: "Not authenticated.", status: 401 };
+    return { supabase, userId: user.id };
+  }
+
+  const cookieClient = await createSupabaseServerClient();
+  if (!cookieClient) return { error: "Receipts require a connected backend.", status: 400 };
+  const {
+    data: { user },
+  } = await cookieClient.auth.getUser();
+  if (!user) return { error: "Not authenticated.", status: 401 };
+  return { supabase: cookieClient, userId: user.id };
+}
 
 /**
  * POST /api/receipts
@@ -13,20 +51,16 @@ export const runtime = "nodejs";
  * print-ready HTML. When `send` is true and an email is available, also emails
  * it to the customer via Resend and marks the receipt as emailed.
  *
- * Authorization: the caller's Supabase session (must be a member of the org).
+ * Authorization: web cookie session OR mobile `Authorization: Bearer <token>`.
  * The generate_receipt RPC re-checks membership and creates the receipt
  * atomically with a gapless sequential number.
  */
 export async function POST(req: NextRequest) {
-  const supabase = await createSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json({ error: "Receipts require a connected backend." }, { status: 400 });
+  const auth = await authClient(req);
+  if ("error" in auth) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  const { supabase } = auth;
 
   let body: { order_id?: string; email?: string; send?: boolean };
   try {

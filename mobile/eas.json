@@ -11,14 +11,16 @@
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://geydxvabilhaerehgbfq.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4oMovtJHHBLWAsitgnDovQ_ycApWRvj"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4oMovtJHHBLWAsitgnDovQ_ycApWRvj",
+        "EXPO_PUBLIC_API_URL": "https://app.dishdata.de"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://geydxvabilhaerehgbfq.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4oMovtJHHBLWAsitgnDovQ_ycApWRvj"
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_4oMovtJHHBLWAsitgnDovQ_ycApWRvj",
+        "EXPO_PUBLIC_API_URL": "https://app.dishdata.de"
       }
     }
   },

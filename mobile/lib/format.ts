@@ -1,6 +1,15 @@
 import { demo } from "@/lib/demo";
 
-export function money(n: number, currency = demo.org.currency): string {
+// The active org's currency. Defaults to the demo org's until a real org loads;
+// OrgProvider calls setActiveCurrency() so every money() call across the app
+// formats in the signed-in org's currency (e.g. EUR for Kokoland) — not USD.
+let activeCurrency = demo.org.currency;
+
+export function setActiveCurrency(currency: string | null | undefined): void {
+  activeCurrency = currency || demo.org.currency;
+}
+
+export function money(n: number, currency = activeCurrency): string {
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
@@ -8,7 +17,7 @@ export function money(n: number, currency = demo.org.currency): string {
       maximumFractionDigits: 2,
     }).format(n);
   } catch {
-    return `$${n.toFixed(2)}`;
+    return `${n.toFixed(2)} ${currency}`;
   }
 }
 
