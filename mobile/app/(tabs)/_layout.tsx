@@ -1,18 +1,42 @@
-import { View, ActivityIndicator } from "react-native";
+import { useEffect, useState } from "react";
+import { View, Text, ActivityIndicator, Pressable } from "react-native";
 import { Tabs, Redirect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useOrg } from "@/lib/org-context";
 import { colors } from "@/lib/theme";
 
 export default function TabsLayout() {
-  const { ctx, loading } = useOrg();
+  const { ctx, loading, refresh } = useOrg();
+
+  // Escape hatch: if the loading state ever lingers (a wedged network call),
+  // surface a retry after a few seconds instead of an endless spinner.
+  const [showRetry, setShowRetry] = useState(false);
+  useEffect(() => {
+    if (!loading) {
+      setShowRetry(false);
+      return;
+    }
+    const t = setTimeout(() => setShowRetry(true), 6000);
+    return () => clearTimeout(t);
+  }, [loading]);
 
   if (loading) {
     return (
       <View
-        style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.base }}
+        style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 16, backgroundColor: colors.base }}
       >
         <ActivityIndicator color={colors.brand400} size="large" />
+        {showRetry && (
+          <>
+            <Text style={{ color: colors.zinc400, fontSize: 13 }}>Taking longer than usual…</Text>
+            <Pressable
+              onPress={() => refresh()}
+              style={{ borderWidth: 1, borderColor: colors.line, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 8 }}
+            >
+              <Text style={{ color: colors.white, fontWeight: "600", fontSize: 13 }}>Retry</Text>
+            </Pressable>
+          </>
+        )}
       </View>
     );
   }

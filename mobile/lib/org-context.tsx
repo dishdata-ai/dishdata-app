@@ -12,16 +12,27 @@ interface OrgState {
 
 const Ctx = createContext<OrgState | null>(null);
 
+/** Reject after `ms` so an awaited call can never hang the UI indefinitely. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+  ]);
+}
+
 export function OrgProvider({ children }: { children: ReactNode }) {
   const [ctx, setCtx] = useState<OrgContext | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
     try {
+      // Hard timeout so a stalled network call (e.g. a hung token refresh on
+      // flaky Wi-Fi) can never leave the app on an endless spinner. getSession()
+      // is a local read and normally resolves instantly; 12s is only a backstop.
+      const next = await withTimeout(getOrgContext(), 12_000);
       // null = genuine logged-out state (clears ctx → sign-in). A transient
-      // network/DB error throws instead (caught below), so a hiccup on reopen
-      // never blanks an already-signed-in session.
-      const next = await getOrgContext();
+      // network/DB error or timeout throws instead (caught below), so a hiccup
+      // on reopen never blanks an already-signed-in session.
       setCtx(next);
       if (next) setActiveCurrency(next.org.currency);
     } catch {
