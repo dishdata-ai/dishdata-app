@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   MonitorSmartphone,
+  ListOrdered,
   ChefHat,
   Boxes,
   TrendingUp,
@@ -48,6 +49,7 @@ export interface ModuleDef {
 export const MODULES: ModuleDef[] = [
   { id: "dashboard", name: "Dashboard", path: "/", icon: LayoutDashboard, group: "Operate", blurb: "KPIs, trends and live signals" },
   { id: "pos", name: "Point of Sale", path: "/pos", icon: MonitorSmartphone, group: "Operate", blurb: "Ring up orders, tips & split bills" },
+  { id: "orders", name: "Orders", path: "/orders", icon: ListOrdered, group: "Operate", blurb: "Full order history, search & receipts" },
   { id: "kitchen", name: "Kitchen", path: "/kitchen", icon: Flame, group: "Operate", blurb: "Live ticket board for the line" },
   { id: "floor", name: "Floor & Reservations", path: "/floor", icon: LayoutGrid, group: "Operate", blurb: "Tables, seating and bookings" },
   { id: "recipes", name: "Recipes", path: "/recipes", icon: ChefHat, group: "Operate", blurb: "Plate costing and margins" },
@@ -82,8 +84,8 @@ export const moduleById = (id: string) => MODULES.find((m) => m.id === id);
 export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   owner: "all",
   admin: "all",
-  manager: ["dashboard", "myday", "pos", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport"],
-  staff: ["dashboard", "myday", "pos", "kitchen", "floor", "timeclock", "tasks"],
+  manager: ["dashboard", "myday", "pos", "orders", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport"],
+  staff: ["dashboard", "myday", "pos", "orders", "kitchen", "floor", "timeclock", "tasks"],
   accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "insights"],
   viewer: ["dashboard", "sales", "insights"],
 };

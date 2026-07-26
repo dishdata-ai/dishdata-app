@@ -44,6 +44,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   enabled.add("myday");
   enabled.add("loyalty");
   enabled.add("marketing");
+  enabled.add("orders"); // added after onboarding — force-enable like loyalty/marketing
   if (role === "owner" || role === "admin") {
     enabled.add("team");
     enabled.add("audit");
