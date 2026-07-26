@@ -1,11 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search, ListOrdered, ChevronDown } from "lucide-react";
-import { Card, SectionTitle, Badge, Input, EmptyState, PageSkeleton } from "@/components/ui";
+import { useMutation } from "@tanstack/react-query";
+import { Search, ListOrdered, ChevronDown, Ban, Undo2 } from "lucide-react";
+import { Card, SectionTitle, Badge, Button, Input, EmptyState, PageSkeleton } from "@/components/ui";
 import { ReceiptButton } from "@/components/ReceiptButton";
-import { useOrders } from "@/lib/hooks/data";
+import { useOrders, useInvalidate } from "@/lib/hooks/data";
+import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
+import { setOrderStatus } from "@/lib/api/orders";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, OrderStatus, OrderType } from "@/lib/api/database.types";
 
@@ -42,12 +46,24 @@ function when(iso: string): string {
 export default function Orders() {
   const ordersQ = useOrders();
   const fmt = useFmt();
+  const { org, isManager } = useOrg();
+  const invalidate = useInvalidate();
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | OrderStatus>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const orders = ordersQ.data ?? [];
+
+  const changeStatus = useMutation({
+    mutationFn: ({ id, next }: { id: string; next: OrderStatus }) =>
+      setOrderStatus(org!.id, id, next),
+    onSuccess: (_r, { next }) => {
+      invalidate("orders", "payments", "customers");
+      toast.success(next === "void" ? "Order voided" : "Order refunded");
+    },
+    onError: (e) => toast.error("Could not update order", e instanceof Error ? e.message : ""),
+  });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -135,6 +151,9 @@ export default function Orders() {
                 fmt={fmt}
                 open={expanded === o.id}
                 onToggle={() => setExpanded(expanded === o.id ? null : o.id)}
+                canManage={isManager}
+                onChangeStatus={(next) => changeStatus.mutate({ id: o.id, next })}
+                busy={changeStatus.isPending}
               />
             ))}
           </div>
@@ -149,13 +168,22 @@ function OrderRow({
   fmt,
   open,
   onToggle,
+  canManage,
+  onChangeStatus,
+  busy,
 }: {
   order: Order;
   fmt: (n: number, d?: number) => string;
   open: boolean;
   onToggle: () => void;
+  canManage: boolean;
+  onChangeStatus: (next: OrderStatus) => void;
+  busy: boolean;
 }) {
   const itemSummary = order.items.map((l) => `${l.qty}× ${l.name}`).join(", ");
+  // Void = cancel a mis-ring (open or paid). Refund = return money on a paid order.
+  const canVoid = order.status === "open" || order.status === "paid";
+  const canRefund = order.status === "paid";
 
   return (
     <div className="px-4 py-3">
@@ -218,6 +246,37 @@ function OrderRow({
           </div>
           {order.kitchen_notes && (
             <p className="mt-2 text-xs text-zinc-500">Note: {order.kitchen_notes}</p>
+          )}
+
+          {canManage && (canVoid || canRefund) && (
+            <div className="mt-3 flex gap-2 border-t border-line pt-3">
+              {canRefund && (
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1.5 text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    if (confirm(`Refund ${order.order_number}? The money is returned to the guest. The order stays in history as refunded.`))
+                      onChangeStatus("refunded");
+                  }}
+                >
+                  <Undo2 className="h-3.5 w-3.5" /> Refund
+                </Button>
+              )}
+              {canVoid && (
+                <Button
+                  variant="danger"
+                  className="px-3 py-1.5 text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    if (confirm(`Void ${order.order_number}? Use this for a mis-ring/cancellation. It stays in history but won't count as a sale.`))
+                      onChangeStatus("void");
+                  }}
+                >
+                  <Ban className="h-3.5 w-3.5" /> Void
+                </Button>
+              )}
+            </div>
           )}
         </div>
       )}

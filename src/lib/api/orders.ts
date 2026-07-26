@@ -6,6 +6,7 @@ import type {
   Order,
   OrderLine,
   OrderType,
+  OrderStatus,
   Payment,
   PaymentMethod,
   KitchenStatus,
@@ -178,6 +179,30 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
   });
   if (error) throw error;
   return data as CheckoutResult;
+}
+
+/**
+ * Change an order's status — used to Void (cancel/mis-ring) or Refund a paid
+ * order. The record is kept (never deleted), so history and audit stay intact;
+ * void/refunded orders are simply excluded from takings and revenue reports.
+ */
+export async function setOrderStatus(
+  orgId: string,
+  orderId: string,
+  status: OrderStatus,
+): Promise<void> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    dOrders.update(orderId, { status });
+    pushDemoAudit(orgId, "orders", "UPDATE", orderId, { status });
+    return;
+  }
+  const { error } = await getSupabase()
+    .from("orders")
+    .update({ status })
+    .eq("id", orderId)
+    .eq("org_id", orgId);
+  if (error) throw error;
 }
 
 export async function setKitchenStatus(orgId: string, orderId: string, status: KitchenStatus): Promise<void> {
