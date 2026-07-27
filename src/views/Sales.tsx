@@ -39,6 +39,7 @@ type Period = "today" | "7d" | "30d";
 
 export default function Sales() {
   const [period, setPeriod] = useState<Period>("7d");
+  const [showAllSellers, setShowAllSellers] = useState(false);
   const fmt = useFmt();
   const ordersQ = useOrders();
   const recipesQ = useRecipes();
@@ -56,7 +57,7 @@ export default function Sales() {
   const revenue = sumRevenue(current);
   const prevRevenue = sumRevenue(previous);
 
-  const topSellers = useMemo(() => {
+  const allSellers = useMemo(() => {
     const sold = unitsSold(current);
     return recipes
       .map((r) => {
@@ -70,10 +71,11 @@ export default function Sales() {
           margin: r.price > 0 ? ((r.price - recipeCost(r)) / r.price) * 100 : 0,
         };
       })
-      .filter((t) => t.sold > 0)
-      .sort((a, b) => b.sold - a.sold)
-      .slice(0, 8);
+      .sort((a, b) => b.sold - a.sold);
   }, [current, recipes]);
+
+  const topSellers = useMemo(() => allSellers.filter((t) => t.sold > 0).slice(0, 8), [allSellers]);
+  const sellersShown = showAllSellers ? allSellers : topSellers;
 
   if (ordersQ.isLoading || recipesQ.isLoading) return <PageSkeleton />;
 
@@ -156,29 +158,47 @@ export default function Sales() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <div className="border-b border-line p-4">
-            <h3 className="font-semibold text-white">Top Sellers</h3>
-            <p className="text-xs text-zinc-500">By units sold this period</p>
+          <div className="flex items-center justify-between border-b border-line p-4">
+            <div>
+              <h3 className="font-semibold text-white">Top Sellers</h3>
+              <p className="text-xs text-zinc-500">
+                {showAllSellers ? "Every menu item, ranked by units sold" : "By units sold this period"}
+              </p>
+            </div>
+            {allSellers.length > 0 && (
+              <button
+                onClick={() => setShowAllSellers((v) => !v)}
+                className="cursor-pointer text-xs font-medium text-brand-300 hover:text-brand-200"
+              >
+                {showAllSellers ? "Show top 8" : "View all"}
+              </button>
+            )}
           </div>
-          {topSellers.length === 0 ? (
+          {sellersShown.length === 0 ? (
             <EmptyState title="No sales data" hint="Top sellers rank automatically as orders come in." />
           ) : (
-            <Table headers={["#", "Item", "Sold", "Revenue", "Margin"]}>
-              {topSellers.map((t, idx) => (
-                <tr key={t.id} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3 font-display font-bold text-zinc-500">{idx + 1}</td>
-                  <td className="px-4 py-3 font-medium text-white">
-                    <span className="mr-2">{t.emoji}</span>
-                    {t.name}
-                  </td>
-                  <td className="px-4 py-3 text-zinc-300">{t.sold}</td>
-                  <td className="px-4 py-3 font-medium text-zinc-200">{fmt(t.revenue)}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={t.margin >= 70 ? "green" : "amber"}>{fmtPct(t.margin, 0)}</Badge>
-                  </td>
-                </tr>
-              ))}
-            </Table>
+            <div className={cn(showAllSellers && "max-h-96 overflow-y-auto")}>
+              <Table headers={["#", "Item", "Sold", "Revenue", "Margin"]}>
+                {sellersShown.map((t, idx) => (
+                  <tr key={t.id} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 font-display font-bold text-zinc-500">{idx + 1}</td>
+                    <td className="px-4 py-3 font-medium text-white">
+                      <span className="mr-2">{t.emoji}</span>
+                      {t.name}
+                    </td>
+                    <td className={cn("px-4 py-3", t.sold > 0 ? "text-zinc-300" : "text-zinc-600")}>{t.sold}</td>
+                    <td className="px-4 py-3 font-medium text-zinc-200">{fmt(t.revenue)}</td>
+                    <td className="px-4 py-3">
+                      {t.sold > 0 ? (
+                        <Badge tone={t.margin >= 70 ? "green" : "amber"}>{fmtPct(t.margin, 0)}</Badge>
+                      ) : (
+                        <span className="text-xs text-zinc-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            </div>
           )}
         </Card>
 
