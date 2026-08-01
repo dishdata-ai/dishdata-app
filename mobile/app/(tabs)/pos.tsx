@@ -377,12 +377,23 @@ export default function Pos() {
     return m ? new Set(m.recipe_ids) : null;
   }, [eventMenus, eventMenuId]);
 
+  // Every dish that belongs to some event/popup menu — excluded from the
+  // default "Restaurant Menu" view so event-only items don't bleed into
+  // regular service.
+  const eventRecipeIds = useMemo(
+    () => new Set(eventMenus.flatMap((m) => m.recipe_ids)),
+    [eventMenus],
+  );
+
   // Pre-prepared event menu → orders skip the Kitchen board entirely.
   const skipKitchen = !!eventMenus.find((x) => x.id === eventMenuId)?.skip_kitchen;
 
+  // eventMenuId === "" is the default "Restaurant Menu": every dish except
+  // ones that only belong to an event menu. Picking an event menu narrows
+  // the grid to just that menu's dishes.
   const inMenu = useMemo(
-    () => menu.filter((m) => !eventMenuIds || eventMenuIds.has(m.id)),
-    [menu, eventMenuIds],
+    () => (eventMenuIds ? menu.filter((m) => eventMenuIds.has(m.id)) : menu.filter((m) => !eventRecipeIds.has(m.id))),
+    [menu, eventMenuIds, eventRecipeIds],
   );
 
   const categories = useMemo(
@@ -554,7 +565,7 @@ export default function Pos() {
                 <Text
                   className={`text-xs font-bold ${eventMenuId === "" ? "text-black" : "text-zinc-300"}`}
                 >
-                  Full menu
+                  Restaurant Menu
                 </Text>
               </Pressable>
               {eventMenus.map((m) => (

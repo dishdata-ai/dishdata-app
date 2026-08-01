@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   Search,
@@ -16,6 +16,8 @@ import {
   Users,
   Clock,
   SplitSquareHorizontal,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import {
   Card,
@@ -331,6 +333,7 @@ export default function Pos() {
 
   const [tab, setTab] = useState<"order" | "tabs">("order");
   const [category, setCategory] = useState<string>("All");
+  const categoryScrollRef = useRef<HTMLDivElement>(null);
   const [eventMenuId, setEventMenuId] = useState<string>(""); // "" = full menu
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState<PaymentMethod>("card");
@@ -359,13 +362,24 @@ export default function Pos() {
     return m ? new Set(m.recipe_ids) : null;
   }, [activeEventMenus, eventMenuId]);
 
+  // Every dish that belongs to some event/popup menu — excluded from the
+  // default "Restaurant Menu" view so event-only items don't bleed into
+  // regular service.
+  const eventRecipeIds = useMemo(
+    () => new Set(activeEventMenus.flatMap((m) => m.recipe_ids)),
+    [activeEventMenus],
+  );
+
   // Pre-prepared event menu → orders skip the Kitchen board entirely.
   const skipKitchen = !!activeEventMenus.find((x) => x.id === eventMenuId)?.skip_kitchen;
 
   // Dishes in scope for the current menu selection (before category/search).
+  // eventMenuId === "" is the default "Restaurant Menu": every active recipe
+  // except ones that only belong to an event menu. Picking an event menu
+  // narrows the grid to just that menu's dishes.
   const inMenu = useMemo(
-    () => recipes.filter((r) => !eventMenuIds || eventMenuIds.has(r.id)),
-    [recipes, eventMenuIds],
+    () => (eventMenuIds ? recipes.filter((r) => eventMenuIds.has(r.id)) : recipes.filter((r) => !eventRecipeIds.has(r.id))),
+    [recipes, eventMenuIds, eventRecipeIds],
   );
 
   // Category pills reflect what's actually on the selected menu.
@@ -547,7 +561,7 @@ export default function Pos() {
                       : "text-zinc-400 hover:text-white",
                   )}
                 >
-                  Full menu
+                  Restaurant Menu
                 </button>
                 {activeEventMenus.map((m) => (
                   <button
@@ -572,25 +586,47 @@ export default function Pos() {
                 <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 <Input placeholder="Search menu…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
               </div>
-              <div className="relative">
-                <div className="flex gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {categories.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setCategory(c)}
-                      className={cn(
-                        "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
-                        category === c
-                          ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
-                          : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
-                      )}
-                    >
-                      {c}
-                    </button>
-                  ))}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => categoryScrollRef.current?.scrollBy({ left: -160, behavior: "smooth" })}
+                  aria-label="Scroll categories left"
+                  className="hidden shrink-0 cursor-pointer rounded-full border border-line bg-white/[0.03] p-1.5 text-zinc-400 transition-colors hover:text-white sm:flex"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <div className="relative min-w-0 flex-1">
+                  <div
+                    ref={categoryScrollRef}
+                    className="flex gap-1.5 overflow-x-auto scroll-smooth pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
+                    {categories.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => setCategory(c)}
+                        className={cn(
+                          "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
+                          category === c
+                            ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                            : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+                        )}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Edge fades hint that more categories can be scrolled into view */}
+                  <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-base to-transparent" />
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-base to-transparent" />
                 </div>
-                {/* Right-edge fade hints that more categories can be scrolled into view */}
-                <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-base to-transparent sm:hidden" />
+                <button
+                  type="button"
+                  onClick={() => categoryScrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
+                  aria-label="Scroll categories right"
+                  className="hidden shrink-0 cursor-pointer rounded-full border border-line bg-white/[0.03] p-1.5 text-zinc-400 transition-colors hover:text-white sm:flex"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
 
