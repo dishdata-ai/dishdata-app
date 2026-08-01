@@ -581,12 +581,12 @@ export default function Pos() {
               </div>
             )}
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="relative flex-1">
+            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+              <div className="relative min-w-0 shrink-0 sm:w-56">
                 <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 <Input placeholder="Search menu…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex min-w-0 flex-1 items-center gap-1">
                 <button
                   type="button"
                   onClick={() => categoryScrollRef.current?.scrollBy({ left: -160, behavior: "smooth" })}
