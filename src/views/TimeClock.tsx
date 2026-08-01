@@ -15,11 +15,13 @@ function fmtDuration(seconds: number): string {
 }
 
 export default function TimeClock() {
-  const { org } = useOrg();
+  const { org, role } = useOrg();
   const fmt = useFmt();
   const employeesQ = useEmployees();
   const entriesQ = useTimeEntries();
   const invalidate = useInvalidate();
+  // Wages and labor cost are manager+ only — staff shouldn't see coworkers' pay.
+  const canSeeWages = role !== "staff";
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -70,10 +72,12 @@ export default function TimeClock() {
         subtitle="Clock in and out, track breaks — hours feed labor cost in Finance."
       />
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className={cn("grid gap-4", canSeeWages ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <StatCard title="On the Clock" value={String(openEntries.length)} hint="right now" icon={Timer} />
         <StatCard title="Hours This Week" value={totalWeekHours.toFixed(1)} hint="tracked across the team" icon={Users} />
-        <StatCard title="Labor Cost (7d)" value={fmt(totalWeekCost)} hint="from tracked hours" icon={BadgeDollarSign} />
+        {canSeeWages && (
+          <StatCard title="Labor Cost (7d)" value={fmt(totalWeekCost)} hint="from tracked hours" icon={BadgeDollarSign} />
+        )}
       </div>
 
       {employees.length === 0 ? (
@@ -156,12 +160,12 @@ export default function TimeClock() {
       <Card>
         <div className="border-b border-line p-4">
           <h3 className="font-semibold text-white">This Week's Timesheet</h3>
-          <p className="text-xs text-zinc-500">Tracked hours and labor cost per person</p>
+          <p className="text-xs text-zinc-500">{canSeeWages ? "Tracked hours and labor cost per person" : "Tracked hours per person"}</p>
         </div>
         {weekStats.size === 0 ? (
           <EmptyState icon={Timer} title="No hours tracked yet" hint="Clock someone in to start the timesheet." />
         ) : (
-          <Table headers={["Employee", "Hours", "Rate", "Labor Cost", "Shifts"]}>
+          <Table headers={canSeeWages ? ["Employee", "Hours", "Rate", "Labor Cost", "Shifts"] : ["Employee", "Hours", "Shifts"]}>
             {employees
               .filter((e) => weekStats.has(e.id))
               .map((emp) => {
@@ -173,8 +177,12 @@ export default function TimeClock() {
                   <tr key={emp.id} className="hover:bg-white/[0.02]">
                     <td className="px-4 py-3 font-medium text-white">{emp.name}</td>
                     <td className="px-4 py-3 text-zinc-300">{(stat.seconds / 3600).toFixed(1)}h</td>
-                    <td className="px-4 py-3 text-zinc-400">{fmt(emp.hourly_rate, 2)}/h</td>
-                    <td className="px-4 py-3 font-medium text-zinc-200">{fmt(stat.cost, 2)}</td>
+                    {canSeeWages && (
+                      <>
+                        <td className="px-4 py-3 text-zinc-400">{fmt(emp.hourly_rate, 2)}/h</td>
+                        <td className="px-4 py-3 font-medium text-zinc-200">{fmt(stat.cost, 2)}</td>
+                      </>
+                    )}
                     <td className="px-4 py-3 text-zinc-400">{shifts}</td>
                   </tr>
                 );
