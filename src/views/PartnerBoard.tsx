@@ -73,6 +73,42 @@ function initialsOf(m: OrgMember | undefined): string {
   return n.split(/[\s@.]+/).filter(Boolean).map((p) => p[0]!.toUpperCase()).join("").slice(0, 2);
 }
 
+function VisibilityToggle({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <span className="text-[11px] text-zinc-500">{label} visible to</span>
+      <div className="flex rounded-full border border-line bg-white/[0.03] p-0.5">
+        <button
+          onClick={() => value && onChange(false)}
+          className={cn(
+            "cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold transition-all",
+            !value ? "bg-white/10 text-white" : "text-zinc-500 hover:text-white",
+          )}
+        >
+          Admins only
+        </button>
+        <button
+          onClick={() => !value && onChange(true)}
+          className={cn(
+            "cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold transition-all",
+            value ? "bg-amber-soft/15 text-amber-soft" : "text-zinc-500 hover:text-white",
+          )}
+        >
+          Everyone
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MemberAvatar({ member, size = "h-6 w-6 text-[10px]" }: { member: OrgMember | undefined; size?: string }) {
   const hue = hueFor(member?.user_id ?? "?");
   return (
@@ -348,38 +384,52 @@ export default function PartnerBoard() {
     [allPartnerTasks, filters, user?.id],
   );
 
+  // Recognition data is admin-only unless an admin opts in to showing everyone.
+  const potmPublic = org?.settings?.partner_of_month_public === true;
+  const numbersPublic = org?.settings?.leaderboard_numbers_public === true;
+  const showPotm = isAdmin || potmPublic;
+  const showNumbers = isAdmin || numbersPublic;
+
   // Leaderboard: this calendar month, effort points on done tasks + kudos received.
+  // When numbers are hidden from the viewer, sort alphabetically so the order
+  // itself doesn't leak the ranking.
   const monthKey = new Date().toISOString().slice(0, 7);
   const leaderboard = useMemo(() => {
-    return partners
-      .map((m) => {
-        const mine = allPartnerTasks.filter((t) => t.assignee_user_id === m.user_id);
-        const doneMonth = mine.filter((t) => t.status === "done" && (t.completed_at ?? "").slice(0, 7) === monthKey);
-        return {
-          member: m,
-          open: mine.filter((t) => t.status !== "done").length,
-          doneMonth: doneMonth.length,
-          effortMonth: doneMonth.reduce((s, t) => s + (t.effort || 1), 0),
-          kudosMonth: kudos.filter((k) => k.to_user === m.user_id && k.created_at.slice(0, 7) === monthKey).length,
-        };
-      })
-      .sort((a, b) => b.effortMonth - a.effortMonth || b.kudosMonth - a.kudosMonth || a.open - b.open);
-  }, [partners, allPartnerTasks, kudos, monthKey]);
+    const rows = partners.map((m) => {
+      const mine = allPartnerTasks.filter((t) => t.assignee_user_id === m.user_id);
+      const doneMonth = mine.filter((t) => t.status === "done" && (t.completed_at ?? "").slice(0, 7) === monthKey);
+      return {
+        member: m,
+        open: mine.filter((t) => t.status !== "done").length,
+        doneMonth: doneMonth.length,
+        effortMonth: doneMonth.reduce((s, t) => s + (t.effort || 1), 0),
+        kudosMonth: kudos.filter((k) => k.to_user === m.user_id && k.created_at.slice(0, 7) === monthKey).length,
+      };
+    });
+    return rows.sort((a, b) =>
+      showNumbers
+        ? b.effortMonth - a.effortMonth || b.kudosMonth - a.kudosMonth || a.open - b.open
+        : nameOf(a.member).localeCompare(nameOf(b.member)),
+    );
+  }, [partners, allPartnerTasks, kudos, monthKey, showNumbers]);
 
-  const topEffort = leaderboard[0]?.effortMonth ?? 0;
+  const topUserId = useMemo(() => {
+    let id: string | null = null;
+    let best = 0;
+    for (const r of leaderboard) {
+      if (r.effortMonth > best) {
+        best = r.effortMonth;
+        id = r.member.user_id;
+      }
+    }
+    return id;
+  }, [leaderboard]);
 
-  // Partner of the Month is admin-only unless an admin opts in to showing everyone.
-  const potmPublic = org?.settings?.partner_of_month_public === true;
-  const showPotm = isAdmin || potmPublic;
-
-  const setPotmPublic = async (value: boolean) => {
+  const setHubSetting = async (key: string, value: boolean, label: string) => {
     try {
-      await updateOrg(org!.id, { settings: { ...(org!.settings ?? {}), partner_of_month_public: value } });
+      await updateOrg(org!.id, { settings: { ...(org!.settings ?? {}), [key]: value } });
       refresh();
-      toast.success(
-        "Setting saved",
-        value ? "Partner of the Month is visible to everyone" : "Partner of the Month is visible to admins only",
-      );
+      toast.success("Setting saved", `${label} is now visible to ${value ? "everyone" : "admins only"}`);
     } catch (e) {
       toast.error("Could not save setting", e instanceof Error ? e.message : "");
     }
@@ -510,34 +560,23 @@ export default function PartnerBoard() {
             ) : (
               <>
                 {isAdmin && (
-                  <div className="flex items-center justify-end gap-2">
-                    <span className="text-[11px] text-zinc-500">🏆 Partner of the Month visible to</span>
-                    <div className="flex rounded-full border border-line bg-white/[0.03] p-0.5">
-                      <button
-                        onClick={() => potmPublic && setPotmPublic(false)}
-                        className={cn(
-                          "cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold transition-all",
-                          !potmPublic ? "bg-white/10 text-white" : "text-zinc-500 hover:text-white",
-                        )}
-                      >
-                        Admins only
-                      </button>
-                      <button
-                        onClick={() => !potmPublic && setPotmPublic(true)}
-                        className={cn(
-                          "cursor-pointer rounded-full px-2.5 py-1 text-[11px] font-semibold transition-all",
-                          potmPublic ? "bg-amber-soft/15 text-amber-soft" : "text-zinc-500 hover:text-white",
-                        )}
-                      >
-                        Everyone
-                      </button>
-                    </div>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <VisibilityToggle
+                      label="🏆 Partner of the Month"
+                      value={potmPublic}
+                      onChange={(v) => setHubSetting("partner_of_month_public", v, "Partner of the Month")}
+                    />
+                    <VisibilityToggle
+                      label="📊 Leaderboard numbers"
+                      value={numbersPublic}
+                      onChange={(v) => setHubSetting("leaderboard_numbers_public", v, "Leaderboard numbers")}
+                    />
                   </div>
                 )}
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                {leaderboard.map((row, i) => {
+                {leaderboard.map((row) => {
                   const profile = profiles.find((p) => p.user_id === row.member.user_id);
-                  const isTop = showPotm && i === 0 && topEffort > 0;
+                  const isTop = showPotm && row.member.user_id === topUserId;
                   const canEdit = row.member.user_id === user?.id || isAdmin;
                   return (
                     <div
@@ -581,23 +620,25 @@ export default function PartnerBoard() {
                           )}
                         </div>
                       )}
-                      <div className="mt-2.5 grid grid-cols-3 gap-1 text-center">
-                        <div>
-                          <p className="font-display text-sm font-bold text-white">{row.open}</p>
-                          <p className="text-[10px] text-zinc-500">open</p>
+                      {showNumbers && (
+                        <div className="mt-2.5 grid grid-cols-3 gap-1 text-center">
+                          <div>
+                            <p className="font-display text-sm font-bold text-white">{row.open}</p>
+                            <p className="text-[10px] text-zinc-500">open</p>
+                          </div>
+                          <div>
+                            <p className="font-display text-sm font-bold text-violet-soft">
+                              <Zap className="mr-0.5 inline h-3 w-3" />
+                              {row.effortMonth}
+                            </p>
+                            <p className="text-[10px] text-zinc-500">effort</p>
+                          </div>
+                          <div>
+                            <p className="font-display text-sm font-bold text-amber-soft">{row.kudosMonth}</p>
+                            <p className="text-[10px] text-zinc-500">kudos</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-display text-sm font-bold text-violet-soft">
-                            <Zap className="mr-0.5 inline h-3 w-3" />
-                            {row.effortMonth}
-                          </p>
-                          <p className="text-[10px] text-zinc-500">effort</p>
-                        </div>
-                        <div>
-                          <p className="font-display text-sm font-bold text-amber-soft">{row.kudosMonth}</p>
-                          <p className="text-[10px] text-zinc-500">kudos</p>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   );
                 })}
