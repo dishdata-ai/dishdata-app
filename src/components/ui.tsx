@@ -230,6 +230,47 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   );
 }
 
+export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      className={cn(
+        "w-full resize-y rounded-xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-sm leading-relaxed text-zinc-100 placeholder:text-zinc-500 focus:border-brand-400/50 focus:ring-2 focus:ring-brand-400/20 focus:outline-none",
+        props.className,
+      )}
+    />
+  );
+}
+
+// Matches bare URLs so notes can carry clickable links (Wolt dashboards, Drive
+// docs, invoices…) without a rich-text editor.
+const URL_SPLIT = /((?:https?:\/\/|www\.)[^\s<>"')]+)/gi;
+const IS_URL = /^(?:https?:\/\/|www\.)/i;
+
+/** Renders plain text with URLs turned into safe external links, preserving line breaks. */
+export function LinkedText({ text, className }: { text: string; className?: string }) {
+  return (
+    <span className={cn("whitespace-pre-wrap break-words", className)}>
+      {text.split(URL_SPLIT).map((part, i) => {
+        if (!IS_URL.test(part)) return <span key={i}>{part}</span>;
+        const href = part.startsWith("http") ? part : `https://${part}`;
+        return (
+          <a
+            key={i}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            onClick={(e) => e.stopPropagation()}
+            className="text-accent-400 underline decoration-accent-400/40 underline-offset-2 hover:decoration-accent-400"
+          >
+            {part}
+          </a>
+        );
+      })}
+    </span>
+  );
+}
+
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select

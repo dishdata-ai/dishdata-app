@@ -366,6 +366,18 @@ export interface TimeEntry {
   note: string | null;
 }
 
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface TaskLink {
+  id: string;
+  label: string;
+  url: string;
+}
+
 export interface Task {
   id: string;
   org_id: string;
@@ -380,9 +392,20 @@ export interface Task {
   /** Effort points (1/2/3/5/8) — contribution weight for the partner leaderboard. */
   effort: number;
   category: string | null;
+  checklist: ChecklistItem[];
+  links: TaskLink[];
   due_date: string | null;
   position: number;
   completed_at: string | null;
+  created_at: string;
+}
+
+export interface TaskComment {
+  id: string;
+  org_id: string;
+  task_id: string;
+  author: string;
+  body: string;
   created_at: string;
 }
 

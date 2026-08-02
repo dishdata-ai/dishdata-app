@@ -292,6 +292,7 @@ export function buildSeed(orgId: string): SeedBundle {
     id: uid(), org_id: orgId, title, description, status, priority,
     assignee_employee_id: null, partner_email: partner ?? null, due_date: null,
     is_partner_task: false, assignee_user_id: null, effort: 1, category: null,
+    checklist: [], links: [],
     position, completed_at: null, created_at: daysAgo(1),
   });
   const tasks = [

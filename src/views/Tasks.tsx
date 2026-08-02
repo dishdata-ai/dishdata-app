@@ -1,6 +1,18 @@
-import { useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, KanbanSquare, Trash2, CalendarDays, Handshake, LayoutList, Play, CheckCircle2 } from "lucide-react";
+import {
+  Plus,
+  KanbanSquare,
+  Trash2,
+  CalendarDays,
+  Handshake,
+  LayoutList,
+  Play,
+  CheckCircle2,
+  ListChecks,
+  Link2,
+  AlignLeft,
+} from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -8,6 +20,7 @@ import {
   Badge,
   Modal,
   Input,
+  Textarea,
   Select,
   Field,
   EmptyState,
@@ -20,6 +33,7 @@ import { createTask, updateTask, deleteTask } from "@/lib/api/tasks";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import PartnerBoard from "@/views/PartnerBoard";
+import TaskDetail from "@/views/TaskDetail";
 import type { Task, TaskStatus, TaskPriority } from "@/lib/api/database.types";
 
 const columns: { status: TaskStatus; title: string; tone: string }[] = [
@@ -70,8 +84,13 @@ function NewTaskForm({ onDone }: { onDone: () => void }) {
       <Field label="Title">
         <Input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="e.g. Calibrate oven #2" autoFocus />
       </Field>
-      <Field label="Details (optional)">
-        <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Anything the assignee should know" />
+      <Field label="Notes (optional) — links become clickable">
+        <Textarea
+          rows={3}
+          value={form.description}
+          onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          placeholder="Anything the assignee should know — paste links too"
+        />
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Priority">
@@ -122,8 +141,15 @@ export default function Tasks() {
   const [overCol, setOverCol] = useState<TaskStatus | null>(null);
   const [showPartnerOnly, setShowPartnerOnly] = useState(false);
   const [view, setView] = useState<"board" | "list">("board");
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   // Partners land on their own space; employees only ever have "team".
   const [space, setSpace] = useState<"team" | "partners">(isPartner ? "partners" : "team");
+
+  // Deep link: /tasks?task=<id> opens that task (shared via "Copy task link").
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("task");
+    if (id) setOpenTaskId(id);
+  }, []);
 
   const teamTasks = useMemo(() => (tasksQ.data ?? []).filter((t) => !t.is_partner_task), [tasksQ.data]);
   const tasks = useMemo(
@@ -131,6 +157,7 @@ export default function Tasks() {
     [teamTasks, showPartnerOnly],
   );
   const employees = employeesQ.data ?? [];
+  const openTask = teamTasks.find((t) => t.id === openTaskId) ?? null;
 
   const move = async (task: Task, status: TaskStatus) => {
     if (task.status === status) return;
@@ -310,9 +337,15 @@ export default function Tasks() {
                           onDragEnd={() => setDragId(null)}
                         >
                           <div className="flex items-start justify-between gap-2">
-                            <p className={cn("text-sm font-semibold text-white", t.status === "done" && "text-zinc-500 line-through")}>
+                            <button
+                              onClick={() => setOpenTaskId(t.id)}
+                              className={cn(
+                                "cursor-pointer text-left text-sm font-semibold text-white hover:text-brand-300",
+                                t.status === "done" && "text-zinc-500 line-through",
+                              )}
+                            >
                               {t.title}
-                            </p>
+                            </button>
                             <button
                               onClick={() => remove(t)}
                               className="shrink-0 cursor-pointer rounded p-0.5 text-zinc-600 hover:text-rose-soft"
@@ -339,6 +372,19 @@ export default function Tasks() {
                                 <Handshake className="h-3 w-3" /> contractor
                               </Badge>
                             )}
+                            {(t.checklist ?? []).length > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-500">
+                                <ListChecks className="h-3 w-3" />
+                                {(t.checklist ?? []).filter((c) => c.done).length}/{(t.checklist ?? []).length}
+                              </span>
+                            )}
+                            {(t.links ?? []).length > 0 && (
+                              <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-500">
+                                <Link2 className="h-3 w-3" />
+                                {(t.links ?? []).length}
+                              </span>
+                            )}
+                            {t.description && <AlignLeft className="h-3 w-3 text-zinc-600" />}
                             {t.due_date && (
                               <span className={cn("inline-flex items-center gap-1 text-[11px]", overdue ? "font-semibold text-rose-soft" : "text-zinc-500")}>
                                 <CalendarDays className="h-3 w-3" />
@@ -411,13 +457,14 @@ export default function Tasks() {
                           className="h-2 w-2 shrink-0 rounded-full"
                           style={{ background: columns.find((c) => c.status === t.status)?.tone }}
                         />
-                        <div className="min-w-0 flex-1">
-                          <p className={cn("truncate text-sm font-medium text-white", t.status === "done" && "text-zinc-500 line-through")}>
+                        <button onClick={() => setOpenTaskId(t.id)} className="min-w-0 flex-1 cursor-pointer text-left">
+                          <p className={cn("truncate text-sm font-medium text-white hover:text-brand-300", t.status === "done" && "text-zinc-500 line-through")}>
                             {t.title}
                           </p>
                           <p className="text-[11px] text-zinc-500">
                             {t.status === "in_progress" ? "In progress" : t.status === "done" ? "Done" : "To do"}
                             {t.partner_email && " · contractor"}
+                            {(t.checklist ?? []).length > 0 && ` · ☑ ${(t.checklist ?? []).filter((c) => c.done).length}/${(t.checklist ?? []).length}`}
                             {t.due_date && (
                               <span className={cn(overdue && "font-semibold text-rose-soft")}>
                                 {" · due "}
@@ -425,7 +472,7 @@ export default function Tasks() {
                               </span>
                             )}
                           </p>
-                        </div>
+                        </button>
                         <Badge tone={priorityTone[t.priority]} className="shrink-0 capitalize">{t.priority}</Badge>
                         {t.status !== "done" ? (
                           <Button variant="ghost" className="shrink-0 px-2.5 py-1 text-xs" onClick={() => advance(t)}>
@@ -459,6 +506,19 @@ export default function Tasks() {
 
       <Modal open={adding} onClose={() => setAdding(false)} title="New Task">
         <NewTaskForm onDone={() => setAdding(false)} />
+      </Modal>
+
+      <Modal open={!!openTask} onClose={() => setOpenTaskId(null)} title="Task details" wide>
+        {openTask && (
+          <TaskDetail
+            task={openTask}
+            assignees={employees.map((e) => ({ id: e.id, name: e.name, hue: e.avatar_hue }))}
+            assigneeField="assignee_employee_id"
+            assigneeLabel="Assigned employee"
+            showEffort={false}
+            onClose={() => setOpenTaskId(null)}
+          />
+        )}
       </Modal>
     </div>
   );

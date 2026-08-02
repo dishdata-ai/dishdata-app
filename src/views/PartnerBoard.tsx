@@ -17,6 +17,9 @@ import {
   ChevronUp,
   CheckCircle2,
   Play,
+  ListChecks,
+  Link2,
+  AlignLeft,
 } from "lucide-react";
 import {
   Card,
@@ -38,6 +41,7 @@ import { upsertPartnerProfile, giveKudos } from "@/lib/api/partners";
 import { updateOrg } from "@/lib/api/orgs";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import TaskDetail from "@/views/TaskDetail";
 import type { Task, TaskStatus, TaskPriority, OrgMember, PartnerProfile } from "@/lib/api/database.types";
 
 const columns: { status: TaskStatus; title: string; tone: string }[] = [
@@ -360,6 +364,7 @@ export default function PartnerBoard() {
   const [overCol, setOverCol] = useState<TaskStatus | null>(null);
   const [showHub, setShowHub] = useState(true);
   const [editingProfile, setEditingProfile] = useState<OrgMember | null>(null);
+  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [kudosTarget, setKudosTarget] = useState<{ toUser?: string; taskId?: string | null } | null>(null);
   const [filters, setFilters] = useState({ assignee: "", category: "", priority: "", overdue: false, mine: false });
 
@@ -370,6 +375,7 @@ export default function PartnerBoard() {
   const memberById = (id: string | null | undefined) => members.find((m) => m.user_id === id);
 
   const allPartnerTasks = useMemo(() => (tasksQ.data ?? []).filter((t) => t.is_partner_task), [tasksQ.data]);
+  const openTask = allPartnerTasks.find((t) => t.id === openTaskId) ?? null;
 
   const tasks = useMemo(
     () =>
@@ -477,16 +483,26 @@ export default function PartnerBoard() {
   const taskCard = (t: Task) => {
     const assignee = memberById(t.assignee_user_id);
     const overdue = t.due_date && t.status !== "done" && new Date(t.due_date) < new Date();
+    const checklist = t.checklist ?? [];
+    const linkCount = (t.links ?? []).length;
     return (
       <Card
         key={t.id}
-        className={cn("cursor-grab p-4 transition-all active:cursor-grabbing", dragId === t.id && "opacity-40")}
+        className={cn("cursor-grab p-4 transition-all hover:border-brand-400/30 active:cursor-grabbing", dragId === t.id && "opacity-40")}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         {...({ draggable: true } as any)}
       >
         <div draggable onDragStart={() => setDragId(t.id)} onDragEnd={() => setDragId(null)}>
           <div className="flex items-start justify-between gap-2">
-            <p className={cn("text-sm font-semibold text-white", t.status === "done" && "text-zinc-500 line-through")}>{t.title}</p>
+            <button
+              onClick={() => setOpenTaskId(t.id)}
+              className={cn(
+                "cursor-pointer text-left text-sm font-semibold text-white hover:text-brand-300",
+                t.status === "done" && "text-zinc-500 line-through",
+              )}
+            >
+              {t.title}
+            </button>
             <div className="flex shrink-0 items-center gap-0.5">
               {t.status === "done" && t.assignee_user_id && t.assignee_user_id !== user?.id && (
                 <button
@@ -510,6 +526,19 @@ export default function PartnerBoard() {
               <Zap className="h-3 w-3" />
               {t.effort || 1}
             </span>
+            {checklist.length > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-500">
+                <ListChecks className="h-3 w-3" />
+                {checklist.filter((c) => c.done).length}/{checklist.length}
+              </span>
+            )}
+            {linkCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[11px] text-zinc-500">
+                <Link2 className="h-3 w-3" />
+                {linkCount}
+              </span>
+            )}
+            {t.description && <AlignLeft className="h-3 w-3 text-zinc-600" />}
             {assignee && <MemberAvatar member={assignee} size="h-5 w-5 text-[9px]" />}
             {t.due_date && (
               <span className={cn("inline-flex items-center gap-1 text-[11px]", overdue ? "font-semibold text-rose-soft" : "text-zinc-500")}>
@@ -788,10 +817,11 @@ export default function PartnerBoard() {
                     return (
                       <div key={t.id} className="flex items-center gap-3 px-4 py-2.5">
                         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: columns.find((c) => c.status === t.status)?.tone }} />
-                        <div className="min-w-0 flex-1">
-                          <p className={cn("truncate text-sm font-medium text-white", t.status === "done" && "text-zinc-500 line-through")}>{t.title}</p>
+                        <button onClick={() => setOpenTaskId(t.id)} className="min-w-0 flex-1 cursor-pointer text-left">
+                          <p className={cn("truncate text-sm font-medium text-white hover:text-brand-300", t.status === "done" && "text-zinc-500 line-through")}>{t.title}</p>
                           <p className="text-[11px] text-zinc-500">
                             {t.category ?? "General"} · <Zap className="inline h-2.5 w-2.5 text-violet-soft" /> {t.effort || 1}
+                            {(t.checklist ?? []).length > 0 && ` · ☑ ${(t.checklist ?? []).filter((c) => c.done).length}/${(t.checklist ?? []).length}`}
                             {t.due_date && (
                               <span className={cn(overdue && "font-semibold text-rose-soft")}>
                                 {" · due "}
@@ -799,7 +829,7 @@ export default function PartnerBoard() {
                               </span>
                             )}
                           </p>
-                        </div>
+                        </button>
                         <Badge tone={priorityTone[t.priority]} className="shrink-0 capitalize">{t.priority}</Badge>
                         {t.status !== "done" ? (
                           <Button variant="ghost" className="shrink-0 px-2.5 py-1 text-xs" onClick={() => advance(t)}>
@@ -842,6 +872,19 @@ export default function PartnerBoard() {
       <Modal open={!!kudosTarget} onClose={() => setKudosTarget(null)} title="Give Kudos">
         {kudosTarget && (
           <KudosForm partners={partners} toUser={kudosTarget.toUser} taskId={kudosTarget.taskId} onDone={() => setKudosTarget(null)} />
+        )}
+      </Modal>
+
+      <Modal open={!!openTask} onClose={() => setOpenTaskId(null)} title="Task details" wide>
+        {openTask && (
+          <TaskDetail
+            task={openTask}
+            assignees={partners.map((m) => ({ id: m.user_id, name: nameOf(m), hue: hueFor(m.user_id) }))}
+            assigneeField="assignee_user_id"
+            assigneeLabel="Assigned partner"
+            showEffort
+            onClose={() => setOpenTaskId(null)}
+          />
         )}
       </Modal>
     </div>
