@@ -14,6 +14,8 @@ import { listEmployees, listCustomers, listExpenses } from "@/lib/api/people";
 import { listTables, listReservations, listDeliveries } from "@/lib/api/service";
 import { listTimeEntries } from "@/lib/api/timeclock";
 import { listTasks } from "@/lib/api/tasks";
+import { listMembers } from "@/lib/api/team";
+import { listPartnerProfiles, listKudos } from "@/lib/api/partners";
 import { listAcctInvoices, listAcctDocuments } from "@/lib/api/accounting";
 import { listPayProfiles, listPayrollRuns } from "@/lib/api/payroll";
 import { listEventMenus } from "@/lib/api/eventMenus";
@@ -46,6 +48,9 @@ export const useReservations = () => useOrgQuery("reservations", listReservation
 export const useDeliveries = () => useOrgQuery("deliveries", listDeliveries);
 export const useTimeEntries = () => useOrgQuery("time_entries", (id) => listTimeEntries(id));
 export const useTasks = () => useOrgQuery("tasks", listTasks);
+export const useMembers = () => useOrgQuery("members", listMembers);
+export const usePartnerProfiles = () => useOrgQuery("partner_profiles", listPartnerProfiles);
+export const useKudos = () => useOrgQuery("kudos", listKudos);
 export const useAcctInvoices = () => useOrgQuery("acct_invoices", listAcctInvoices);
 export const useAcctDocuments = () => useOrgQuery("acct_documents", listAcctDocuments);
 export const usePayProfiles = () => useOrgQuery("pay_profiles", listPayProfiles);

@@ -1,7 +1,7 @@
 // Hand-maintained row types mirroring supabase/setup.sql.
 // Keep this file and setup.sql in sync when the schema changes.
 
-export type Role = "owner" | "admin" | "manager" | "staff" | "accountant" | "viewer";
+export type Role = "owner" | "admin" | "partner" | "manager" | "staff" | "accountant" | "viewer";
 export type OrderType = "dine_in" | "takeaway" | "delivery";
 export type OrderStatus = "open" | "paid" | "void" | "refunded";
 export type KitchenStatus = "new" | "preparing" | "ready" | "served";
@@ -375,9 +375,35 @@ export interface Task {
   priority: TaskPriority;
   assignee_employee_id: string | null;
   partner_email: string | null;
+  is_partner_task: boolean;
+  assignee_user_id: string | null;
+  /** Effort points (1/2/3/5/8) — contribution weight for the partner leaderboard. */
+  effort: number;
+  category: string | null;
   due_date: string | null;
   position: number;
   completed_at: string | null;
+  created_at: string;
+}
+
+export interface PartnerProfile {
+  id: string;
+  org_id: string;
+  user_id: string;
+  skills: string[];
+  focus: string | null;
+  location: string | null;
+  updated_at: string;
+}
+
+export interface Kudo {
+  id: string;
+  org_id: string;
+  from_user: string;
+  to_user: string;
+  task_id: string | null;
+  message: string;
+  emoji: string;
   created_at: string;
 }
 

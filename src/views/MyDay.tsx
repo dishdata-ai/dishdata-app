@@ -88,14 +88,17 @@ export function MyDayView() {
     return { hours: seconds / 3600, earnings: (seconds / 3600) * me.hourly_rate, shifts };
   }, [entriesQ.data, me, now]);
 
+  // Employee tasks (roster assignment) + partner tasks assigned to this user directly.
   const myTasks = useMemo(
     () =>
-      me
-        ? (tasksQ.data ?? [])
-            .filter((t) => t.assignee_employee_id === me.id && t.status !== "done")
-            .sort((a, b) => (a.priority === "high" ? -1 : b.priority === "high" ? 1 : 0))
-        : [],
-    [tasksQ.data, me],
+      (tasksQ.data ?? [])
+        .filter(
+          (t) =>
+            t.status !== "done" &&
+            ((me && t.assignee_employee_id === me.id) || (user && t.assignee_user_id === user.id)),
+        )
+        .sort((a, b) => (a.priority === "high" ? -1 : b.priority === "high" ? 1 : 0)),
+    [tasksQ.data, me, user],
   );
 
   const kitchenOpen = (ordersQ.data ?? []).filter(

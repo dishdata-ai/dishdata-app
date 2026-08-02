@@ -13,6 +13,8 @@ interface OrgContextValue {
   loading: boolean;
   isAdmin: boolean;
   isManager: boolean;
+  /** Can see the partner task space (owners, admins and partners). */
+  isPartner: boolean;
   refresh: () => void;
 }
 
@@ -62,6 +64,8 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     loading: isLoading,
     isAdmin: role === "owner" || role === "admin",
     isManager: role === "owner" || role === "admin" || role === "manager",
+    // mirrors can_see_partner_tasks() in the DB
+    isPartner: role === "owner" || role === "admin" || role === "partner",
     refresh: () => qc.invalidateQueries({ queryKey: ["orgContext"] }),
   };
 

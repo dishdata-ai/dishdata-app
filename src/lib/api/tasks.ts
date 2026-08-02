@@ -28,6 +28,11 @@ export interface NewTaskInput {
   assignee_employee_id: string | null;
   partner_email: string | null;
   due_date: string | null;
+  /** Partner-space task — hidden from employees by RLS. */
+  is_partner_task?: boolean;
+  assignee_user_id?: string | null;
+  effort?: number;
+  category?: string | null;
 }
 
 export async function createTask(orgId: string, input: NewTaskInput): Promise<void> {
@@ -35,7 +40,9 @@ export async function createTask(orgId: string, input: NewTaskInput): Promise<vo
     await demoDelay();
     dTasks.insert({
       id: uid(), org_id: orgId, status: "todo", position: Date.now(),
-      completed_at: null, created_at: new Date().toISOString(), ...input,
+      completed_at: null, created_at: new Date().toISOString(),
+      is_partner_task: false, assignee_user_id: null, effort: 1, category: null,
+      ...input,
     });
     return;
   }

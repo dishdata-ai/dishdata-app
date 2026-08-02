@@ -31,11 +31,12 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { OrgMember, Role } from "@/lib/api/database.types";
 
-const ROLES: Role[] = ["owner", "admin", "manager", "staff", "accountant", "viewer"];
+const ROLES: Role[] = ["owner", "admin", "partner", "manager", "staff", "accountant", "viewer"];
 
 const roleTone: Record<Role, "violet" | "rose" | "cyan" | "green" | "amber" | "neutral"> = {
   owner: "violet",
   admin: "rose",
+  partner: "violet",
   manager: "cyan",
   staff: "green",
   accountant: "amber",

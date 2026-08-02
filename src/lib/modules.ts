@@ -84,6 +84,7 @@ export const moduleById = (id: string) => MODULES.find((m) => m.id === id);
 export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   owner: "all",
   admin: "all",
+  partner: "all",
   manager: ["dashboard", "myday", "pos", "orders", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport"],
   staff: ["dashboard", "myday", "pos", "orders", "kitchen", "floor", "timeclock", "tasks"],
   accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "insights"],
