@@ -88,6 +88,37 @@ export async function updateRecipe(orgId: string, id: string, patch: Partial<Rec
   if (error) throw error;
 }
 
+/** Replaces a recipe's whole ingredient list (delete + reinsert) — used when editing. */
+export async function replaceRecipeIngredients(
+  orgId: string,
+  recipeId: string,
+  ingredients: NewRecipeInput["ingredients"],
+): Promise<void> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    for (const ing of dIngredients.list({ recipe_id: recipeId } as Partial<RecipeIngredient>)) {
+      dIngredients.remove(ing.id);
+    }
+    for (const ing of ingredients) {
+      dIngredients.insert({ id: uid(), org_id: orgId, recipe_id: recipeId, ...ing });
+    }
+    return;
+  }
+  const sb = getSupabase();
+  const { error: delError } = await sb
+    .from("recipe_ingredients")
+    .delete()
+    .eq("recipe_id", recipeId)
+    .eq("org_id", orgId);
+  if (delError) throw delError;
+  if (ingredients.length) {
+    const { error: insError } = await sb
+      .from("recipe_ingredients")
+      .insert(ingredients.map((i) => ({ org_id: orgId, recipe_id: recipeId, ...i })));
+    if (insError) throw insError;
+  }
+}
+
 export async function deleteRecipe(orgId: string, id: string): Promise<void> {
   if (!isSupabaseConfigured) {
     await demoDelay();

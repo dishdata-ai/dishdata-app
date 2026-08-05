@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -18,7 +18,7 @@ import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/
 import { EventMenusCard } from "@/components/EventMenus";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
-import { createRecipe, deleteRecipe, updateRecipe, type NewRecipeInput } from "@/lib/api/recipes";
+import { createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, type NewRecipeInput } from "@/lib/api/recipes";
 import { uploadOrgAsset } from "@/lib/api/orgs";
 import { recipeCost, marginPct, popularityScores, type RecipeWithIngredients } from "@/lib/calc";
 import { toast } from "@/lib/toast";
@@ -35,19 +35,29 @@ interface IngRow {
   qty_numeric: string;
 }
 
-function AddRecipeForm({ onDone }: { onDone: () => void }) {
+function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null; onDone: () => void }) {
   const { org } = useOrg();
   const fmt = useFmt();
   const inventoryQ = useInventory();
   const invalidate = useInvalidate();
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("Mains");
-  const [price, setPrice] = useState("");
-  const [prep, setPrep] = useState("");
-  const [emoji, setEmoji] = useState("🍽️");
-  const [rows, setRows] = useState<IngRow[]>([
-    { key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "" },
-  ]);
+  const isEdit = !!recipe;
+  const [name, setName] = useState(recipe?.name ?? "");
+  const [category, setCategory] = useState(recipe?.category ?? "Mains");
+  const [price, setPrice] = useState(recipe ? String(recipe.price) : "");
+  const [prep, setPrep] = useState(recipe ? String(recipe.prep_minutes) : "");
+  const [emoji, setEmoji] = useState(recipe?.emoji ?? "🍽️");
+  const [rows, setRows] = useState<IngRow[]>(
+    recipe && recipe.ingredients.length
+      ? recipe.ingredients.map((i) => ({
+          key: uid(),
+          name: i.name,
+          qty_display: i.qty_display,
+          cost: String(i.cost),
+          inventory_item_id: i.inventory_item_id ?? "",
+          qty_numeric: String(i.qty_numeric),
+        }))
+      : [{ key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "" }],
+  );
 
   const setRow = (key: string, patch: Partial<IngRow>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -55,29 +65,36 @@ function AddRecipeForm({ onDone }: { onDone: () => void }) {
   const plateCost = rows.reduce((s, r) => s + (+r.cost || 0), 0);
   const valid = name.trim() && +price > 0 && rows.some((r) => r.name.trim());
 
-  const create = useMutation({
-    mutationFn: () => {
+  const save = useMutation({
+    mutationFn: async () => {
+      const ingredients = rows
+        .filter((r) => r.name.trim())
+        .map((r) => ({
+          name: r.name.trim(),
+          qty_display: r.qty_display,
+          qty_numeric: +r.qty_numeric || 0,
+          cost: +r.cost || 0,
+          inventory_item_id: r.inventory_item_id || null,
+        }));
+      if (isEdit) {
+        await updateRecipe(org!.id, recipe!.id, {
+          name: name.trim(),
+          category,
+          price: +price,
+          prep_minutes: +prep || 10,
+          emoji: emoji || "🍽️",
+        });
+        await replaceRecipeIngredients(org!.id, recipe!.id, ingredients);
+        return recipe!.id;
+      }
       const input: NewRecipeInput = {
-        name: name.trim(),
-        category,
-        price: +price,
-        prep_minutes: +prep || 10,
-        emoji: emoji || "🍽️",
-        ingredients: rows
-          .filter((r) => r.name.trim())
-          .map((r) => ({
-            name: r.name.trim(),
-            qty_display: r.qty_display,
-            qty_numeric: +r.qty_numeric || 0,
-            cost: +r.cost || 0,
-            inventory_item_id: r.inventory_item_id || null,
-          })),
+        name: name.trim(), category, price: +price, prep_minutes: +prep || 10, emoji: emoji || "🍽️", ingredients,
       };
       return createRecipe(org!.id, input);
     },
     onSuccess: () => {
       invalidate("recipes");
-      toast.success("Recipe saved", `${name.trim()} is now on the menu`);
+      toast.success(isEdit ? "Recipe updated" : "Recipe saved", `${name.trim()} ${isEdit ? "is updated" : "is now on the menu"}`);
       onDone();
     },
     onError: (e) => toast.error("Could not save recipe", e instanceof Error ? e.message : ""),
@@ -97,11 +114,12 @@ function AddRecipeForm({ onDone }: { onDone: () => void }) {
       </div>
       <div className="grid grid-cols-3 gap-3">
         <Field label="Category">
-          <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <Input value={category} onChange={(e) => setCategory(e.target.value)} list="recipe-categories" placeholder="Mains" />
+          <datalist id="recipe-categories">
             {categories.slice(1).map((c) => (
-              <option key={c}>{c}</option>
+              <option key={c} value={c} />
             ))}
-          </Select>
+          </datalist>
         </Field>
         <Field label="Menu price">
           <Input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="24" />
@@ -175,8 +193,8 @@ function AddRecipeForm({ onDone }: { onDone: () => void }) {
           )}
         </span>
       </div>
-      <Button className="w-full" disabled={!valid || create.isPending} onClick={() => create.mutate()}>
-        {create.isPending ? "Saving…" : "Save Recipe"}
+      <Button className="w-full" disabled={!valid || save.isPending} onClick={() => save.mutate()}>
+        {save.isPending ? "Saving…" : isEdit ? "Save Changes" : "Save Recipe"}
       </Button>
     </div>
   );
@@ -191,6 +209,7 @@ export default function Recipes() {
   const [category, setCategory] = useState<(typeof categories)[number]>("All");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<RecipeWithIngredients | null>(null);
+  const [editing, setEditing] = useState<RecipeWithIngredients | null>(null);
   const [adding, setAdding] = useState(false);
 
   const recipes = recipesQ.data ?? [];
@@ -380,6 +399,16 @@ export default function Recipes() {
               ))}
             </div>
             <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={() => {
+                  setEditing(selected);
+                  setSelected(null);
+                }}
+              >
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
               <label className="flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.03] py-2 text-sm font-semibold text-zinc-200 hover:border-zinc-500">
                 <ImagePlus className="h-4 w-4" /> {selected.image_url ? "Replace photo" : "Add photo"}
                 <input
@@ -405,7 +434,11 @@ export default function Recipes() {
       <EventMenusCard />
 
       <Modal open={adding} onClose={() => setAdding(false)} title="New Recipe" wide>
-        <AddRecipeForm onDone={() => setAdding(false)} />
+        <RecipeForm onDone={() => setAdding(false)} />
+      </Modal>
+
+      <Modal open={!!editing} onClose={() => setEditing(null)} title={editing ? `Edit ${editing.name}` : ""} wide>
+        {editing && <RecipeForm recipe={editing} onDone={() => setEditing(null)} />}
       </Modal>
     </div>
   );
