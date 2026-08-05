@@ -287,6 +287,7 @@ export interface Order {
   tax: number;
   tip: number;
   total: number;
+  discount: number;
   status: OrderStatus;
   kitchen_status: KitchenStatus;
   kitchen_notes: string | null;

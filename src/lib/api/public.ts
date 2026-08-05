@@ -69,7 +69,7 @@ export async function placePublicOrder(
     dOrders.insert({
       id: orderId, org_id: org.id, order_number: orderNumber, order_type: "dine_in",
       table_id: null, customer_id: null, guest_name: guestName, items: lines,
-      subtotal, tax, tip: 0, total, status: "open", kitchen_status: "new",
+      subtotal, tax, tip: 0, total, discount: 0, status: "open", kitchen_status: "new",
       kitchen_notes: [tableName ? `Table: ${tableName}` : null, notes].filter(Boolean).join(". ") || null,
       source: "storefront", created_at: new Date().toISOString(),
     });

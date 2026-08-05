@@ -73,6 +73,8 @@ function PayModal({
   subtotal,
   taxRate,
   initialTipPct,
+  discountAmount,
+  discountLabel,
   confirmLabel,
   pending,
   onConfirm,
@@ -83,6 +85,9 @@ function PayModal({
   subtotal: number;
   taxRate: number;
   initialTipPct: number;
+  /** Already-applied discount, for display only — `subtotal` is already net of it. */
+  discountAmount?: number;
+  discountLabel?: string;
   confirmLabel: string;
   pending: boolean;
   onConfirm: (payments: PaymentInput[], tip: number) => void;
@@ -287,6 +292,12 @@ function PayModal({
 
         {/* Totals */}
         <div className="space-y-1 text-sm">
+          {!!discountAmount && discountAmount > 0 && (
+            <div className="flex justify-between text-brand-300">
+              <span>{discountLabel ?? "Discount"}</span>
+              <span>−{fmt(discountAmount, 2)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-zinc-400">
             <span>Subtotal</span>
             <span>{fmt(subtotal, 2)}</span>
@@ -341,6 +352,8 @@ export default function Pos() {
   const [customerId, setCustomerId] = useState<string>("");
   const [kitchenNotes, setKitchenNotes] = useState("");
   const [tipPct, setTipPct] = useState<number>(0);
+  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount">("none");
+  const [discountValue, setDiscountValue] = useState<string>("");
   const [address, setAddress] = useState("");
   const [tableId, setTableId] = useState("");
   const [payOpen, setPayOpen] = useState(false);
@@ -412,10 +425,15 @@ export default function Pos() {
   // path expect, since net × rate/100 == the VAT contained in the gross price.
   const taxRate = org?.tax_rate ?? 8.5;
   const gross = lines.reduce((s, l) => s + l.recipe!.price * l.qty, 0);
-  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
-  const subtotal = +(gross - tax).toFixed(2);
-  const tip = +(gross * (tipPct / 100)).toFixed(2);
-  const total = +(gross + tip).toFixed(2);
+  const discountNum = Math.max(+discountValue || 0, 0);
+  const discountPct = discountType === "percent" ? Math.min(discountNum, 100) : 0;
+  const discountAmountInput = discountType === "amount" ? discountNum : 0;
+  const discount = Math.min(discountAmountInput + gross * (discountPct / 100), gross);
+  const discountedGross = +(gross - discount).toFixed(2);
+  const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
+  const subtotal = +(discountedGross - tax).toFixed(2);
+  const tip = +(discountedGross * (tipPct / 100)).toFixed(2);
+  const total = +(discountedGross + tip).toFixed(2);
   const cartCount = lines.reduce((s, l) => s + l.qty, 0);
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
@@ -434,6 +452,8 @@ export default function Pos() {
     clearCart();
     setKitchenNotes("");
     setTipPct(0);
+    setDiscountType("none");
+    setDiscountValue("");
     setCustomerId("");
     setAddress("");
     setTableId("");
@@ -456,6 +476,8 @@ export default function Pos() {
         kitchenNotes: kitchenNotes || null,
         tip: vars.tip,
         address: orderType === "delivery" ? address : null,
+        discountAmount: discountAmountInput,
+        discountPct,
         payments: vars.payments,
       }).then(async (result) => {
         // Pre-prepared event menu: hand-over is immediate, so don't queue a
@@ -796,7 +818,58 @@ export default function Pos() {
                   </div>
                 </div>
 
+                {/* Discount */}
+                <div className="mt-3">
+                  <p className="mb-1.5 text-xs font-medium text-zinc-400">Discount</p>
+                  <div className="flex gap-1">
+                    {(
+                      [
+                        ["none", "None"],
+                        ["percent", "%"],
+                        ["amount", "Amount"],
+                      ] as ["none" | "percent" | "amount", string][]
+                    ).map(([t, label]) => (
+                      <button
+                        key={t}
+                        onClick={() => setDiscountType(t)}
+                        className={cn(
+                          "flex-1 cursor-pointer rounded-lg border py-1.5 text-xs font-semibold transition-all",
+                          discountType === t
+                            ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                            : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    {discountType !== "none" && (
+                      <Input
+                        type="number"
+                        min="0"
+                        step={discountType === "percent" ? "1" : "0.5"}
+                        placeholder={discountType === "percent" ? "10" : "5.00"}
+                        value={discountValue}
+                        onChange={(e) => setDiscountValue(e.target.value)}
+                        className="w-20 text-center"
+                        autoFocus
+                      />
+                    )}
+                  </div>
+                </div>
+
                 <div className="mt-4 space-y-1.5 border-t border-line pt-4 text-sm">
+                  {discount > 0 && (
+                    <div className="flex justify-between text-zinc-400">
+                      <span>Items</span>
+                      <span>{fmt(gross, 2)}</span>
+                    </div>
+                  )}
+                  {discount > 0 && (
+                    <div className="flex justify-between text-brand-300">
+                      <span>Discount{discountType === "percent" ? ` (${discountPct}%)` : ""}</span>
+                      <span>−{fmt(discount, 2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-zinc-400">
                     <span>Subtotal</span>
                     <span>{fmt(subtotal, 2)}</span>
@@ -889,6 +962,8 @@ export default function Pos() {
         subtotal={subtotal}
         taxRate={taxRate}
         initialTipPct={tipPct}
+        discountAmount={discount}
+        discountLabel={discountType === "percent" ? `Discount (${discountPct}%)` : "Discount"}
         confirmLabel={`Charge ${fmt(total, 2)}`}
         pending={checkout.isPending}
         onConfirm={(payments, t) => checkout.mutate({ payments, tip: t })}
@@ -903,6 +978,8 @@ export default function Pos() {
           subtotal={settling.subtotal}
           taxRate={taxRate}
           initialTipPct={0}
+          discountAmount={settling.discount}
+          discountLabel="Discount"
           confirmLabel={`Settle ${settling.order_number}`}
           pending={settle.isPending}
           onConfirm={(payments, t) => settle.mutate({ order: settling, payments, tip: t })}
@@ -926,7 +1003,13 @@ export default function Pos() {
                   <span>{fmt(l.price * l.qty, 2)}</span>
                 </div>
               ))}
-              <div className="flex justify-between border-t border-line pt-2 text-zinc-400">
+              {!!receipt.discount && receipt.discount > 0 && (
+                <div className="flex justify-between border-t border-line pt-2 text-brand-300">
+                  <span>Discount</span>
+                  <span>−{fmt(receipt.discount, 2)}</span>
+                </div>
+              )}
+              <div className={cn("flex justify-between text-zinc-400", !(receipt.discount && receipt.discount > 0) && "border-t border-line pt-2")}>
                 <span>Tax</span>
                 <span>{fmt(receipt.tax, 2)}</span>
               </div>

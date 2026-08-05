@@ -363,7 +363,7 @@ export function buildOrderHistory(orgId: string, recipes: Recipe[]) {
       orders.push({
         id, org_id: orgId, order_number: `ORD-${String(orderNo++).padStart(4, "0")}`,
         order_type: rng() > 0.75 ? "takeaway" : "dine_in", table_id: null, customer_id: null,
-        guest_name: null, items, subtotal, tax, tip, total, status: "paid",
+        guest_name: null, items, subtotal, tax, tip, total, discount: 0, status: "paid",
         kitchen_status: "served", kitchen_notes: null, source: "pos", created_at: placed.toISOString(),
       });
       payments.push({

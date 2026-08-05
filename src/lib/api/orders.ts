@@ -71,6 +71,10 @@ export interface CheckoutPayload {
   tip?: number;
   /** Delivery address — required when orderType is "delivery". */
   address?: string | null;
+  /** Flat € off the order, before tax. */
+  discountAmount?: number;
+  /** % off the order, before tax. Combines with discountAmount; both are capped to the order's gross. */
+  discountPct?: number;
   payments: { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string }[];
 }
 
@@ -78,6 +82,7 @@ export interface CheckoutResult {
   order_id: string;
   order_number: string;
   total: number;
+  discount?: number;
 }
 
 /** The live-data engine: order + payments + inventory depletion + loyalty, atomically. */
@@ -89,16 +94,21 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     // VAT-included (gross) pricing: menu prices already include VAT. Break it out
     // of the price rather than adding on top; store subtotal NET (see 0017 migration).
     const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
-    const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
+    const discount = Math.min(
+      Math.max(payload.discountAmount ?? 0, 0) + gross * (Math.max(payload.discountPct ?? 0, 0) / 100),
+      gross,
+    );
+    const discountedGross = +(gross - discount).toFixed(2);
+    const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
     const tip = payload.tip ?? 0;
-    const total = +(gross + tip).toFixed(2);
-    const subtotal = +(gross - tax).toFixed(2);
+    const total = +(discountedGross + tip).toFixed(2);
+    const subtotal = +(discountedGross - tax).toFixed(2);
     const orderNumber = `ORD-${String(dOrders.list({ org_id: orgId } as Partial<Order>).length + 1).padStart(4, "0")}`;
     const now = new Date().toISOString();
     const order: Order = {
       id: uid(), org_id: orgId, order_number: orderNumber, order_type: payload.orderType,
       table_id: payload.tableId ?? null, customer_id: payload.customerId ?? null, guest_name: null,
-      items: payload.items, subtotal, tax, tip, total,
+      items: payload.items, subtotal, tax, tip, total, discount: +discount.toFixed(2),
       status: payload.payments.length > 0 ? "paid" : "open",
       kitchen_status: "new", kitchen_notes: payload.kitchenNotes ?? null, source: "pos", created_at: now,
     };
@@ -163,7 +173,7 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
         });
       }
     }
-    return { order_id: order.id, order_number: orderNumber, total };
+    return { order_id: order.id, order_number: orderNumber, total, discount: +discount.toFixed(2) };
   }
 
   const { data, error } = await getSupabase().rpc("checkout_order", {
@@ -176,6 +186,8 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     _tip: payload.tip ?? 0,
     _payments: payload.payments,
     _address: payload.address ?? null,
+    _discount_amount: payload.discountAmount ?? 0,
+    _discount_pct: payload.discountPct ?? 0,
   });
   if (error) throw error;
   return data as CheckoutResult;
