@@ -9,6 +9,14 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, KitchenStatus } from "@/lib/api/database.types";
 
+/** Where the ticket came from, when it was not rung up at the till. */
+const SOURCE_LABEL: Record<string, string> = {
+  storefront: "online",
+  wolt: "Wolt",
+  ubereats: "Uber Eats",
+  lieferando: "Lieferando",
+};
+
 const columns: { status: KitchenStatus; title: string; tone: string; next: KitchenStatus | null; action: string }[] = [
   { status: "new", title: "New", tone: "#22d3ee", next: "preparing", action: "Start" },
   { status: "preparing", title: "Preparing", tone: "#fbbf24", next: "ready", action: "Ready" },
@@ -40,7 +48,7 @@ function Ticket({ order, now, onAdvance }: { order: Order; now: number; onAdvanc
       <p className="mt-0.5 text-[11px] text-zinc-500 capitalize">
         {order.order_type.replace("_", "-")}
         {order.guest_name ? ` · ${order.guest_name}` : ""}
-        {order.source === "storefront" ? " · online" : ""}
+        {SOURCE_LABEL[order.source] ? ` · ${SOURCE_LABEL[order.source]}` : ""}
       </p>
       <div className="mt-3 space-y-1.5">
         {order.items.map((l, i) => (

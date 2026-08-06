@@ -19,6 +19,7 @@ import { listPartnerProfiles, listKudos } from "@/lib/api/partners";
 import { listAcctInvoices, listAcctDocuments } from "@/lib/api/accounting";
 import { listPayProfiles, listPayrollRuns } from "@/lib/api/payroll";
 import { listEventMenus } from "@/lib/api/eventMenus";
+import { listChannels, listChannelOrders } from "@/lib/api/channels";
 
 function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
   const { org } = useOrg();
@@ -55,6 +56,8 @@ export const useAcctInvoices = () => useOrgQuery("acct_invoices", listAcctInvoic
 export const useAcctDocuments = () => useOrgQuery("acct_documents", listAcctDocuments);
 export const usePayProfiles = () => useOrgQuery("pay_profiles", listPayProfiles);
 export const usePayrollRuns = () => useOrgQuery("payroll_runs", listPayrollRuns);
+export const useChannels = () => useOrgQuery("channels", listChannels);
+export const useChannelOrders = () => useOrgQuery("channel_orders", (id) => listChannelOrders(id));
 
 /** Invalidate one or more org-scoped domains after a mutation. */
 export function useInvalidate() {

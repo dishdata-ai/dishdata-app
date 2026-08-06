@@ -600,3 +600,79 @@ export interface EventMenuItem {
   recipe_id: string;
   created_at: string;
 }
+
+// --- Delivery channels (Uber Eats / Wolt / Lieferando) — see migration 0026 ---
+
+export type ChannelProvider = 'ubereats' | 'wolt' | 'lieferando';
+export type ChannelOrderStatus = 'pending' | 'accepted' | 'rejected' | 'failed';
+
+export interface Channel {
+  id: string;
+  org_id: string;
+  provider: ChannelProvider;
+  /** The platform's own id for this location (store / venue / restaurant id). */
+  external_store_id: string;
+  is_active: boolean;
+  /**
+   * Platform API credentials. RLS restricts the row to owner/admin and the
+   * client API layer never selects this column — see ChannelSafe.
+   */
+  credentials: Record<string, unknown>;
+  /** Our shared secret — the platform signs inbound webhooks with it. */
+  webhook_secret: string;
+  /** Skip the pending tray and fire straight to the kitchen. */
+  auto_accept: boolean;
+  /** Quoted prep time sent back to the platform on accept. */
+  prep_minutes: number;
+  /** Commission the platform takes, for margin reporting (informational). */
+  commission_pct: number;
+  /** Markup applied when pushing our menu OUT to the platform, never to inbound totals. */
+  price_markup_pct: number;
+  send_to_kitchen: boolean;
+  settings: Record<string, unknown>;
+  last_order_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+/**
+ * Channel rows as the client sees them: `credentials` is never selected, so the
+ * UI works off a boolean instead of the secret material itself.
+ */
+export type ChannelSafe = Omit<Channel, 'credentials'> & { has_credentials: boolean };
+
+/** A normalized inbound line. `recipe_id` is null when no recipe matched by name. */
+export interface ChannelOrderLine {
+  name: string;
+  qty: number;
+  price: number;
+  recipe_id: string | null;
+  notes?: string | null;
+}
+
+export interface ChannelOrder {
+  id: string;
+  org_id: string;
+  channel_id: string;
+  provider: ChannelProvider;
+  /** The platform's order id — idempotency key for their webhook retries. */
+  external_id: string;
+  /** Short human code the courier/guest quotes. */
+  external_display_id: string;
+  status: ChannelOrderStatus;
+  order_id: string | null;
+  items: ChannelOrderLine[];
+  gross: number;
+  customer_name: string;
+  order_type: OrderType;
+  notes: string | null;
+  fulfillment: Record<string, unknown>;
+  raw: Record<string, unknown>;
+  reject_reason: string | null;
+  received_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+}

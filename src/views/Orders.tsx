@@ -27,6 +27,14 @@ const TYPE_LABEL: Record<OrderType, string> = {
   delivery: "Delivery",
 };
 
+/** Non-POS origins get a badge so platform orders are obvious in the history. */
+const SOURCE_LABEL: Record<string, string> = {
+  storefront: "Online",
+  wolt: "Wolt",
+  ubereats: "Uber Eats",
+  lieferando: "Lieferando",
+};
+
 const STATUS_TONE: Record<OrderStatus, "green" | "amber" | "rose" | "neutral"> = {
   paid: "green",
   open: "amber",
@@ -196,6 +204,9 @@ function OrderRow({
             <p className="text-sm font-medium text-white">
               {order.order_number}
               <span className="ml-2 text-xs text-zinc-500">{TYPE_LABEL[order.order_type]}</span>
+              {SOURCE_LABEL[order.source] && (
+                <Badge tone="violet" className="ml-2">{SOURCE_LABEL[order.source]}</Badge>
+              )}
               {order.guest_name && <span className="ml-2 text-xs text-zinc-500">· {order.guest_name}</span>}
             </p>
             <p className="truncate text-xs text-zinc-500">
