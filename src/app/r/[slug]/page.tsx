@@ -3,7 +3,7 @@ import Storefront from "@/views/Storefront";
 import { fetchPublicMenuServer } from "@/lib/api/public-server";
 
 type Params = Promise<{ slug: string }>;
-type Search = Promise<{ table?: string }>;
+type Search = Promise<{ table?: string; order?: string }>;
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug } = await params;
@@ -27,7 +27,8 @@ export default async function StorefrontPage({
   searchParams: Search;
 }) {
   const { slug } = await params;
-  const { table } = await searchParams;
+  const { table, order } = await searchParams;
   const initialMenu = await fetchPublicMenuServer(slug);
-  return <Storefront slug={slug} tableName={table ?? null} initialMenu={initialMenu} />;
+  const orderType = order === "takeaway" ? "takeaway" : "dine_in";
+  return <Storefront slug={slug} tableName={orderType === "takeaway" ? null : (table ?? null)} orderType={orderType} initialMenu={initialMenu} />;
 }

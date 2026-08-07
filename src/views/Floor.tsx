@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, CalendarClock, Armchair, Users, Phone, QrCode, Printer } from "lucide-react";
+import { Plus, CalendarClock, Armchair, Users, Phone, QrCode, Printer, ShoppingBag } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -13,6 +13,7 @@ import {
   EmptyState,
   PageSkeleton,
 } from "@/components/ui";
+import { QrCode as QrCodeImage } from "@/components/QrCode";
 import { useTables, useReservations, useInvalidate } from "@/lib/hooks/data";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -297,24 +298,30 @@ export default function Floor() {
         )}
       </Card>
 
-      {/* QR codes for table ordering */}
-      <Modal open={showQr} onClose={() => setShowQr(false)} title="Table QR codes — scan to order" wide>
+      {/* QR codes for table ordering + takeaway */}
+      <Modal open={showQr} onClose={() => setShowQr(false)} title="QR codes — scan to order" wide>
         <div className="space-y-4">
           <p className="text-sm text-zinc-400">
-            Print these and place one on each table. Guests scan to browse your menu and order straight
-            to the kitchen — no app needed.
+            Print these and place one on each table, plus the takeaway one at the counter or front door.
+            Guests scan to browse your menu and order straight to the kitchen — no app needed.
           </p>
           <div className="grid max-h-96 grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3" id="qr-grid">
+            <div className="rounded-xl border border-line bg-white p-3 text-center">
+              <QrCodeImage
+                value={`${window.location.origin}/r/${org?.slug}?order=takeaway`}
+                size={112}
+                className="mx-auto"
+              />
+              <p className="mt-1.5 flex items-center justify-center gap-1 font-display text-sm font-bold text-zinc-900">
+                <ShoppingBag className="h-3.5 w-3.5" /> Takeaway
+              </p>
+              <p className="text-[10px] text-zinc-500">Scan to order for pickup</p>
+            </div>
             {tables.map((t) => {
               const url = `${window.location.origin}/r/${org?.slug}?table=${encodeURIComponent(t.name)}`;
               return (
                 <div key={t.id} className="rounded-xl border border-line bg-white p-3 text-center">
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(url)}`}
-                    alt={`QR for table ${t.name}`}
-                    className="mx-auto h-28 w-28"
-                    loading="lazy"
-                  />
+                  <QrCodeImage value={url} size={112} className="mx-auto" />
                   <p className="mt-1.5 font-display text-sm font-bold text-zinc-900">Table {t.name}</p>
                   <p className="text-[10px] text-zinc-500">Scan to order</p>
                 </div>

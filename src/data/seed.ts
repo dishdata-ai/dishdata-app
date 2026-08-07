@@ -175,7 +175,7 @@ export function buildSeed(orgId: string): SeedBundle {
     ings: [string, string, number, number, string | null][], // [name, qtyDisplay, qtyNumeric, cost, inventoryName]
   ) => {
     const id = uid();
-    recipes.push({ id, org_id: orgId, name, category, price, prep_minutes: prep, emoji, image_url: null, is_active: true });
+    recipes.push({ id, org_id: orgId, name, category, price, prep_minutes: prep, emoji, image_url: null, is_active: true, sold_out_until: null });
     for (const [iname, qd, qn, cost, invName] of ings) {
       recipe_ingredients.push({
         id: uid(), org_id: orgId, recipe_id: id, name: iname, qty_display: qd,

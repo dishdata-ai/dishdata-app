@@ -7,17 +7,19 @@ import { Card, Button, Badge, Input, Field, Modal, ProgressBar } from "@/compone
 import { fetchPublicMenu, placePublicOrder, placePublicReservation, type PublicMenu } from "@/lib/api/public";
 import { publicLoyaltySummary, publicLoyaltyClaim, publicLoyaltyRedeem, type LoyaltySummary } from "@/lib/api/loyalty";
 import type { LoyaltyActionType } from "@/lib/api/database.types";
-import { currencyFormatter } from "@/lib/calc";
+import { currencyFormatter, isSoldOut } from "@/lib/calc";
 import { cn, errorMessage, fmtNumber } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 
 export default function Storefront({
   slug,
   tableName,
+  orderType = "dine_in",
   initialMenu = null,
 }: {
   slug: string;
   tableName: string | null;
+  orderType?: "dine_in" | "takeaway";
   initialMenu?: PublicMenu | null;
 }) {
   const menuQ = useQuery({
@@ -100,7 +102,7 @@ export default function Storefront({
         guestName.trim() || "Guest",
         tableName,
         notes.trim() || null,
-        { email: activeEmail, code: voucher?.code ?? null },
+        { email: activeEmail, code: voucher?.code ?? null, orderType },
       );
       // If the restaurant accepts online payments, start a Stripe Checkout.
       // Otherwise (409 / no Stripe) fall back to pay-at-counter.
@@ -185,6 +187,7 @@ export default function Storefront({
           )}
           <h1 className="font-display text-3xl font-bold text-white">{menu.org.name}</h1>
           {tableName && <Badge tone="cyan">Ordering for table {tableName}</Badge>}
+          {orderType === "takeaway" && <Badge tone="cyan">Takeaway order</Badge>}
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => setReserving(true)}>
               <CalendarClock className="h-4 w-4" /> Book a Table
@@ -206,8 +209,12 @@ export default function Storefront({
                 .filter((r) => r.category === cat)
                 .map((r) => {
                   const qty = cart.get(r.id) ?? 0;
+                  const soldOut = isSoldOut(r);
                   return (
-                    <Card key={r.id} className={cn("flex items-center gap-3 p-3", qty > 0 && "border-brand-400/40")}>
+                    <Card
+                      key={r.id}
+                      className={cn("flex items-center gap-3 p-3", qty > 0 && "border-brand-400/40", soldOut && "opacity-50")}
+                    >
                       {r.image_url ? (
                         <img src={r.image_url} alt={r.name} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
                       ) : (
@@ -219,7 +226,9 @@ export default function Storefront({
                         <p className="font-semibold text-white">{r.name}</p>
                         <p className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>
-                      {qty === 0 ? (
+                      {soldOut ? (
+                        <Badge tone="neutral">Sold out</Badge>
+                      ) : qty === 0 ? (
                         <button
                           onClick={() => setQty(r.id, 1)}
                           className="cursor-pointer rounded-xl bg-gradient-to-r from-brand-500 to-accent-400 p-2 text-zinc-950 transition-all active:scale-90"

@@ -15,6 +15,22 @@ export const marginPct = (r: RecipeWithIngredients) =>
 export const foodCostPct = (r: RecipeWithIngredients) =>
   r.price > 0 ? (recipeCost(r) / r.price) * 100 : 0;
 
+/** Sentinel for "sold out indefinitely" — far enough out it never lapses on its own. */
+export const SOLD_OUT_INDEFINITELY = "9999-12-31T00:00:00.000Z";
+
+/** ISO timestamp for the end of today (local time) — used for "sold out today" toggles. */
+export function endOfToday(): string {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.toISOString();
+}
+
+export const isSoldOut = (r: Pick<Recipe, "sold_out_until">) =>
+  !!r.sold_out_until && new Date(r.sold_out_until) > new Date();
+
+export const isSoldOutIndefinitely = (r: Pick<Recipe, "sold_out_until">) =>
+  !!r.sold_out_until && new Date(r.sold_out_until).getUTCFullYear() >= 9999;
+
 /** Units sold per recipe id across orders. */
 export function unitsSold(orders: Order[]): Map<string, number> {
   const map = new Map<string, number>();

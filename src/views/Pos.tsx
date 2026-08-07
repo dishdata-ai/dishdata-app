@@ -39,6 +39,7 @@ import { checkoutOrder, markOrderPaid, setKitchenStatus, type CheckoutResult } f
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, OrderType, PaymentMethod } from "@/lib/api/database.types";
+import { isSoldOut } from "@/lib/calc";
 
 // Category pills are derived from the menu actually loaded (see `categories`
 // below) rather than a fixed list — restaurants use their own taxonomies
@@ -363,7 +364,10 @@ export default function Pos() {
     (CheckoutResult & { lines: BillLine[]; tax: number; tip: number; method: string }) | null
   >(null);
 
-  const recipes = useMemo(() => (recipesQ.data ?? []).filter((r) => r.is_active), [recipesQ.data]);
+  const recipes = useMemo(
+    () => (recipesQ.data ?? []).filter((r) => r.is_active && !isSoldOut(r)),
+    [recipesQ.data],
+  );
 
   // Event/popup menus: when one is picked, the grid shows only its dishes.
   const activeEventMenus = useMemo(

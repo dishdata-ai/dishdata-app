@@ -5,6 +5,7 @@ import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoNotification } from "@/lib/api/notifications";
 import type { Org, Recipe, Order, Reservation } from "@/lib/api/database.types";
+import { isSoldOut } from "@/lib/calc";
 
 export interface PublicMenu {
   org: Pick<Org, "id" | "name" | "slug" | "logo_url" | "accent_color" | "currency" | "tax_rate">;
@@ -49,8 +50,9 @@ export async function placePublicOrder(
   guestName: string,
   tableName: string | null,
   notes: string | null,
-  opts?: { email?: string | null; code?: string | null },
+  opts?: { email?: string | null; code?: string | null; orderType?: "dine_in" | "takeaway" },
 ): Promise<{ order_number: string; total: number; discount?: number; order_id: string }> {
+  const orderType = opts?.orderType ?? "dine_in";
   if (!isSupabaseConfigured) {
     await demoDelay();
     const org = dOrgs.list().find((o) => o.slug === slug);
@@ -58,7 +60,7 @@ export async function placePublicOrder(
     const recipes = dRecipes.list({ org_id: org.id } as Partial<Recipe>);
     const lines = items.map((it) => {
       const r = recipes.find((x) => x.id === it.recipe_id && x.is_active);
-      if (!r) throw new Error("Item unavailable");
+      if (!r || isSoldOut(r)) throw new Error("Item unavailable");
       return { recipe_id: r.id, name: r.name, qty: it.qty, price: r.price };
     });
     const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
@@ -67,7 +69,7 @@ export async function placePublicOrder(
     const orderId = uid();
     const orderNumber = `ORD-${String(dOrders.list({ org_id: org.id } as Partial<Order>).length + 1).padStart(4, "0")}`;
     dOrders.insert({
-      id: orderId, org_id: org.id, order_number: orderNumber, order_type: "dine_in",
+      id: orderId, org_id: org.id, order_number: orderNumber, order_type: orderType,
       table_id: null, customer_id: null, guest_name: guestName, items: lines,
       subtotal, tax, tip: 0, total, discount: 0, status: "open", kitchen_status: "new",
       kitchen_notes: [tableName ? `Table: ${tableName}` : null, notes].filter(Boolean).join(". ") || null,
@@ -75,7 +77,10 @@ export async function placePublicOrder(
     });
     pushDemoNotification(
       org.id, "public_order", `Online order ${orderNumber}`,
-      `${guestName}${tableName ? ` at table ${tableName}` : ""} — pay at counter`, "kitchen",
+      orderType === "takeaway"
+        ? `${guestName} — takeaway, pay at counter`
+        : `${guestName}${tableName ? ` at table ${tableName}` : ""} — pay at counter`,
+      "kitchen",
     );
     return { order_number: orderNumber, total, order_id: orderId };
   }
@@ -87,6 +92,7 @@ export async function placePublicOrder(
     _notes: notes,
     _email: opts?.email ?? null,
     _code: opts?.code ?? null,
+    _order_type: orderType,
   });
   if (error) throw error;
   return data as { order_number: string; total: number; discount?: number; order_id: string };

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2 } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -20,7 +20,16 @@ import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, type NewRecipeInput } from "@/lib/api/recipes";
 import { uploadOrgAsset } from "@/lib/api/orgs";
-import { recipeCost, marginPct, popularityScores, type RecipeWithIngredients } from "@/lib/calc";
+import {
+  recipeCost,
+  marginPct,
+  popularityScores,
+  isSoldOut,
+  isSoldOutIndefinitely,
+  endOfToday,
+  SOLD_OUT_INDEFINITELY,
+  type RecipeWithIngredients,
+} from "@/lib/calc";
 import { toast } from "@/lib/toast";
 import { cn, fmtPct, uid } from "@/lib/utils";
 
@@ -237,6 +246,20 @@ export default function Recipes() {
     }
   };
 
+  const setSoldOut = async (r: RecipeWithIngredients, until: string | null) => {
+    try {
+      await updateRecipe(org!.id, r.id, { sold_out_until: until });
+      invalidate("recipes");
+      setSelected((s) => (s && s.id === r.id ? { ...s, sold_out_until: until } : s));
+      toast.success(
+        until ? `${r.name} marked sold out` : `${r.name} is available again`,
+        until === SOLD_OUT_INDEFINITELY ? "Until you turn it back on" : until ? "Clears automatically tonight" : "",
+      );
+    } catch (e) {
+      toast.error("Could not update", e instanceof Error ? e.message : "");
+    }
+  };
+
   const removeRecipe = async (r: RecipeWithIngredients) => {
     try {
       await deleteRecipe(org!.id, r.id);
@@ -304,16 +327,24 @@ export default function Recipes() {
             const cost = recipeCost(r);
             const margin = marginPct(r);
             const pop = popularity.get(r.id) ?? 0;
+            const soldOut = isSoldOut(r);
             return (
               <button key={r.id} onClick={() => setSelected(r)} className="cursor-pointer text-left">
-                <Card className="h-full overflow-hidden p-0 transition-all hover:border-brand-400/40 hover:shadow-lg hover:shadow-brand-500/10">
+                <Card className={cn("h-full overflow-hidden p-0 transition-all hover:border-brand-400/40 hover:shadow-lg hover:shadow-brand-500/10", soldOut && "opacity-60")}>
                   {r.image_url && <img src={r.image_url} alt={r.name} className="h-28 w-full object-cover" />}
                   <div className="p-5">
-                    <div className="flex items-start justify-between">
+                    <div className="flex items-start justify-between gap-2">
                       {!r.image_url && <span className="text-4xl">{r.emoji}</span>}
-                      <Badge tone={margin >= 70 ? "green" : margin >= 60 ? "cyan" : "amber"} className={r.image_url ? "" : "ml-auto"}>
-                        {fmtPct(margin, 0)} margin
-                      </Badge>
+                      <div className={cn("flex items-center gap-1.5", r.image_url && "ml-auto")}>
+                        {soldOut && (
+                          <Badge tone="rose">
+                            {isSoldOutIndefinitely(r) ? "Sold out" : "Sold out today"}
+                          </Badge>
+                        )}
+                        <Badge tone={margin >= 70 ? "green" : margin >= 60 ? "cyan" : "amber"}>
+                          {fmtPct(margin, 0)} margin
+                        </Badge>
+                      </div>
                     </div>
                     <h3 className="mt-3 font-semibold text-white">{r.name}</h3>
                     <p className="text-xs text-zinc-500">{r.category}</p>
@@ -398,6 +429,39 @@ export default function Recipes() {
                 </div>
               ))}
             </div>
+            <div className="rounded-xl border border-line bg-white/[0.02] p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Availability</p>
+                {isSoldOut(selected) && (
+                  <Badge tone="rose">{isSoldOutIndefinitely(selected) ? "Sold out indefinitely" : "Sold out today"}</Badge>
+                )}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button
+                  variant={!isSoldOut(selected) ? "primary" : "ghost"}
+                  className="flex-1 py-2 text-xs"
+                  onClick={() => setSoldOut(selected, null)}
+                  disabled={!isSoldOut(selected)}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Available
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="flex-1 py-2 text-xs"
+                  onClick={() => setSoldOut(selected, endOfToday())}
+                >
+                  <Ban className="h-3.5 w-3.5" /> Sold out today
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="flex-1 py-2 text-xs"
+                  onClick={() => setSoldOut(selected, SOLD_OUT_INDEFINITELY)}
+                >
+                  <Ban className="h-3.5 w-3.5" /> Sold out indefinitely
+                </Button>
+              </div>
+            </div>
+
             <div className="flex gap-2">
               <Button
                 variant="ghost"
