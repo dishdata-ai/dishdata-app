@@ -167,7 +167,7 @@ export default function Floor() {
         subtitle="Tap a table to cycle it: open → seated → cleaning → open."
         action={
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setShowQr(true)} disabled={tables.length === 0}>
+            <Button variant="ghost" onClick={() => setShowQr(true)}>
               <QrCode className="h-4 w-4" /> QR Codes
             </Button>
             <Button variant="ghost" onClick={() => setAddingTable(true)}>
