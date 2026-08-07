@@ -8,6 +8,7 @@ import {
   Badge,
   Modal,
   Input,
+  Textarea,
   Select,
   Field,
   ProgressBar,
@@ -55,6 +56,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const [price, setPrice] = useState(recipe ? String(recipe.price) : "");
   const [prep, setPrep] = useState(recipe ? String(recipe.prep_minutes) : "");
   const [emoji, setEmoji] = useState(recipe?.emoji ?? "🍽️");
+  const [description, setDescription] = useState(recipe?.description ?? "");
   const [rows, setRows] = useState<IngRow[]>(
     recipe && recipe.ingredients.length
       ? recipe.ingredients.map((i) => ({
@@ -92,12 +94,14 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           price: +price,
           prep_minutes: +prep || 10,
           emoji: emoji || "🍽️",
+          description: description.trim() || null,
         });
         await replaceRecipeIngredients(org!.id, recipe!.id, ingredients);
         return recipe!.id;
       }
       const input: NewRecipeInput = {
-        name: name.trim(), category, price: +price, prep_minutes: +prep || 10, emoji: emoji || "🍽️", ingredients,
+        name: name.trim(), category, price: +price, prep_minutes: +prep || 10, emoji: emoji || "🍽️",
+        description: description.trim() || null, ingredients,
       };
       return createRecipe(org!.id, input);
     },
@@ -137,6 +141,15 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           <Input type="number" min="0" value={prep} onChange={(e) => setPrep(e.target.value)} placeholder="15" />
         </Field>
       </div>
+
+      <Field label="Description (shown to customers on the menu)">
+        <Textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="e.g. Slow-roasted duck breast, cherry jus, charred greens"
+          rows={2}
+        />
+      </Field>
 
       <div>
         <p className="mb-1.5 text-xs font-medium text-zinc-400">
@@ -392,6 +405,7 @@ export default function Recipes() {
                 <p className="text-xs text-zinc-500">menu price</p>
               </div>
             </div>
+            {selected.description && <p className="text-sm text-zinc-400">{selected.description}</p>}
             <div className="rounded-xl border border-line bg-white/[0.02]">
               <div className="border-b border-line px-4 py-2.5 text-xs font-semibold tracking-wide text-zinc-400 uppercase">
                 Cost breakdown

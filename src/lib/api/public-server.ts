@@ -23,6 +23,7 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
     .select("*")
     .eq("org_id", org.id)
     .eq("is_active", true)
+    .not("name", "ilike", "%(Tournament)%")
     .order("category");
 
   return { org: org as PublicMenu["org"], recipes: (recipes as Recipe[]) ?? [] };

@@ -34,6 +34,7 @@ export interface NewRecipeInput {
   price: number;
   prep_minutes: number;
   emoji: string;
+  description: string | null;
   ingredients: {
     name: string;
     qty_display: string;
@@ -49,7 +50,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
     const recipe: Recipe = {
       id: uid(), org_id: orgId, name: input.name, category: input.category,
       price: input.price, prep_minutes: input.prep_minutes, emoji: input.emoji,
-      image_url: null, is_active: true, sold_out_until: null,
+      description: input.description, image_url: null, is_active: true, sold_out_until: null,
     };
     dRecipes.insert(recipe);
     for (const ing of input.ingredients) {
@@ -63,7 +64,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
     .from("recipes")
     .insert({
       org_id: orgId, name: input.name, category: input.category, price: input.price,
-      prep_minutes: input.prep_minutes, emoji: input.emoji,
+      prep_minutes: input.prep_minutes, emoji: input.emoji, description: input.description,
     })
     .select("id")
     .single();

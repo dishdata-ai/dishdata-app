@@ -42,6 +42,7 @@ export default function Storefront({
     note: "",
   });
 
+  const [zoomedItem, setZoomedItem] = useState<{ image_url: string; name: string } | null>(null);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   const [loyaltyEmail, setLoyaltyEmail] = useState("");
   const [activeEmail, setActiveEmail] = useState<string | null>(null);
@@ -216,7 +217,12 @@ export default function Storefront({
                       className={cn("flex items-center gap-3 p-3", qty > 0 && "border-brand-400/40", soldOut && "opacity-50")}
                     >
                       {r.image_url ? (
-                        <img src={r.image_url} alt={r.name} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+                        <button
+                          onClick={() => setZoomedItem({ image_url: r.image_url!, name: r.name })}
+                          className="h-14 w-14 shrink-0 cursor-zoom-in overflow-hidden rounded-xl"
+                        >
+                          <img src={r.image_url} alt={r.name} className="h-full w-full object-cover" />
+                        </button>
                       ) : (
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white/[0.03] text-2xl">
                           {r.emoji}
@@ -224,7 +230,8 @@ export default function Storefront({
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-white">{r.name}</p>
-                        <p className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
+                        {r.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{r.description}</p>}
+                        <p className="mt-0.5 text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>
                       {soldOut ? (
                         <Badge tone="neutral">Sold out</Badge>
@@ -378,6 +385,13 @@ export default function Storefront({
             setLoyaltyOpen(false);
           }}
         />
+      </Modal>
+
+      {/* Photo zoom */}
+      <Modal open={!!zoomedItem} onClose={() => setZoomedItem(null)} title={zoomedItem?.name ?? ""} wide>
+        {zoomedItem && (
+          <img src={zoomedItem.image_url} alt={zoomedItem.name} className="w-full rounded-xl object-cover" />
+        )}
       </Modal>
     </div>
   );

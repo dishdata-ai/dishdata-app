@@ -12,6 +12,9 @@ export interface PublicMenu {
   recipes: Recipe[];
 }
 
+/** Tournament-priced items are for in-restaurant/event sale via POS only — never on the public QR/online menu. */
+export const isTournamentItem = (r: Pick<Recipe, "name">) => /\(tournament\)/i.test(r.name);
+
 const dOrgs = demoTable<Org>("orgs");
 const dRecipes = demoTable<Recipe>("recipes");
 const dOrders = demoTable<Order>("orders");
@@ -24,7 +27,9 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     if (!org) return null;
     return {
       org,
-      recipes: dRecipes.list({ org_id: org.id, is_active: true } as Partial<Recipe>),
+      recipes: dRecipes
+        .list({ org_id: org.id, is_active: true } as Partial<Recipe>)
+        .filter((r) => !isTournamentItem(r)),
     };
   }
   const sb = getSupabase();
@@ -40,6 +45,7 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     .select("*")
     .eq("org_id", org.id)
     .eq("is_active", true)
+    .not("name", "ilike", "%(Tournament)%")
     .order("category");
   return { org: org as PublicMenu["org"], recipes: (recipes as Recipe[]) ?? [] };
 }
@@ -60,7 +66,7 @@ export async function placePublicOrder(
     const recipes = dRecipes.list({ org_id: org.id } as Partial<Recipe>);
     const lines = items.map((it) => {
       const r = recipes.find((x) => x.id === it.recipe_id && x.is_active);
-      if (!r || isSoldOut(r)) throw new Error("Item unavailable");
+      if (!r || isSoldOut(r) || isTournamentItem(r)) throw new Error("Item unavailable");
       return { recipe_id: r.id, name: r.name, qty: it.qty, price: r.price };
     });
     const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
