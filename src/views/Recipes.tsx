@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2 } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -273,6 +273,21 @@ export default function Recipes() {
     }
   };
 
+  const toggleVisible = async (r: RecipeWithIngredients) => {
+    try {
+      const nextActive = !r.is_active;
+      await updateRecipe(org!.id, r.id, { is_active: nextActive });
+      invalidate("recipes");
+      setSelected((s) => (s && s.id === r.id ? { ...s, is_active: nextActive } : s));
+      toast.success(
+        nextActive ? `${r.name} is back on the menu` : `${r.name} hidden from the menu`,
+        nextActive ? "" : "Removed from POS and the public menu — order history is kept",
+      );
+    } catch (e) {
+      toast.error("Could not update", e instanceof Error ? e.message : "");
+    }
+  };
+
   const removeRecipe = async (r: RecipeWithIngredients) => {
     try {
       await deleteRecipe(org!.id, r.id);
@@ -343,12 +358,13 @@ export default function Recipes() {
             const soldOut = isSoldOut(r);
             return (
               <button key={r.id} onClick={() => setSelected(r)} className="cursor-pointer text-left">
-                <Card className={cn("h-full overflow-hidden p-0 transition-all hover:border-brand-400/40 hover:shadow-lg hover:shadow-brand-500/10", soldOut && "opacity-60")}>
+                <Card className={cn("h-full overflow-hidden p-0 transition-all hover:border-brand-400/40 hover:shadow-lg hover:shadow-brand-500/10", (soldOut || !r.is_active) && "opacity-60")}>
                   {r.image_url && <img src={r.image_url} alt={r.name} className="h-28 w-full object-cover" />}
                   <div className="p-5">
                     <div className="flex items-start justify-between gap-2">
                       {!r.image_url && <span className="text-4xl">{r.emoji}</span>}
                       <div className={cn("flex items-center gap-1.5", r.image_url && "ml-auto")}>
+                        {!r.is_active && <Badge tone="neutral">Hidden</Badge>}
                         {soldOut && (
                           <Badge tone="rose">
                             {isSoldOutIndefinitely(r) ? "Sold out" : "Sold out today"}
@@ -474,6 +490,32 @@ export default function Recipes() {
                   <Ban className="h-3.5 w-3.5" /> Sold out indefinitely
                 </Button>
               </div>
+            </div>
+
+            <div className="rounded-xl border border-line bg-white/[0.02] p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Visibility</p>
+                {!selected.is_active && <Badge tone="neutral">Hidden from menu</Badge>}
+              </div>
+              <p className="mt-1 text-xs text-zinc-500">
+                Hiding removes it from POS and the public menu entirely — no badge, it just disappears.
+                Different from Sold out, which still shows customers the item with a "Sold out" label.
+              </p>
+              <Button
+                variant="ghost"
+                className="mt-2 w-full py-2 text-xs"
+                onClick={() => toggleVisible(selected)}
+              >
+                {selected.is_active ? (
+                  <>
+                    <EyeOff className="h-3.5 w-3.5" /> Hide from menu
+                  </>
+                ) : (
+                  <>
+                    <Eye className="h-3.5 w-3.5" /> Show on menu
+                  </>
+                )}
+              </Button>
             </div>
 
             <div className="flex gap-2">
