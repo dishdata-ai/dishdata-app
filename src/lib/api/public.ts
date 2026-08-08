@@ -4,7 +4,7 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoNotification } from "@/lib/api/notifications";
-import type { Org, Recipe, Order, Reservation } from "@/lib/api/database.types";
+import type { Org, Recipe, Order, Reservation, EventMenu, EventMenuItem } from "@/lib/api/database.types";
 import { isSoldOut } from "@/lib/calc";
 
 export interface PublicMenu {
@@ -19,17 +19,49 @@ const dOrgs = demoTable<Org>("orgs");
 const dRecipes = demoTable<Recipe>("recipes");
 const dOrders = demoTable<Order>("orders");
 const dReservations = demoTable<Reservation>("reservations");
+const dEventMenus = demoTable<EventMenu>("event_menus");
+const dEventMenuItems = demoTable<EventMenuItem>("event_menu_items");
+
+/**
+ * Recipes belonging to ANY event menu (e.g. a tournament) are POS/event-only —
+ * naming them "(Tournament)" is a convention, not a guarantee, so membership
+ * in event_menu_items is the real signal. The one exception: an event menu
+ * explicitly marked show_on_website replaces the catalog with just its items.
+ */
+async function eventMenuRecipeIds(orgId: string): Promise<Set<string>> {
+  if (!isSupabaseConfigured) {
+    return new Set(dEventMenuItems.list({ org_id: orgId } as Partial<EventMenuItem>).map((i) => i.recipe_id));
+  }
+  const { data } = await getSupabase().from("event_menu_items").select("recipe_id").eq("org_id", orgId);
+  return new Set((data ?? []).map((r) => r.recipe_id as string));
+}
 
 export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> {
   if (!isSupabaseConfigured) {
     await demoDelay();
     const org = dOrgs.list().find((o) => o.slug === slug);
     if (!org) return null;
+
+    const websiteMenu = dEventMenus
+      .list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
+    if (websiteMenu) {
+      const ids = new Set(
+        dEventMenuItems.list({ event_menu_id: websiteMenu.id } as Partial<EventMenuItem>).map((i) => i.recipe_id),
+      );
+      return {
+        org,
+        recipes: dRecipes
+          .list({ org_id: org.id, is_active: true } as Partial<Recipe>)
+          .filter((r) => ids.has(r.id)),
+      };
+    }
+
+    const eventIds = await eventMenuRecipeIds(org.id);
     return {
       org,
       recipes: dRecipes
         .list({ org_id: org.id, is_active: true } as Partial<Recipe>)
-        .filter((r) => !isTournamentItem(r)),
+        .filter((r) => !isTournamentItem(r) && !eventIds.has(r.id)),
     };
   }
   const sb = getSupabase();
@@ -40,13 +72,41 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     .maybeSingle();
   if (error) throw error;
   if (!org) return null;
-  const { data: recipes } = await sb
+
+  // An event menu explicitly shown on the website replaces the catalog with
+  // just its own items (e.g. a tournament-only ordering page).
+  const { data: websiteMenu } = await sb
+    .from("event_menus")
+    .select("id")
+    .eq("org_id", org.id)
+    .eq("is_active", true)
+    .eq("show_on_website", true)
+    .maybeSingle();
+
+  if (websiteMenu) {
+    const { data: items } = await sb
+      .from("event_menu_items")
+      .select("recipes!inner(*)")
+      .eq("event_menu_id", websiteMenu.id)
+      .eq("recipes.is_active", true);
+    return {
+      org: org as PublicMenu["org"],
+      recipes: (items ?? []).map((i) => i.recipes) as unknown as Recipe[],
+    };
+  }
+
+  // Default: full catalog, minus anything that belongs to an event menu
+  // (tournament/event-only) and minus the legacy "(Tournament)"-named items
+  // as defense in depth.
+  const eventIds = await eventMenuRecipeIds(org.id);
+  let query = sb
     .from("recipes")
     .select("*")
     .eq("org_id", org.id)
     .eq("is_active", true)
-    .not("name", "ilike", "%(Tournament)%")
-    .order("category");
+    .not("name", "ilike", "%(Tournament)%");
+  if (eventIds.size) query = query.not("id", "in", `(${[...eventIds].join(",")})`);
+  const { data: recipes } = await query.order("category");
   return { org: org as PublicMenu["org"], recipes: (recipes as Recipe[]) ?? [] };
 }
 
@@ -64,9 +124,20 @@ export async function placePublicOrder(
     const org = dOrgs.list().find((o) => o.slug === slug);
     if (!org) throw new Error("Restaurant not found");
     const recipes = dRecipes.list({ org_id: org.id } as Partial<Recipe>);
+    // Event-menu items are POS/event-only, except when their menu is the one
+    // currently swapped in for the website (see fetchPublicMenu).
+    const websiteMenu = dEventMenus
+      .list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
+    const allowedEventIds = websiteMenu
+      ? new Set(
+          dEventMenuItems.list({ event_menu_id: websiteMenu.id } as Partial<EventMenuItem>).map((i) => i.recipe_id),
+        )
+      : null;
+    const eventIds = await eventMenuRecipeIds(org.id);
     const lines = items.map((it) => {
       const r = recipes.find((x) => x.id === it.recipe_id && x.is_active);
-      if (!r || isSoldOut(r) || isTournamentItem(r)) throw new Error("Item unavailable");
+      const eventBlocked = eventIds.has(it.recipe_id) && !allowedEventIds?.has(it.recipe_id);
+      if (!r || isSoldOut(r) || isTournamentItem(r) || eventBlocked) throw new Error("Item unavailable");
       return { recipe_id: r.id, name: r.name, qty: it.qty, price: r.price };
     });
     const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);

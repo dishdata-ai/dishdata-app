@@ -44,6 +44,18 @@ export const lieferando: ChannelAdapter = {
     return str(p.restaurantId, str(obj(p.restaurant).id, str(p.storeId)));
   },
 
+  isNewOrder(payload) {
+    const p = obj(payload);
+    // Unlike Wolt/Uber, JET's exact event envelope is not public; treat any
+    // payload carrying lines as a new order and ignore bare status pings.
+    return arr(p.items).length > 0 || arr(p.orderItems).length > 0;
+  },
+
+  /** JET posts the order itself — nothing to fetch. */
+  fetchUrlOf() {
+    return null;
+  },
+
   parse(payload) {
     const p = obj(payload);
     const externalId = str(p.orderId, str(p.id, str(p.publicReference)));

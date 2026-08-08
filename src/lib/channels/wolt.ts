@@ -5,18 +5,28 @@ import {
 } from "@/lib/channels/types";
 
 /**
- * Wolt — Merchant API order push ("order injection").
+ * Wolt — Marketplace order integration (iPad-free / POS).
  *
- * Signature: hex HMAC-SHA256 of the raw body keyed with the shared secret, in
- * `X-Wolt-Signature`. Wolt quotes money in minor units and calls a location a
- * "venue".
+ * Like Uber, the webhook is a NOTIFICATION rather than the order:
+ *   { id, type: "order.notification",
+ *     order: { id, venue_id, status, resource_url }, created_at }
+ * The order itself is fetched from `order.resource_url`.
+ *
+ * Signature: hex HMAC-SHA256 of the raw body keyed with the webhook client
+ * secret, in the `WOLT-SIGNATURE` header (note: no `X-` prefix — unlike almost
+ * every other platform, and easy to get wrong).
+ *
+ * Wolt expects a 200; without one it retries 3 times at 5-second intervals.
+ *
+ * Money is in minor units. Quantity is `count`, not `quantity`.
+ *
+ * Docs: developer.wolt.com/docs/webhook + /docs/api/order
  */
 function items(payload: Record<string, unknown>): ParsedLine[] {
   return arr(payload.items).map((entry) => {
     const it = obj(entry);
     const unit = obj(it.unit_price);
-    // Wolt nests options under `options[].value`; flatten them into the note
-    // so the line still reads correctly on the kitchen ticket.
+    // Options are {name, value} pairs, e.g. {name: "In the burger", value: "Cheese"}.
     const opts = arr(it.options)
       .map((o) => {
         const op = obj(o);
@@ -25,7 +35,6 @@ function items(payload: Record<string, unknown>): ParsedLine[] {
       .filter(Boolean);
     return {
       name: str(it.name, "Item"),
-      // Wolt uses `count` for quantity.
       qty: num(it.count, num(it.quantity, 1)),
       price: unit.amount !== undefined ? fromMinor(unit.amount) : fromMinor(it.unit_price),
       notes: [...opts, str(it.comment)].filter(Boolean).join(" · ") || null,
@@ -38,15 +47,36 @@ export const wolt: ChannelAdapter = {
   label: "Wolt",
 
   verify({ raw, headers, secret }) {
-    const sig = headers.get("x-wolt-signature");
-    if (!sig) return "Missing X-Wolt-Signature header.";
+    // Wolt sends `WOLT-SIGNATURE` — not `X-Wolt-Signature`.
+    const sig = headers.get("wolt-signature");
+    if (!sig) return "Missing WOLT-SIGNATURE header.";
     const expected = createHmac("sha256", secret).update(raw, "utf8").digest("hex");
     return timingSafeEqual(sig.trim().toLowerCase(), expected) ? null : "Signature mismatch.";
   },
 
   storeIdOf(payload) {
     const p = obj(payload);
-    return str(obj(p.venue).id, str(p.venue_id, str(obj(p.store).id)));
+    // Notification: order.venue_id. Fetched order: venue.id.
+    return str(obj(p.order).venue_id, str(obj(p.venue).id, str(p.venue_id)));
+  },
+
+  isNewOrder(payload) {
+    const p = obj(payload);
+    const status = str(obj(p.order).status, str(p.order_status)).toUpperCase();
+    if (str(p.type).toLowerCase() === "order.notification") {
+      // Wolt reuses one notification type for the whole lifecycle — CREATED,
+      // PRODUCTION, READY, DELIVERED, CANCELED. Only CREATED is a new order.
+      return status === "CREATED" || status === "";
+    }
+    // Venue events (REJECTION_ALERT_TRIGGERED, OPENING_HOURS_UPDATED, …).
+    if (p.event_type) return false;
+    return arr(p.items).length > 0;
+  },
+
+  fetchUrlOf(payload) {
+    const p = obj(payload);
+    if (arr(p.items).length) return null; // already the full order
+    return str(obj(p.order).resource_url) || null;
   },
 
   parse(payload) {
@@ -54,20 +84,19 @@ export const wolt: ChannelAdapter = {
     const externalId = str(p.id, str(p.order_id));
     if (!externalId) throw new Error("Wolt payload has no order id.");
     const lines = items(p);
-    if (!lines.length) throw new Error("Wolt payload carried no line items.");
+    if (!lines.length) throw new Error("Wolt order carried no line items.");
 
     const price = obj(p.price);
     const delivery = obj(p.delivery);
-    // Wolt: "homedelivery" | "takeaway" | "eatin"
+    // homedelivery | pickup | self_delivery
     const type = str(delivery.type, str(p.type)).toLowerCase();
-    const consumer = obj(p.consumer);
 
     return {
       externalId,
       displayId: str(p.order_number, str(p.pickup_code, externalId.slice(-6))),
       storeId: wolt.storeIdOf(payload),
-      customerName: str(p.consumer_name, str(consumer.name, str(consumer.first_name))),
-      orderType: type.includes("home") || type.includes("deliv") ? "delivery" : "takeaway",
+      customerName: str(p.consumer_name, str(obj(p.consumer).name)),
+      orderType: type.includes("pickup") ? "takeaway" : "delivery",
       lines,
       gross: price.amount !== undefined
         ? fromMinor(price.amount)

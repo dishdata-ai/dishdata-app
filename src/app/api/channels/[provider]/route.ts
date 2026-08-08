@@ -1,11 +1,33 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
 import { adapterFor, isChannelProvider, matchRecipeId } from "@/lib/channels";
-import type { ChannelOrderLine } from "@/lib/api/database.types";
+import { getToken, fetchOrder, ackOrder, type PlatformCredentials } from "@/lib/channels/platform-api";
+import type { ChannelOrderLine, ChannelProvider } from "@/lib/api/database.types";
 
 // Signatures are computed over the exact request bytes, so the body must be
 // read raw and never re-serialized.
 export const runtime = "nodejs";
+
+/**
+ * Both Wolt and Uber send a notification carrying only an order id; the order
+ * itself has to be fetched with an authenticated GET.
+ */
+async function resolveOrder(
+  admin: SupabaseClient,
+  provider: ChannelProvider,
+  channelId: string,
+  url: string,
+): Promise<unknown> {
+  const { data: row } = await admin
+    .from("channels")
+    .select("credentials")
+    .eq("id", channelId)
+    .single();
+  const creds = (row?.credentials ?? {}) as PlatformCredentials;
+  const token = await getToken(admin, provider, channelId, creds);
+  return fetchOrder(url, token);
+}
 
 /**
  * POST /api/channels/{wolt|ubereats|lieferando}?store=<platform store id>
@@ -15,8 +37,9 @@ export const runtime = "nodejs";
  * inbox, and — when the channel is set to auto-accept — turns it straight
  * into a real order.
  *
- * Always returns 200 once the payload is safely persisted, even if parsing
- * failed: these platforms retry hard on non-2xx and a redelivery loop is worse
+ * Always returns 200 with an EMPTY body once the payload is safely persisted,
+ * even if parsing failed: Uber and Wolt both require a bare 200 to stop
+ * retrying (Uber backs off 7 times, Wolt 3), and a redelivery loop is worse
  * than a row marked `failed` that staff can see and replay.
  */
 export async function POST(
@@ -73,9 +96,19 @@ export async function POST(
     return NextResponse.json({ error: "Channel is paused." }, { status: 409 });
   }
 
-  // --- Parse. A failure is recorded, not dropped. --------------------------
+  // Both platforms deliver status changes, courier updates and venue alerts to
+  // this same endpoint. Acknowledge them so they stop retrying, but never let
+  // them create a ticket.
+  if (!adapter.isNewOrder(payload)) {
+    return new NextResponse(null, { status: 200 });
+  }
+
+  // --- Resolve + parse. A failure is recorded, not dropped. ----------------
   let parsed;
   try {
+    // Notification-only: fetch the real order before parsing.
+    const fetchUrl = adapter.fetchUrlOf(payload);
+    if (fetchUrl) payload = await resolveOrder(admin, provider, channel.id, fetchUrl);
     parsed = adapter.parse(payload);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Could not parse payload.";
@@ -96,7 +129,7 @@ export async function POST(
       reject_reason: message,
     }, { onConflict: "org_id,provider,external_id", ignoreDuplicates: true });
 
-    return NextResponse.json({ received: true, parsed: false, error: message });
+    return new NextResponse(null, { status: 200 });
   }
 
   // --- Map lines to recipes so accepting can deplete stock. ----------------
@@ -123,14 +156,7 @@ export async function POST(
     .eq("external_id", parsed.externalId)
     .maybeSingle();
 
-  if (existing) {
-    return NextResponse.json({
-      received: true,
-      deduped: true,
-      channel_order_id: existing.id,
-      status: existing.status,
-    });
-  }
+  if (existing) return new NextResponse(null, { status: 200 });
 
   const { data: inserted, error: insErr } = await admin
     .from("channel_orders")
@@ -154,9 +180,7 @@ export async function POST(
 
   if (insErr) {
     // A concurrent retry can win the race on the unique key — that is success.
-    if (insErr.code === "23505") {
-      return NextResponse.json({ received: true, deduped: true });
-    }
+    if (insErr.code === "23505") return new NextResponse(null, { status: 200 });
     return NextResponse.json({ error: insErr.message }, { status: 500 });
   }
 
@@ -173,21 +197,37 @@ export async function POST(
     });
     if (accErr) {
       // The order is safely in the inbox; staff can still accept it manually.
-      return NextResponse.json({
-        received: true, channel_order_id: inserted.id,
-        auto_accepted: false, error: accErr.message,
-      });
+      await admin.from("channels").update({
+        last_error: `Auto-accept failed: ${accErr.message}`,
+        last_error_at: new Date().toISOString(),
+      }).eq("id", channel.id);
+      return new NextResponse(null, { status: 200 });
     }
-    return NextResponse.json({
-      received: true, channel_order_id: inserted.id,
-      auto_accepted: true, order: accepted,
-    });
+    // Confirm on the platform too — Uber auto-cancels an unanswered order
+    // after ~11.5 minutes no matter what our side thinks.
+    try {
+      const { data: full } = await admin
+        .from("channels")
+        .select("credentials, prep_minutes")
+        .eq("id", channel.id)
+        .single();
+      const creds = (full?.credentials ?? {}) as PlatformCredentials;
+      const token = await getToken(admin, provider, channel.id, creds);
+      await ackOrder({
+        provider, externalId: parsed.externalId, token, accept: true,
+        prepMinutes: full?.prep_minutes ?? undefined,
+        reference: (accepted as { order_number?: string } | null)?.order_number,
+      });
+    } catch (e) {
+      await admin.from("channels").update({
+        last_error: `Accepted locally but not on the platform: ${
+          e instanceof Error ? e.message : "unknown"
+        }`,
+        last_error_at: new Date().toISOString(),
+      }).eq("id", channel.id);
+    }
+    return new NextResponse(null, { status: 200 });
   }
 
-  return NextResponse.json({
-    received: true,
-    channel_order_id: inserted.id,
-    status: "pending",
-    unmapped_lines: items.filter((i) => !i.recipe_id).length,
-  });
+  return new NextResponse(null, { status: 200 });
 }

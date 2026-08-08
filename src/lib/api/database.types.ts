@@ -158,6 +158,9 @@ export interface Recipe {
   emoji: string;
   image_url: string | null;
   description: string | null;
+  name_de: string | null;
+  description_de: string | null;
+  category_de: string | null;
   is_active: boolean;
   /** null = available. In the future = sold out until then (today's cutoff or a far-future "indefinitely" date). */
   sold_out_until: string | null;

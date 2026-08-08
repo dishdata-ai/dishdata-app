@@ -14,7 +14,7 @@ import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
   connectChannel, updateChannel, disconnectChannel,
-  acceptChannelOrder, rejectChannelOrder, webhookUrl,
+  acceptChannelOrder, rejectChannelOrder, ackChannelOrder, webhookUrl,
 } from "@/lib/api/channels";
 import { PROVIDERS, PROVIDER_LABEL, PROVIDER_STORE_LABEL } from "@/lib/channels/providers";
 import { toast } from "@/lib/toast";
@@ -26,6 +26,20 @@ const PROVIDER_TONE: Record<ChannelProvider, string> = {
   ubereats: "#06c167",
   lieferando: "#ff8000",
 };
+
+/**
+ * Uber falls back to manual handling if a POS order is not accepted within
+ * ~11.5 minutes, so the inbox shows how long is left. Other platforms have no
+ * published hard window — they get no countdown rather than a made-up one.
+ */
+const ACCEPT_WINDOW_MIN: Partial<Record<ChannelProvider, number>> = { ubereats: 11.5 };
+
+function minutesLeft(co: ChannelOrder): number | null {
+  const window = ACCEPT_WINDOW_MIN[co.provider];
+  if (!window) return null;
+  const elapsed = (Date.now() - new Date(co.received_at).getTime()) / 60000;
+  return window - elapsed;
+}
 
 function timeAgo(iso: string): string {
   const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
@@ -48,6 +62,7 @@ function InboxCard({
 }) {
   const fmt = useFmt();
   const unmapped = co.items.filter((l) => !l.recipe_id).length;
+  const left = minutesLeft(co);
 
   return (
     <Card className="animate-rise p-4">
@@ -67,7 +82,19 @@ function InboxCard({
             {co.customer_name ? ` · ${co.customer_name}` : ""} · {timeAgo(co.received_at)}
           </p>
         </div>
-        <span className="text-gradient shrink-0 text-sm font-bold">{fmt(co.gross, 2)}</span>
+        <div className="shrink-0 text-right">
+          <span className="text-gradient text-sm font-bold">{fmt(co.gross, 2)}</span>
+          {left !== null && (
+            <p
+              className={cn(
+                "text-[11px] font-semibold",
+                left <= 3 ? "text-rose-soft" : "text-zinc-500",
+              )}
+            >
+              {left > 0 ? `${Math.ceil(left)}m to accept` : "window passed"}
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 space-y-1.5">
@@ -268,9 +295,20 @@ export default function Channels() {
     mutationFn: async (v: { id: string; accept: boolean }) => {
       if (v.accept) await acceptChannelOrder(org!.id, v.id);
       else await rejectChannelOrder(org!.id, v.id, "Rejected by staff");
+      // Our side is committed; the platform ack is best-effort and reports
+      // back rather than throwing, so a platform outage cannot make a
+      // successful accept look like a failure.
+      return ackChannelOrder(v.id, v.accept ? "accept" : "deny", "Unable to fulfill");
     },
-    onSuccess: (_r, v) => {
+    onSuccess: (ackError, v) => {
       invalidate("channel_orders", "orders", "inventory", "inventory_tx", "payments", "deliveries");
+      if (ackError) {
+        toast.error(
+          v.accept ? "Accepted here, but not on the platform" : "Rejected here only",
+          `${ackError} Confirm on the platform tablet too.`,
+        );
+        return;
+      }
       toast.success(v.accept ? "Order accepted" : "Order rejected",
         v.accept ? "Sent to kitchen · inventory updated" : undefined);
     },

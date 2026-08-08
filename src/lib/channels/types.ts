@@ -57,6 +57,18 @@ export interface ChannelAdapter {
   verify(input: VerifyInput): string | null;
   /** Pull the platform's store id out of a payload before the channel is known. */
   storeIdOf(payload: unknown): string;
+  /**
+   * True when this webhook is a NEW order to ingest. Both Wolt and Uber send
+   * the same endpoint many non-order events (status changes, courier updates,
+   * venue alerts); those must be acknowledged and ignored, not parsed.
+   */
+  isNewOrder(payload: unknown): boolean;
+  /**
+   * Absolute URL to GET the full order. Both platforms send a notification
+   * carrying only an id, so this is the normal path — null means the payload
+   * already contains the order.
+   */
+  fetchUrlOf(payload: unknown): string | null;
   /** Normalize. Throws with a readable message when the payload is unusable. */
   parse(payload: unknown): ParsedOrder;
 }

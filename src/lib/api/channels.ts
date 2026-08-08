@@ -220,3 +220,35 @@ export function webhookUrl(provider: ChannelProvider, storeId: string): string {
   const q = storeId ? `?store=${encodeURIComponent(storeId)}` : "";
   return `${base}/api/channels/${provider}${q}`;
 }
+
+/**
+ * Tell the platform what staff decided, so the order does not also need
+ * accepting on the platform's own tablet.
+ *
+ * Best-effort and deliberately non-throwing: our order already exists by the
+ * time this runs, so a platform hiccup must not make the accept look failed.
+ * Returns a message when the platform was not acknowledged, so the UI can warn
+ * that the tablet still needs a tap.
+ */
+export async function ackChannelOrder(
+  channelOrderId: string,
+  action: "accept" | "deny",
+  reason?: string,
+): Promise<string | null> {
+  if (!isSupabaseConfigured) return null;
+  try {
+    const { data: session } = await getSupabase().auth.getSession();
+    const token = session.session?.access_token;
+    if (!token) return "Not signed in.";
+    const res = await fetch("/api/channels/ack", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ channel_order_id: channelOrderId, action, reason }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { acked?: boolean; error?: string };
+    if (!res.ok || body.error) return body.error ?? `Platform returned ${res.status}.`;
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : "Could not reach the platform.";
+  }
+}

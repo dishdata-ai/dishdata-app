@@ -5,32 +5,44 @@ import {
 } from "@/lib/channels/types";
 
 /**
- * Uber Eats — Eats Marketplace "order.notification" webhook.
+ * Uber Eats — Marketplace order integration.
  *
- * Signature: hex HMAC-SHA256 of the raw body, keyed with the client secret,
- * sent as `X-Uber-Signature`.
+ * The webhook is a NOTIFICATION, not the order:
+ *   { event_type: "orders.notification", event_id, event_time,
+ *     meta: { resource_id, status, user_id }, resource_href }
+ * where `meta.resource_id` is the order id, `meta.user_id` is the STORE id,
+ * and `resource_href` is the GET endpoint for the order itself
+ * (https://api.uber.com/v2/eats/order/{order_id}).
  *
- * Uber can deliver either the full order resource or (on some integration
- * tiers) only a reference with `meta.resource_id`, expecting a follow-up
- * authenticated GET. We parse the full-resource form; a reference-only payload
- * throws, and the route stores it as `failed` with the raw body intact so it
- * can be replayed once order-fetch credentials are wired.
+ * Signature: lowercase hex HMAC-SHA256 of the raw body keyed with the client
+ * secret, in `X-Uber-Signature`.
+ *
+ * The endpoint must return 200 with an EMPTY body; Uber otherwise retries with
+ * exponential backoff (1s/2s/4s, up to 7 attempts). After acknowledging, the
+ * order must be accepted or denied within ~11.5 minutes or it auto-cancels.
+ *
+ * Docs: developer.uber.com/docs/eats/references/api/webhooks.orders-notification
  */
 function items(payload: Record<string, unknown>): ParsedLine[] {
-  // Full resource: carts[].items[]. Older/simpler shape: items[] at the root.
-  const carts = arr(payload.carts);
-  const raw = carts.length
-    ? carts.flatMap((c) => arr(obj(c).items))
-    : arr(payload.items);
+  const p = obj(payload);
+  // v2 uses a single `cart` object; older/other shapes use `carts[]` or a
+  // bare `items[]`. Accept all three rather than guessing one.
+  const cart = obj(p.cart);
+  const raw = arr(cart.items).length
+    ? arr(cart.items)
+    : arr(p.carts).length
+      ? arr(p.carts).flatMap((c) => arr(obj(c).items))
+      : arr(p.items);
 
   return raw.map((entry) => {
     const it = obj(entry);
     const price = obj(it.price);
-    // `unit_price` is an amount object in minor units; some payloads inline it.
     const unit = obj(price.unit_price);
-    const amount = unit.amount !== undefined ? fromMinor(unit.amount)
-      : price.unit_price !== undefined ? fromMinor(price.unit_price)
-      : fromMinor(it.unit_price);
+    const amount = unit.amount !== undefined
+      ? fromMinor(unit.amount)
+      : price.unit_price !== undefined
+        ? fromMinor(price.unit_price)
+        : fromMinor(it.unit_price);
     const mods = arr(it.selected_modifier_groups)
       .flatMap((g) => arr(obj(g).selected_items))
       .map((m) => str(obj(m).title))
@@ -57,7 +69,28 @@ export const ubereats: ChannelAdapter = {
 
   storeIdOf(payload) {
     const p = obj(payload);
-    return str(obj(p.store).id, str(obj(p.meta).store_id, str(p.store_id)));
+    // On a notification the store is meta.user_id; a fetched order has store.id.
+    return str(obj(p.meta).user_id, str(obj(p.store).id, str(p.store_id)));
+  },
+
+  isNewOrder(payload) {
+    const p = obj(payload);
+    const type = str(p.event_type).toLowerCase();
+    // Only the order-placed notification creates an order. Anything else
+    // (cancellations, fulfillment updates, report callbacks) is acknowledged
+    // and ignored so it cannot create phantom tickets.
+    if (type) return type === "orders.notification";
+    // No event_type at all: a full order resource posted directly.
+    return Boolean(p.cart || p.carts || p.items);
+  },
+
+  fetchUrlOf(payload) {
+    const p = obj(payload);
+    if (p.cart || p.carts || p.items) return null; // already the full order
+    const href = str(p.resource_href);
+    if (href) return href;
+    const id = str(obj(p.meta).resource_id, str(p.id));
+    return id ? `https://api.uber.com/v2/eats/order/${encodeURIComponent(id)}` : null;
   },
 
   parse(payload) {
@@ -65,17 +98,12 @@ export const ubereats: ChannelAdapter = {
     const externalId = str(p.id, str(obj(p.meta).resource_id));
     if (!externalId) throw new Error("Uber Eats payload has no order id.");
     const lines = items(p);
-    if (!lines.length) {
-      throw new Error(
-        "Uber Eats payload carried no line items — likely a notification-only " +
-        "event requiring an authenticated order fetch. Stored raw for replay.",
-      );
-    }
+    if (!lines.length) throw new Error("Uber Eats order carried no line items.");
 
     const payment = obj(p.payment);
     const total = obj(obj(payment.charges).total);
     const eater = obj(p.eater);
-    // DELIVERY_BY_UBER | DELIVERY_BY_RESTAURANT | PICK_UP
+    // PICK_UP | DINE_IN | DELIVERY_BY_UBER | DELIVERY_BY_RESTAURANT
     const type = str(p.type, str(obj(p.fulfillment).type)).toUpperCase();
 
     const order: ParsedOrder = {
@@ -83,12 +111,12 @@ export const ubereats: ChannelAdapter = {
       displayId: str(p.display_id, externalId.slice(-6)),
       storeId: ubereats.storeIdOf(payload),
       customerName: [str(eater.first_name), str(eater.last_name)].filter(Boolean).join(" "),
-      orderType: type.includes("PICK") ? "takeaway" : "delivery",
+      orderType: type.includes("PICK") ? "takeaway" : type.includes("DINE") ? "dine_in" : "delivery",
       lines,
       gross: total.amount !== undefined
         ? fromMinor(total.amount)
         : lines.reduce((s, l) => s + l.price * l.qty, 0),
-      notes: str(p.special_instructions) || null,
+      notes: str(obj(p.cart).special_instructions, str(p.special_instructions)) || null,
       fulfillment: {
         type,
         address: str(obj(obj(arr(p.deliveries)[0]).location).address,
