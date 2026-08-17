@@ -74,7 +74,10 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
   const plateCost = rows.reduce((s, r) => s + (+r.cost || 0), 0);
-  const valid = name.trim() && +price > 0 && rows.some((r) => r.name.trim());
+  // Ingredients are optional: most of the menu is costed later (or never), and
+  // requiring one made every ingredient-less recipe permanently uneditable —
+  // the price or description could not be changed without inventing a line.
+  const valid = Boolean(name.trim()) && +price > 0;
 
   const save = useMutation({
     mutationFn: async () => {
