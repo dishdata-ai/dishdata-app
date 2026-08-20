@@ -3,6 +3,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { generateReceiptHTML, buildEscPosReceipt } from "@/lib/receipts";
 import { buildEposXml } from "@/lib/escpos";
+import QRCode from "qrcode";
 import type { Order, Org, Payment } from "@/lib/api/database.types";
 
 export const runtime = "nodejs";
@@ -100,10 +101,24 @@ export async function POST(req: NextRequest) {
     .select("*")
     .eq("order_id", body.order_id);
 
+  // The TSE QR carries the whole signature block, which is what lets the
+  // receipt stay readable instead of printing a wall of hex. Rendered here
+  // because encoding is async and the HTML builder is not.
+  const tseQr = (order as Order).tse_qr_data;
+  let tseQrDataUrl: string | null = null;
+  if (tseQr) {
+    try {
+      tseQrDataUrl = await QRCode.toDataURL(tseQr, { width: 320, margin: 0 });
+    } catch {
+      // Fall through to the plain-text TSE fields rather than losing the receipt.
+    }
+  }
+
   const html = generateReceiptHTML({
     receiptNumber: receipt.receipt_number,
     order: order as Order,
     org: org as Org,
+    tseQrDataUrl,
     payments: (payments as Payment[]) ?? [],
     customerName: receipt.customer_name,
     customerEmail: body.send ? (body.email ?? receipt.customer_email) : null,

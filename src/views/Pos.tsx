@@ -582,6 +582,7 @@ export default function Pos() {
         discountPct,
         staffDiscountEmployeeId: isStaffDiscount ? staffEmployeeId : null,
         approvalPin: isStaffDiscount ? approvalPin || null : null,
+        org,
         payments: vars.payments,
       }).then(async (result) => {
         // Pre-prepared event menu: hand-over is immediate, so don't queue a

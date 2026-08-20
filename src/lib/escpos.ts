@@ -44,6 +44,7 @@ type Align = "left" | "center" | "right";
 
 type Directive =
   | { t: "text"; s: string; align?: Align; bold?: boolean; dw?: boolean; dh?: boolean }
+  | { t: "qr"; data: string }
   | { t: "feed"; n: number }
   | { t: "cut" }
   | { t: "pulse" };
@@ -128,6 +129,14 @@ export interface EscPosReceipt {
   /** Pop the cash drawer as part of this job. */
   openDrawer?: boolean;
   columns?: number;
+  /**
+   * TSE signature block (KassenSichV §6). The QR carries every required field,
+   * so printing it means the plain-text values are only a fallback.
+   */
+  tseQrData?: string | null;
+  tseLines?: string[];
+  /** Set when the TSE was unreachable — the receipt must say so plainly. */
+  tseFailed?: boolean;
 }
 
 /**
@@ -207,6 +216,16 @@ export function buildReceipt(r: EscPosReceipt): Directive[] {
   push(columns("Zahlungsart", r.paymentLabel, w));
   push("");
   for (const l of wrap("Die Umsatzsteuer ist im ausgewiesenen Betrag enthalten.", w)) push(l);
+  // --- TSE ----------------------------------------------------------------
+  if (r.tseFailed) {
+    push(rule);
+    push("Hinweis: TSE-Ausfall - keine Signatur", { bold: true });
+  } else if (r.tseQrData || r.tseLines?.length) {
+    push(rule);
+    if (r.tseQrData) d.push({ t: "qr", data: r.tseQrData });
+    for (const l of r.tseLines ?? []) for (const w2 of wrap(l, w)) push(w2);
+  }
+
   push("");
   push("Vielen Dank fuer Ihren Besuch!", { align: "center", bold: true });
 
@@ -258,6 +277,20 @@ export function encodeReceipt(r: EscPosReceipt): Uint8Array {
     } else if (dir.t === "pulse") {
       // ESC p — the drawer is wired to the printer, not to the computer.
       b.push(ESC, 0x70, 0, 25, 250);
+    } else if (dir.t === "qr") {
+      // GS ( k — model 2, module size 6, error correction M, then store + print.
+      if (align !== "center") {
+        b.push(ESC, 0x61, 1);
+        align = "center";
+      }
+      const bytes: number[] = [];
+      encodeText(bytes, dir.data);
+      const len = bytes.length + 3;
+      b.push(GS, 0x28, 0x6b, 4, 0, 49, 65, 50, 0); // model 2
+      b.push(GS, 0x28, 0x6b, 3, 0, 49, 67, 6); // module size
+      b.push(GS, 0x28, 0x6b, 3, 0, 49, 69, 49); // error correction M
+      b.push(GS, 0x28, 0x6b, len & 0xff, (len >> 8) & 0xff, 49, 80, 48, ...bytes); // store
+      b.push(GS, 0x28, 0x6b, 3, 0, 49, 81, 48); // print
     } else {
       const a = dir.align ?? "left";
       if (a !== align) {
@@ -311,6 +344,10 @@ export function buildEposXml(r: EscPosReceipt): string {
       body.push(`<cut type="feed"/>`);
     } else if (dir.t === "pulse") {
       body.push(`<pulse drawer="1" time="pulse_100"/>`);
+    } else if (dir.t === "qr") {
+      body.push(
+        `<symbol type="qrcode_model2" level="level_m" width="4" align="center">${xmlEscape(dir.data)}</symbol>`,
+      );
     } else {
       const attrs = [
         `align="${dir.align ?? "left"}"`,

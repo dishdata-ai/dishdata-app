@@ -3,6 +3,7 @@ import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoAudit, pushDemoNotification } from "@/lib/api/notifications";
 import { computeTaxGroups, sumTax } from "@/lib/tax";
+import { isTseEnabledForOrg } from "@/lib/tse-config";
 import type {
   Order,
   OrderLine,
@@ -89,6 +90,12 @@ export interface CheckoutPayload {
   staffDiscountEmployeeId?: string | null;
   /** Approver's PIN, when the discount is over the org's threshold. */
   approvalPin?: string | null;
+  /**
+   * The caller's org, used only to decide whether checkout routes through the
+   * signing endpoint. The server re-reads its own config before signing, so
+   * this never determines whether a sale is actually signed.
+   */
+  org?: Org | null;
   payments: { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string }[];
 }
 
@@ -353,6 +360,21 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       }
     }
     return { order_id: order.id, order_number: orderNumber, total, discount: +discount.toFixed(2) };
+  }
+
+  // With a TSE configured, checkout goes through the server so the completed
+  // order can be signed before the till hears back — a Postgres function can't
+  // call the TSE itself. Without one, nothing changes: the RPC is called
+  // directly, exactly as before.
+  if (isTseEnabledForOrg(payload.org)) {
+    const res = await fetch("/api/pos/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ org_id: orgId, payload }),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error ?? "Checkout failed.");
+    return body as CheckoutResult;
   }
 
   const { data, error } = await getSupabase().rpc("checkout_order", {

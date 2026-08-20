@@ -317,6 +317,24 @@ export interface Order {
   staff_discount_employee_id?: string | null;
   /** The staff-discount portion of `discount` — excludes any loyalty voucher on the same order. */
   staff_discount_amount?: number;
+
+  // --- TSE (KassenSichV §146a AO), migration 0035 ---------------------------
+  /** 'not_required' on pre-TSE orders and at restaurants with no TSE configured. */
+  tse_status?: "signed" | "failed" | "not_required";
+  tse_transaction_number?: number | null;
+  tse_signature_counter?: number | null;
+  tse_signature?: string | null;
+  tse_serial_number?: string | null;
+  tse_time_start?: string | null;
+  tse_time_end?: string | null;
+  tse_timestamp_format?: string | null;
+  tse_signature_algorithm?: string | null;
+  tse_public_key?: string | null;
+  tse_client_serial?: string | null;
+  /** Full QR payload from the TSE — printed instead of every field in plain text. */
+  tse_qr_data?: string | null;
+  /** Why a signature is missing, for the Verfahrensdokumentation. */
+  tse_error?: string | null;
 }
 
 export interface Payment {
