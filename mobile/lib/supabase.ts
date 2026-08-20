@@ -36,8 +36,12 @@ let appStateBound = false;
 export function bindAuthAutoRefresh() {
   if (appStateBound || !isSupabaseConfigured) return;
   appStateBound = true;
+  const sb = getSupabase();
+  // AppState only fires on a *change*, and the app is already "active" at cold
+  // start — without this the refresh timer never starts until the app has been
+  // backgrounded once.
+  if (AppState.currentState === "active") sb.auth.startAutoRefresh();
   AppState.addEventListener("change", (state) => {
-    const sb = getSupabase();
     if (state === "active") sb.auth.startAutoRefresh();
     else sb.auth.stopAutoRefresh();
   });

@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { generateReceiptHTML } from "@/lib/receipts";
+import { generateReceiptHTML, buildEscPosReceipt } from "@/lib/receipts";
+import { buildEposXml } from "@/lib/escpos";
 import type { Order, Org, Payment } from "@/lib/api/database.types";
 
 export const runtime = "nodejs";
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
   }
   const { supabase } = auth;
 
-  let body: { order_id?: string; email?: string; send?: boolean };
+  let body: { order_id?: string; email?: string; send?: boolean; format?: "html" | "epos"; columns?: number; openDrawer?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -144,9 +145,30 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // The mobile app prints straight to the printer on the local network, but
+  // building the receipt there would mean a second copy of the layout and the
+  // per-rate VAT rules. Rendering the printer payload here keeps one
+  // implementation — the client just forwards these bytes to the printer.
+  const epos =
+    body.format === "epos"
+      ? buildEposXml(
+          buildEscPosReceipt(
+            {
+              receiptNumber: receipt.receipt_number,
+              order: order as Order,
+              org: org as Org,
+              payments: (payments as Payment[]) ?? [],
+              customerName: receipt.customer_name,
+            },
+            { openDrawer: body.openDrawer, columns: body.columns },
+          ),
+        )
+      : undefined;
+
   return NextResponse.json({
     receiptNumber: receipt.receipt_number,
     html,
+    ...(epos ? { epos } : {}),
     emailed,
     ...(emailError ? { emailError } : {}),
   });

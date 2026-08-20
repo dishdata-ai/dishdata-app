@@ -27,6 +27,7 @@ import { colors } from "@/lib/theme";
 import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/types";
 import { setKitchenStatus, type PaymentInput } from "@/lib/api/orders";
 import { emailReceipt } from "@/lib/api/receipts";
+import { printReceipt, isPrinterReady } from "@/lib/api/printing";
 
 const TIP_OPTIONS = [0, 10, 15, 18, 20] as const;
 const METHODS: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -369,6 +370,7 @@ export default function Pos() {
   const [belegEmail, setBelegEmail] = useState("");
   const [belegSending, setBelegSending] = useState(false);
   const [belegNote, setBelegNote] = useState("");
+  const [printing, setPrinting] = useState(false);
 
   // Event/popup menus: when one is picked, the grid shows only its dishes.
   const eventMenus = eventMenusQ.data ?? [];
@@ -967,6 +969,29 @@ export default function Pos() {
                   </View>
                 ) : null}
               </View>
+
+              {/* Direct print — straight to the thermal printer on the LAN, no
+                  dialog. Only shown once a printer is configured for the org. */}
+              {ctx?.org && isPrinterReady(ctx.org) ? (
+                <Pressable
+                  disabled={printing}
+                  onPress={async () => {
+                    setPrinting(true);
+                    setBelegNote("");
+                    const r = await printReceipt(receipt.order_id, ctx.org);
+                    setBelegNote(r.message);
+                    setPrinting(false);
+                  }}
+                  className={`mt-3 flex-row items-center justify-center gap-2 rounded-xl py-3.5 ${
+                    printing ? "bg-white/10" : "bg-white/10 active:bg-white/20"
+                  }`}
+                >
+                  <Ionicons name="print" size={17} color={printing ? colors.zinc500 : colors.white} />
+                  <Text className={`text-sm font-bold ${printing ? "text-zinc-500" : "text-white"}`}>
+                    {printing ? "Drucken…" : "Bon drucken"}
+                  </Text>
+                </Pressable>
+              ) : null}
 
               {/* Beleg — email a German receipt if the guest asks for one */}
               <View className="mt-3 gap-2">

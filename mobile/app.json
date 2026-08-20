@@ -13,7 +13,11 @@
       "bundleIdentifier": "com.dishdata.mobile",
       "infoPlist": {
         "NSCameraUsageDescription": "DishData uses the camera to scan barcodes and capture supplier bills.",
-        "NSLocationWhenInUseUsageDescription": "DishData shares your location with customers while you're out on a delivery."
+        "NSLocationWhenInUseUsageDescription": "DishData shares your location with customers while you're out on a delivery.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocalNetworkUsageDescription": "DishData prints receipts to your restaurant’s printer on the local network."
       }
     },
     "android": {
@@ -30,7 +34,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "usesCleartextTraffic": true
     },
     "web": {
       "bundler": "metro",
