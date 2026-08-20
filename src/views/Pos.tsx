@@ -30,7 +30,7 @@ import {
   PageSkeleton,
 } from "@/components/ui";
 import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useEmployees, useInvalidate } from "@/lib/hooks/data";
-import { ReceiptButton } from "@/components/ReceiptButton";
+import { ReceiptButton, PrintReceiptButton } from "@/components/ReceiptButton";
 import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -1174,7 +1174,14 @@ export default function Pos() {
               )}
             </div>
             <div className="flex gap-2">
-              {receiptOrder && <ReceiptButton order={receiptOrder} />}
+              {receiptOrder && (
+                <>
+                  {/* Direct print first — it's what staff reach for most. The
+                      Beleg preview stays for emailing or checking the bill. */}
+                  <PrintReceiptButton order={receiptOrder} />
+                  <ReceiptButton order={receiptOrder} />
+                </>
+              )}
               <Button className="flex-1" onClick={() => setReceipt(null)}>
                 New Order
               </Button>

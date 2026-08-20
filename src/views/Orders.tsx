@@ -5,7 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Search, ListOrdered, ChevronDown, Ban, Undo2, Download } from "lucide-react";
 import { Card, SectionTitle, Badge, Button, Input, Select, EmptyState, PageSkeleton } from "@/components/ui";
 import { computeTaxGroups } from "@/lib/tax";
-import { ReceiptButton } from "@/components/ReceiptButton";
+import { ReceiptButton, PrintReceiptButton } from "@/components/ReceiptButton";
 import { useOrders, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -457,7 +457,12 @@ function OrderRow({
               {order.status}
             </Badge>
           </div>
-          {order.status === "paid" && <ReceiptButton order={order} />}
+          {order.status === "paid" && (
+            <>
+              <PrintReceiptButton order={order} className="px-2.5 py-1.5 text-xs" label="Druck" />
+              <ReceiptButton order={order} />
+            </>
+          )}
         </div>
       </div>
 

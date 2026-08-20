@@ -6,7 +6,86 @@ import { Button, Modal, Field, Input } from "@/components/ui";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { generateReceiptHTML } from "@/lib/receipts";
+import { toast } from "@/lib/toast";
 import type { Order } from "@/lib/api/database.types";
+
+/**
+ * Fetch (or re-fetch) the receipt for an order. Safe to call repeatedly — the
+ * receipts table is unique per order, so re-generating returns the same
+ * gapless number rather than burning a new one.
+ */
+async function loadReceipt(
+  order: Order,
+  org: Parameters<typeof generateReceiptHTML>[0]["org"] | null,
+): Promise<{ html: string; receiptNumber: string }> {
+  // Demo mode: render locally — no backend, no real receipt number.
+  if (!isSupabaseConfigured) {
+    if (!org) throw new Error("No organization loaded.");
+    return {
+      html: generateReceiptHTML({ receiptNumber: "RE-DEMO", order, org, payments: [] }),
+      receiptNumber: "RE-DEMO",
+    };
+  }
+  const res = await fetch("/api/receipts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order_id: order.id }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Could not generate the receipt.");
+  return { html: data.html as string, receiptNumber: data.receiptNumber as string };
+}
+
+/** Write receipt HTML into an already-open window and trigger the print dialog. */
+function printInto(w: Window, html: string) {
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  // Give the logo a moment to decode, or it prints as a blank box.
+  setTimeout(() => w.print(), 350);
+}
+
+/**
+ * One-tap print for a PAID order — fetches the Beleg and sends it straight to
+ * the print dialog, skipping the preview. Staff print far more receipts than
+ * they email, and making that the two-step path was the wrong default.
+ */
+export function PrintReceiptButton({
+  order,
+  className,
+  label = "Drucken",
+}: {
+  order: Order;
+  className?: string;
+  label?: string;
+}) {
+  const { org } = useOrg();
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    // The window must be opened inside the click handler, before any await —
+    // after one, it's no longer a user gesture and pop-up blockers kill it.
+    const w = window.open("", "_blank", "width=440,height=820");
+    try {
+      const { html } = await loadReceipt(order, org ?? null);
+      if (w) printInto(w, html);
+      else toast.error("Pop-up blocked", "Allow pop-ups for this site to print.");
+    } catch (e) {
+      w?.close();
+      toast.error("Could not print", e instanceof Error ? e.message : "");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button variant="ghost" className={className} onClick={run} disabled={busy}>
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+      {busy ? "Drucken…" : label}
+    </Button>
+  );
+}
 
 /**
  * "Beleg" action for a PAID order: preview the German receipt, print/save as PDF,
@@ -30,37 +109,13 @@ export function ReceiptButton({ order }: { order: Order }) {
     setNote("");
     if (html) return; // already loaded
 
-    // Demo mode: render a local preview (no backend, no real receipt number).
-    if (!isSupabaseConfigured) {
-      if (!org) return;
-      setReceiptNumber("RE-DEMO");
-      setHtml(
-        generateReceiptHTML({
-          receiptNumber: "RE-DEMO",
-          order,
-          org,
-          payments: [],
-        }),
-      );
-      return;
-    }
-
     setLoading(true);
     try {
-      const res = await fetch("/api/receipts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id: order.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setNote(data.error || "Could not generate the receipt.");
-      } else {
-        setHtml(data.html);
-        setReceiptNumber(data.receiptNumber);
-      }
-    } catch {
-      setNote("Network error generating the receipt.");
+      const r = await loadReceipt(order, org ?? null);
+      setHtml(r.html);
+      setReceiptNumber(r.receiptNumber);
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : "Could not generate the receipt.");
     } finally {
       setLoading(false);
     }
@@ -73,10 +128,7 @@ export function ReceiptButton({ order }: { order: Order }) {
       setNote("Pop-up blocked — allow pop-ups to print.");
       return;
     }
-    w.document.write(html);
-    w.document.close();
-    w.focus();
-    setTimeout(() => w.print(), 350);
+    printInto(w, html);
   }
 
   async function sendEmail() {
