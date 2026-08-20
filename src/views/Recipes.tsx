@@ -19,8 +19,13 @@ import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/
 import { EventMenusCard } from "@/components/EventMenus";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
-import { createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, type NewRecipeInput } from "@/lib/api/recipes";
+import {
+  createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, translateRecipe,
+  type NewRecipeInput,
+} from "@/lib/api/recipes";
 import { uploadOrgAsset } from "@/lib/api/orgs";
+import { isSupabaseConfigured } from "@/lib/supabase";
+import { Languages } from "lucide-react";
 import {
   recipeCost,
   marginPct,
@@ -58,6 +63,10 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const [emoji, setEmoji] = useState(recipe?.emoji ?? "🍽️");
   const [description, setDescription] = useState(recipe?.description ?? "");
   const [taxRate, setTaxRate] = useState(recipe?.tax_rate == null ? "" : String(recipe.tax_rate));
+  const [nameDe, setNameDe] = useState(recipe?.name_de ?? "");
+  const [descriptionDe, setDescriptionDe] = useState(recipe?.description_de ?? "");
+  const [categoryDe, setCategoryDe] = useState(recipe?.category_de ?? "");
+  const [translating, setTranslating] = useState(false);
   const [rows, setRows] = useState<IngRow[]>(
     recipe && recipe.ingredients.length
       ? recipe.ingredients.map((i) => ({
@@ -73,6 +82,25 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
 
   const setRow = (key: string, patch: Partial<IngRow>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  const runTranslate = async () => {
+    if (!name.trim()) return;
+    setTranslating(true);
+    try {
+      const result = await translateRecipe({
+        name: name.trim(),
+        description: description.trim() || null,
+        category: category.trim() || null,
+      });
+      setNameDe(result.name_de);
+      setDescriptionDe(result.description_de ?? "");
+      setCategoryDe(result.category_de ?? "");
+    } catch (e) {
+      toast.error("Translation failed", e instanceof Error ? e.message : "");
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const plateCost = rows.reduce((s, r) => s + (+r.cost || 0), 0);
   // Ingredients are optional: most of the menu is costed later (or never), and
@@ -100,6 +128,9 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           emoji: emoji || "🍽️",
           description: description.trim() || null,
           tax_rate: taxRate.trim() === "" ? null : +taxRate,
+          name_de: nameDe.trim() || null,
+          description_de: descriptionDe.trim() || null,
+          category_de: categoryDe.trim() || null,
         });
         await replaceRecipeIngredients(org!.id, recipe!.id, ingredients);
         return recipe!.id;
@@ -107,6 +138,8 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
       const input: NewRecipeInput = {
         name: name.trim(), category, price: +price, prep_minutes: +prep || 10, emoji: emoji || "🍽️",
         description: description.trim() || null, tax_rate: taxRate.trim() === "" ? null : +taxRate,
+        name_de: nameDe.trim() || null, description_de: descriptionDe.trim() || null,
+        category_de: categoryDe.trim() || null,
         ingredients,
       };
       return createRecipe(org!.id, input);
@@ -170,6 +203,34 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           rows={2}
         />
       </Field>
+
+      <div className="rounded-xl border border-line bg-white/[0.02] p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-xs font-medium text-zinc-400">German (shown on the German menu &amp; receipts)</p>
+          <button
+            onClick={runTranslate}
+            disabled={!name.trim() || translating || !isSupabaseConfigured}
+            title={!isSupabaseConfigured ? "Needs a live backend — not available in demo mode" : undefined}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-white/[0.03] px-2.5 py-1 text-xs font-semibold text-accent-400 transition-all hover:bg-white/[0.06] disabled:cursor-default disabled:opacity-40"
+          >
+            <Languages className="h-3.5 w-3.5" />
+            {translating ? "Translating…" : "Translate from English"}
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Name (DE)">
+            <Input value={nameDe} onChange={(e) => setNameDe(e.target.value)} placeholder={name || "—"} />
+          </Field>
+          <Field label="Category (DE)">
+            <Input value={categoryDe} onChange={(e) => setCategoryDe(e.target.value)} placeholder={category || "—"} />
+          </Field>
+        </div>
+        <div className="mt-3">
+          <Field label="Description (DE)">
+            <Textarea value={descriptionDe} onChange={(e) => setDescriptionDe(e.target.value)} rows={2} placeholder={description || "—"} />
+          </Field>
+        </div>
+      </div>
 
       <div>
         <p className="mb-1.5 text-xs font-medium text-zinc-400">

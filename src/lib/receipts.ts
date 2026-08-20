@@ -57,7 +57,9 @@ export function generateReceiptHTML(data: ReceiptData): string {
   const taxNumber = (settings.tax_number as string) || (settings.steuernummer as string) || "";
   const vatId = (settings.vat_id as string) || (settings.ust_id as string) || "";
   const phone = (settings.phone as string) || "";
-  const logoUrl = org.logo_url || "";
+  // A transparent-background mark (receipt_logo_url) prints cleaner on a
+  // thermal roll than the main logo_url, which is often a solid-color square.
+  const logoUrl = org.receipt_logo_url || org.logo_url || "";
 
   const customerName = data.customerName ?? order.guest_name ?? "";
   const customerEmail = data.customerEmail ?? "";

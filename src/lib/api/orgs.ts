@@ -52,6 +52,7 @@ export async function createOrganization(name: string, currency: string, taxRate
       name,
       slug,
       logo_url: null,
+      receipt_logo_url: null,
       accent_color: null,
       currency,
       tax_rate: taxRate,

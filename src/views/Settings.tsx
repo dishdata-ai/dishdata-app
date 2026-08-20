@@ -313,6 +313,7 @@ export default function Settings() {
   const { org, isAdmin, refresh } = useOrg();
   const { isDemo } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
+  const receiptFileRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState({
     name: org?.name ?? "",
     currency: org?.currency ?? "USD",
@@ -365,6 +366,27 @@ export default function Settings() {
       toast.success("Logo updated");
     } catch (e) {
       toast.error("Upload failed", e instanceof Error ? e.message : "");
+    }
+  };
+
+  const uploadReceiptLogo = async (file: File) => {
+    try {
+      const url = await uploadOrgAsset(org.id, file, "receipt-logo.webp");
+      await updateOrg(org.id, { receipt_logo_url: url });
+      refresh();
+      toast.success("Receipt logo updated");
+    } catch (e) {
+      toast.error("Upload failed", e instanceof Error ? e.message : "");
+    }
+  };
+
+  const clearReceiptLogo = async () => {
+    try {
+      await updateOrg(org.id, { receipt_logo_url: null });
+      refresh();
+      toast.success("Reverted to the main logo on receipts");
+    } catch (e) {
+      toast.error("Could not update", e instanceof Error ? e.message : "");
     }
   };
 
@@ -428,7 +450,7 @@ export default function Settings() {
             </button>
             <div>
               <p className="text-sm font-medium text-zinc-200">Workspace logo</p>
-              <p className="text-xs text-zinc-500">Shown in the sidebar, receipts and your public page.</p>
+              <p className="text-xs text-zinc-500">Shown in the sidebar and your public page.</p>
             </div>
             <input
               ref={fileRef}
@@ -441,6 +463,52 @@ export default function Settings() {
               }}
             />
           </div>
+
+          <div className="mt-4 flex items-center gap-4 border-t border-line pt-4">
+            <button
+              onClick={() => isAdmin && receiptFileRef.current?.click()}
+              className={cn(
+                "group relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-line bg-white/[0.02] transition-all",
+                isAdmin && "cursor-pointer hover:border-brand-400/50",
+              )}
+              style={{
+                backgroundImage:
+                  "repeating-conic-gradient(#111 0% 25%, transparent 0% 50%) 50% / 12px 12px",
+              }}
+            >
+              {org.receipt_logo_url ? (
+                <img src={org.receipt_logo_url} alt="receipt logo" className="h-full w-full object-contain" />
+              ) : (
+                <Upload className="h-5 w-5 text-zinc-500" />
+              )}
+            </button>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-zinc-200">Receipt logo</p>
+              <p className="text-xs text-zinc-500">
+                Shown on bills and invoices. A transparent PNG prints cleaner on a thermal roll than a solid
+                background — leave unset to use the workspace logo above.
+              </p>
+              {org.receipt_logo_url && isAdmin && (
+                <button
+                  onClick={clearReceiptLogo}
+                  className="mt-1 cursor-pointer text-xs font-semibold text-zinc-500 underline-offset-2 hover:text-white hover:underline"
+                >
+                  Revert to workspace logo
+                </button>
+              )}
+            </div>
+            <input
+              ref={receiptFileRef}
+              type="file"
+              accept="image/png,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) uploadReceiptLogo(f);
+              }}
+            />
+          </div>
+
           <div className="mt-5">
             <p className="mb-2 text-xs font-medium text-zinc-400">Accent color</p>
             <div className="flex gap-2.5">

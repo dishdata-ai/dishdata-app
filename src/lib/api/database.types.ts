@@ -30,6 +30,8 @@ export interface Org {
   name: string;
   slug: string;
   logo_url: string | null;
+  /** Optional separate logo for receipts/invoices — a transparent PNG prints cleaner on a thermal roll than a solid-background mark. Falls back to logo_url when unset. */
+  receipt_logo_url: string | null;
   accent_color: string | null;
   currency: string;
   tax_rate: number;

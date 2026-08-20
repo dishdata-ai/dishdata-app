@@ -43,6 +43,7 @@ create table if not exists public.orgs (
   name text not null,
   slug text not null unique,
   logo_url text,
+  receipt_logo_url text,
   accent_color text,
   currency text not null default 'USD',
   tax_rate numeric not null default 8.5,

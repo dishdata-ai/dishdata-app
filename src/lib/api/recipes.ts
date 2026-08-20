@@ -37,6 +37,9 @@ export interface NewRecipeInput {
   description: string | null;
   /** null = inherit the org's default rate. */
   tax_rate: number | null;
+  name_de?: string | null;
+  description_de?: string | null;
+  category_de?: string | null;
   ingredients: {
     name: string;
     qty_display: string;
@@ -52,7 +55,9 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
     const recipe: Recipe = {
       id: uid(), org_id: orgId, name: input.name, category: input.category,
       price: input.price, prep_minutes: input.prep_minutes, emoji: input.emoji,
-      description: input.description, name_de: null, description_de: null, category_de: null,
+      description: input.description,
+      name_de: input.name_de ?? null, description_de: input.description_de ?? null,
+      category_de: input.category_de ?? null,
       image_url: null, is_active: true, sold_out_until: null, tax_rate: input.tax_rate,
     };
     dRecipes.insert(recipe);
@@ -69,6 +74,8 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
       org_id: orgId, name: input.name, category: input.category, price: input.price,
       prep_minutes: input.prep_minutes, emoji: input.emoji, description: input.description,
       tax_rate: input.tax_rate,
+      name_de: input.name_de ?? null, description_de: input.description_de ?? null,
+      category_de: input.category_de ?? null,
     })
     .select("id")
     .single();
@@ -122,6 +129,35 @@ export async function replaceRecipeIngredients(
       .insert(ingredients.map((i) => ({ org_id: orgId, recipe_id: recipeId, ...i })));
     if (insError) throw insError;
   }
+}
+
+export interface TranslateInput {
+  name: string;
+  description?: string | null;
+  category?: string | null;
+}
+
+export interface TranslateResult {
+  name_de: string;
+  description_de: string | null;
+  category_de: string | null;
+}
+
+/**
+ * AI-translate a menu item's name/description/category to German via
+ * /api/recipes/translate. Requires Supabase (the route checks auth) — in
+ * demo mode there's no session to authenticate, so callers should hide the
+ * "Translate" action rather than call this.
+ */
+export async function translateRecipe(input: TranslateInput): Promise<TranslateResult> {
+  const res = await fetch("/api/recipes/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "Translation failed.");
+  return data as TranslateResult;
 }
 
 export async function deleteRecipe(orgId: string, id: string): Promise<void> {
