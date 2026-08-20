@@ -34,6 +34,16 @@ export async function linkEmployeeToUser(orgId: string, employeeId: string, user
   if (error) throw error;
 }
 
+export async function updateEmployee(orgId: string, id: string, patch: Partial<Employee>): Promise<void> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    dEmployees.update(id, patch);
+    return;
+  }
+  const { error } = await getSupabase().from("employees").update(patch).eq("id", id).eq("org_id", orgId);
+  if (error) throw error;
+}
+
 export async function addEmployee(orgId: string, e: Omit<Employee, "id" | "org_id">): Promise<void> {
   if (!isSupabaseConfigured) {
     await demoDelay();

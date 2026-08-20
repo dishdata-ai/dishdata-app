@@ -1,4 +1,5 @@
 import type { Order, Org, Payment, OrderLine } from "./api/database.types";
+import { computeTaxGroups } from "./tax";
 
 /**
  * Data needed to render a customer receipt (Kundenbeleg / Rechnung).
@@ -31,8 +32,11 @@ const ORDER_TYPE_LABELS: Record<string, string> = {
   delivery: "Lieferung",
 };
 
+/** German till convention: each VAT rate on the receipt gets a letter, lowest rate first. */
+const RATE_LETTERS = "ABCDEFGH";
+
 function euro(n: number): string {
-  return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(n);
+  return new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
 function esc(s: string): string {
@@ -63,23 +67,53 @@ export function generateReceiptHTML(data: ReceiptData): string {
   const timeStr = created.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
   const items: OrderLine[] = Array.isArray(order.items) ? order.items : [];
-  const taxRate = org.tax_rate;
+  const tip = order.tip || 0;
+  // Item lines always show the full menu price (that's what was ordered);
+  // a discount is applied at the order level, so `subtotal`/`tax`/`total`
+  // are already net of it. Without a line for it, the items visibly sum to
+  // more than the total with no explanation — this reconciles the two.
+  const discount = order.discount || 0;
+  const gross = items.reduce((s, l) => s + l.price * l.qty, 0);
+
+  // A German receipt must break VAT out per rate, because food (7%) and drinks
+  // (19%) can share one order. Rates were snapshotted onto each line at
+  // checkout; lines from before that (or with no per-item rate) fall back to
+  // the org default, which is what was charged for them.
+  const groups = computeTaxGroups(items, org.tax_rate, discount);
+  const letterOf = new Map(groups.map((g, i) => [g.rate, RATE_LETTERS[i] ?? "?"]));
+  const showLetters = groups.length > 1;
 
   // Payment methods actually recorded (can be split across several).
   const methodLabel =
     payments.length > 0
       ? Array.from(new Set(payments.map((p) => PAYMENT_LABELS[p.method] || p.method))).join(", ")
       : "—";
-  const tip = order.tip || 0;
 
+  // Each item's name gets its own full-width line: on an 80mm roll a fixed
+  // 3-column row leaves no room for it, so it would truncate or force the
+  // browser to shrink the whole receipt. Here the name always gets the line.
   const rows = items
+    .map((l) => {
+      const letter = showLetters ? ` ${letterOf.get(l.tax_rate ?? org.tax_rate) ?? ""}` : "";
+      return `
+      <div class="item">
+        <div class="item-name">${esc(l.name)}</div>
+        <div class="line">
+          <span>${l.qty} x ${euro(l.price)}</span>
+          <span class="bold">${euro(l.price * l.qty)}${letter}</span>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const taxRows = groups
     .map(
-      (l) => `
+      (g) => `
       <tr>
-        <td class="name">${esc(l.name)}</td>
-        <td class="qty">${l.qty}</td>
-        <td class="unit">${euro(l.price)}</td>
-        <td class="line">${euro(l.price * l.qty)}</td>
+        <td>${showLetters ? `${letterOf.get(g.rate)} ` : ""}${g.rate}%</td>
+        <td class="r">${euro(g.tax)}</td>
+        <td class="r">${euro(g.net)}</td>
+        <td class="r">${euro(g.gross)}</td>
       </tr>`,
     )
     .join("");
@@ -92,80 +126,99 @@ export function generateReceiptHTML(data: ReceiptData): string {
 <title>Beleg ${esc(receiptNumber)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1a1a1a; background: #f4f4f5; padding: 24px; }
-  .sheet { max-width: 420px; margin: 0 auto; background: #fff; padding: 28px 26px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .head { display: flex; align-items: center; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid #ececec; }
-  .head img { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; }
-  .head h1 { font-size: 18px; font-weight: 700; letter-spacing: -.01em; }
-  .head .addr { font-size: 11px; color: #777; line-height: 1.5; margin-top: 3px; white-space: pre-line; }
-  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; margin: 16px 0 20px; font-size: 11.5px; }
-  .meta .k { color: #999; }
-  .meta .v { text-align: right; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  thead th { text-align: left; color: #999; font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 0 0 8px; border-bottom: 1px solid #ececec; }
-  thead th.qty, thead th.unit, thead th.line { text-align: right; }
-  tbody td { padding: 9px 0; border-bottom: 1px solid #f6f6f6; vertical-align: top; }
-  td.qty, td.unit, td.line { text-align: right; white-space: nowrap; }
-  td.qty { width: 34px; color: #666; }
-  td.unit { width: 68px; color: #666; }
-  td.line { width: 76px; font-weight: 600; }
-  td.name { padding-right: 8px; }
-  .totals { margin-top: 14px; font-size: 12.5px; }
-  .totals .row { display: flex; justify-content: space-between; padding: 4px 0; }
-  .totals .row.muted { color: #777; font-size: 11.5px; }
-  .totals .row.grand { font-size: 16px; font-weight: 800; margin-top: 8px; padding-top: 10px; border-top: 2px solid #1a1a1a; }
-  .pay { margin-top: 16px; padding: 11px 13px; background: #f7f7f8; border-radius: 8px; font-size: 11.5px; display: flex; justify-content: space-between; }
-  .legal { margin-top: 14px; font-size: 10px; color: #999; line-height: 1.6; }
-  .foot { margin-top: 22px; text-align: center; font-size: 11px; color: #888; }
-  @media print { body { background: #fff; padding: 0; } .sheet { box-shadow: none; max-width: 100%; } }
+  body { font-family: 'Courier New', Courier, ui-monospace, monospace; color: #000; background: #f4f4f5; padding: 24px 12px; font-size: 13px; line-height: 1.4; }
+  .sheet { width: 76mm; max-width: 100%; margin: 0 auto; background: #fff; padding: 6mm 3mm; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  .c { text-align: center; } .r { text-align: right; } .bold { font-weight: bold; }
+  .divider { border-top: 1px dashed #000; margin: 8px 0; }
+  .logo { width: 130px; max-width: 60%; height: auto; margin-bottom: 6px; }
+  .org { font-size: 18px; font-weight: bold; }
+  .addr { white-space: pre-line; }
+  .small { font-size: 11px; }
+  .title { font-size: 16px; font-weight: bold; text-align: center; margin: 5px 0 10px; letter-spacing: 1px; }
+  .line { display: flex; justify-content: space-between; gap: 8px; }
+  .meta { font-size: 12px; }
+  .item { padding: 4px 0; }
+  .item-name { font-weight: bold; }
+  .grand { font-size: 16px; font-weight: bold; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 6px 0; margin-top: 5px; }
+  table { width: 100%; border-collapse: collapse; }
+  .tax-table { font-size: 11px; margin-top: 15px; }
+  .tax-table th { text-align: left; font-weight: bold; padding-bottom: 2px; }
+  .tax-table th.r { text-align: right; }
+  .tax-table td { padding: 2px 0; }
+  .tax-table tr.total td { border-top: 1px dashed #000; font-weight: bold; }
+  .legal { margin-top: 12px; font-size: 10px; line-height: 1.6; }
+
+  /* Print target: an 80mm thermal roll, not a page — continuous feed, cut per
+     receipt, so the height is auto. Drop the on-screen card chrome and the
+     logo raster (slow and unreliable on most thermal drivers). */
+  @media print {
+    @page { size: 80mm auto; margin: 2mm; }
+    body { background: #fff; padding: 0; }
+    .sheet { width: 100%; box-shadow: none; padding: 0; }
+    .logo { display: none; }
+  }
 </style>
 </head>
 <body>
   <div class="sheet">
-    <div class="head">
-      ${logoUrl ? `<img src="${esc(logoUrl)}" alt="">` : ""}
-      <div>
-        <h1>${esc(org.name)}</h1>
-        ${address || phone ? `<div class="addr">${esc(address)}${phone ? `\n${esc(phone)}` : ""}</div>` : ""}
-      </div>
+    <div class="c">
+      ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" alt="">` : ""}
+      <div class="org">${esc(org.name)}</div>
+      ${address ? `<div class="addr">${esc(address)}</div>` : ""}
+      ${phone ? `<div>${esc(phone)}</div>` : ""}
+      ${vatId ? `<div class="small" style="margin-top:4px">USt-IdNr.: ${esc(vatId)}</div>` : ""}
+      ${taxNumber ? `<div class="small">Steuernummer: ${esc(taxNumber)}</div>` : ""}
     </div>
+
+    <div class="divider"></div>
+    <div class="title">RECHNUNG</div>
 
     <div class="meta">
-      <span class="k">Beleg-Nr.</span><span class="v">${esc(receiptNumber)}</span>
-      <span class="k">Bestell-Nr.</span><span class="v">${esc(order.order_number)}</span>
-      <span class="k">Datum</span><span class="v">${dateStr}, ${timeStr}</span>
-      <span class="k">Art</span><span class="v">${ORDER_TYPE_LABELS[order.order_type] || order.order_type}</span>
-      ${customerName ? `<span class="k">Gast</span><span class="v">${esc(customerName)}</span>` : ""}
+      <div><strong>Rechnungs-Nr:</strong> ${esc(receiptNumber)}</div>
+      <div><strong>Bestell-Nr:</strong> ${esc(order.order_number)}</div>
+      <div><strong>Datum:</strong> ${dateStr}, ${timeStr}</div>
+      <div><strong>Art:</strong> ${ORDER_TYPE_LABELS[order.order_type] || order.order_type}</div>
+      ${customerName ? `<div><strong>Gast:</strong> ${esc(customerName)}</div>` : ""}
+    </div>
+    <div class="divider"></div>
+
+    ${rows}
+
+    <div class="divider"></div>
+
+    ${discount > 0 ? `<div class="line"><span>Artikel gesamt</span><span>${euro(gross)}</span></div>` : ""}
+    ${discount > 0 ? `<div class="line"><span>Rabatt</span><span>-${euro(discount)}</span></div>` : ""}
+    ${tip > 0 ? `<div class="line"><span>Trinkgeld</span><span>${euro(tip)}</span></div>` : ""}
+
+    <div class="grand">
+      <div class="line"><span>Summe EUR</span><span>${euro(order.total)}</span></div>
     </div>
 
-    <table>
+    <table class="tax-table">
       <thead>
-        <tr><th class="name">Artikel</th><th class="qty">Menge</th><th class="unit">Einzel</th><th class="line">Summe</th></tr>
+        <tr>
+          <th>USt.%</th><th class="r">USt.</th><th class="r">Netto</th><th class="r">Brutto</th>
+        </tr>
       </thead>
-      <tbody>${rows}</tbody>
+      <tbody>
+        ${taxRows}
+        <tr class="total">
+          <td>Total</td>
+          <td class="r">${euro(order.tax)}</td>
+          <td class="r">${euro(order.subtotal)}</td>
+          <td class="r">${euro(order.subtotal + order.tax)}</td>
+        </tr>
+      </tbody>
     </table>
 
-    <div class="totals">
-      <div class="row muted"><span>Nettobetrag</span><span>${euro(order.subtotal)}</span></div>
-      <div class="row muted"><span>darin enthaltene MwSt. (${taxRate}%)</span><span>${euro(order.tax)}</span></div>
-      ${tip > 0 ? `<div class="row muted"><span>Trinkgeld</span><span>${euro(tip)}</span></div>` : ""}
-      <div class="row grand"><span>Gesamtbetrag</span><span>${euro(order.total)}</span></div>
-    </div>
+    <div class="divider"></div>
+    <div class="line"><span>Zahlungsart</span><span class="bold">${esc(methodLabel)}</span></div>
 
-    <div class="pay">
-      <span>Zahlungsart</span><span><strong>${methodLabel}</strong></span>
-    </div>
+    <div class="legal">Die Umsatzsteuer ist im ausgewiesenen Betrag enthalten.</div>
 
-    <div class="legal">
-      ${taxNumber ? `Steuernummer: ${esc(taxNumber)}<br>` : ""}
-      ${vatId ? `USt-IdNr.: ${esc(vatId)}<br>` : ""}
-      Die Umsatzsteuer ist im ausgewiesenen Betrag enthalten.
-    </div>
-
-    <div class="foot">
-      Vielen Dank für Ihren Besuch!
-      ${customerEmail ? `<br><span style="font-size:10px;color:#aaa">Beleg gesendet an ${esc(customerEmail)}</span>` : ""}
-    </div>
+    <div class="divider"></div>
+    <div class="c bold" style="margin-top: 10px;">Vielen Dank für Ihren Besuch!</div>
+    ${customerEmail ? `<div class="c small" style="margin-top:4px">Beleg gesendet an ${esc(customerEmail)}</div>` : ""}
   </div>
 </body>
 </html>`;

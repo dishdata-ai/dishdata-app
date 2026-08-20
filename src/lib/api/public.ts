@@ -6,6 +6,7 @@ import { uid } from "@/lib/utils";
 import { pushDemoNotification } from "@/lib/api/notifications";
 import type { Org, Recipe, Order, Reservation, EventMenu, EventMenuItem } from "@/lib/api/database.types";
 import { isSoldOut } from "@/lib/calc";
+import { computeTaxGroups, sumTax } from "@/lib/tax";
 
 export interface PublicMenu {
   org: Pick<Org, "id" | "name" | "slug" | "logo_url" | "accent_color" | "currency" | "tax_rate">;
@@ -138,11 +139,16 @@ export async function placePublicOrder(
       const r = recipes.find((x) => x.id === it.recipe_id && x.is_active);
       const eventBlocked = eventIds.has(it.recipe_id) && !allowedEventIds?.has(it.recipe_id);
       if (!r || isSoldOut(r) || isTournamentItem(r) || eventBlocked) throw new Error("Item unavailable");
-      return { recipe_id: r.id, name: r.name, qty: it.qty, price: r.price };
+      return {
+        recipe_id: r.id, name: r.name, qty: it.qty, price: r.price,
+        ...(r.tax_rate == null ? {} : { tax_rate: r.tax_rate }),
+      };
     });
-    const subtotal = lines.reduce((s, l) => s + l.price * l.qty, 0);
-    const tax = +(subtotal * (org.tax_rate / 100)).toFixed(2);
-    const total = +(subtotal + tax).toFixed(2);
+    // VAT-included pricing, per-rate (food vs drinks) — mirrors place_public_order in 0032.
+    const gross = lines.reduce((s, l) => s + l.price * l.qty, 0);
+    const tax = sumTax(computeTaxGroups(lines, org.tax_rate, 0));
+    const total = +gross.toFixed(2);
+    const subtotal = +(gross - tax).toFixed(2);
     const orderId = uid();
     const orderNumber = `ORD-${String(dOrders.list({ org_id: org.id } as Partial<Order>).length + 1).padStart(4, "0")}`;
     dOrders.insert({

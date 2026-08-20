@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoAudit, pushDemoNotification } from "@/lib/api/notifications";
+import { computeTaxGroups, sumTax } from "@/lib/tax";
 import type {
   Order,
   OrderLine,
@@ -11,6 +12,8 @@ import type {
   PaymentMethod,
   KitchenStatus,
   Org,
+  Recipe,
+  Employee,
   RecipeIngredient,
   InventoryItem,
   InventoryTransaction,
@@ -21,6 +24,7 @@ import type {
 const dOrders = demoTable<Order>("orders");
 const dPayments = demoTable<Payment>("payments");
 const dOrgs = demoTable<Org>("orgs");
+const dRecipes = demoTable<Recipe>("recipes");
 const dIngredients = demoTable<RecipeIngredient>("recipe_ingredients");
 const dItems = demoTable<InventoryItem>("inventory_items");
 const dTx = demoTable<InventoryTransaction>("inventory_transactions");
@@ -75,7 +79,37 @@ export interface CheckoutPayload {
   discountAmount?: number;
   /** % off the order, before tax. Combines with discountAmount; both are capped to the order's gross. */
   discountPct?: number;
+  /** Who rang the order up, for attribution. */
+  employeeId?: string | null;
+  /**
+   * Charge the discount to this employee's staff allowance. The server enforces
+   * the org's max %, monthly cap and PIN threshold — leaving this null keeps the
+   * plain unrestricted manager discount.
+   */
+  staffDiscountEmployeeId?: string | null;
+  /** Approver's PIN, when the discount is over the org's threshold. */
+  approvalPin?: string | null;
   payments: { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string }[];
+}
+
+/** This month's staff-discount allowance for one employee. */
+export interface StaffDiscountUsage {
+  used: number;
+  orders: number;
+  cap: number | null;
+  remaining: number | null;
+  max_pct: number;
+  pin_threshold: number | null;
+}
+
+export interface StaffDiscountReportRow {
+  employee_id: string;
+  employee_name: string;
+  role_title: string;
+  orders: number;
+  discount_given: number;
+  revenue: number;
+  guests: number;
 }
 
 export interface CheckoutResult {
@@ -85,32 +119,177 @@ export interface CheckoutResult {
   discount?: number;
 }
 
+/** Demo-mode mirror of staff_discount_usage (0033). */
+function demoStaffUsage(orgId: string, employeeId: string): StaffDiscountUsage {
+  const org = dOrgs.get(orgId);
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const mine = dOrders
+    .list({ org_id: orgId } as Partial<Order>)
+    .filter(
+      (o) =>
+        o.staff_discount_employee_id === employeeId &&
+        o.status !== "void" &&
+        o.status !== "refunded" &&
+        new Date(o.created_at) >= monthStart,
+    );
+  const used = +mine.reduce((s, o) => s + (o.staff_discount_amount ?? 0), 0).toFixed(2);
+  const cap = org?.staff_discount_monthly_cap ?? null;
+  return {
+    used,
+    orders: mine.length,
+    cap,
+    remaining: cap == null ? null : Math.max(cap - used, 0),
+    max_pct: org?.staff_discount_max_pct ?? 0,
+    pin_threshold: org?.staff_discount_pin_threshold ?? null,
+  };
+}
+
+/** Throws with the same messages the RPC raises, so the POS shows one wording in both modes. */
+function assertStaffDiscountAllowed(
+  orgId: string,
+  employeeId: string,
+  discount: number,
+  gross: number,
+  approvalPin: string | null,
+) {
+  const org = dOrgs.get(orgId);
+  const maxPct = org?.staff_discount_max_pct ?? 0;
+  if (maxPct <= 0) throw new Error("staff discount is not enabled for this restaurant");
+
+  const employee = demoTable<Employee>("employees").get(employeeId);
+  if (!employee || !employee.is_active) throw new Error("staff discount: employee not found or inactive");
+  if (discount <= 0) throw new Error("staff discount: no discount amount given");
+
+  const pctOfGross = gross > 0 ? (discount * 100) / gross : 0;
+  if (+pctOfGross.toFixed(2) > maxPct) {
+    throw new Error(
+      `staff discount of ${pctOfGross.toFixed(1)} percent exceeds the limit of ${maxPct} percent`,
+    );
+  }
+
+  const usage = demoStaffUsage(orgId, employeeId);
+  if (usage.cap != null && usage.used + discount > usage.cap) {
+    throw new Error(
+      `staff discount: ${employee.name} has only ${(usage.remaining ?? 0).toFixed(2)} left of a ${usage.cap} monthly limit`,
+    );
+  }
+
+  const threshold = org?.staff_discount_pin_threshold ?? null;
+  if (threshold != null && discount > threshold) {
+    const approver = demoTable<Employee>("employees")
+      .list({ org_id: orgId } as Partial<Employee>)
+      .some((e) => e.is_active && e.can_approve_discounts && e.pin && e.pin === approvalPin);
+    if (!approver) throw new Error(`staff discount over ${threshold} needs a manager PIN`);
+  }
+}
+
+/** This month's remaining staff-discount allowance for one employee. */
+export async function getStaffDiscountUsage(orgId: string, employeeId: string): Promise<StaffDiscountUsage> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    return demoStaffUsage(orgId, employeeId);
+  }
+  const { data, error } = await getSupabase().rpc("staff_discount_usage", {
+    _org: orgId,
+    _employee: employeeId,
+  });
+  if (error) throw error;
+  return data as StaffDiscountUsage;
+}
+
+/** Per-employee staff-discount totals over a date range (null bounds = all time). */
+export async function getStaffDiscountReport(
+  orgId: string,
+  from?: string | null,
+  to?: string | null,
+): Promise<StaffDiscountReportRow[]> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    const employees = demoTable<Employee>("employees");
+    const byEmployee = new Map<string, StaffDiscountReportRow>();
+    for (const o of dOrders.list({ org_id: orgId } as Partial<Order>)) {
+      const id = o.staff_discount_employee_id;
+      if (!id || o.status === "void" || o.status === "refunded") continue;
+      if (from && o.created_at < from) continue;
+      if (to && o.created_at >= to) continue;
+      const e = employees.get(id);
+      const row =
+        byEmployee.get(id) ??
+        {
+          employee_id: id,
+          employee_name: e?.name ?? "Unknown",
+          role_title: e?.role_title ?? "",
+          orders: 0, discount_given: 0, revenue: 0, guests: 0,
+        };
+      row.orders += 1;
+      row.discount_given = +(row.discount_given + (o.staff_discount_amount ?? 0)).toFixed(2);
+      row.revenue = +(row.revenue + o.total).toFixed(2);
+      byEmployee.set(id, row);
+    }
+    // `guests` is a distinct-customer count; recompute it once rather than
+    // trying to accumulate distinctness in the loop above.
+    for (const [id, row] of byEmployee) {
+      row.guests = new Set(
+        dOrders
+          .list({ org_id: orgId } as Partial<Order>)
+          .filter((o) => o.staff_discount_employee_id === id && o.customer_id)
+          .map((o) => o.customer_id),
+      ).size;
+    }
+    return [...byEmployee.values()].sort((a, b) => b.discount_given - a.discount_given);
+  }
+  const { data, error } = await getSupabase().rpc("staff_discount_report", {
+    _org: orgId,
+    _from: from ?? null,
+    _to: to ?? null,
+  });
+  if (error) throw error;
+  return (data as StaffDiscountReportRow[]) ?? [];
+}
+
 /** The live-data engine: order + payments + inventory depletion + loyalty, atomically. */
 export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Promise<CheckoutResult> {
   if (!isSupabaseConfigured) {
     await demoDelay();
     const org = dOrgs.get(orgId);
     const taxRate = org?.tax_rate ?? 8.5;
+    // Snapshot each line's rate now — the recipe's setting may change later, but the
+    // receipt must always show what was actually charged (see 0032 migration).
+    const items: OrderLine[] = payload.items.map((l) => {
+      const rate = dRecipes.get(l.recipe_id)?.tax_rate;
+      return rate == null ? l : { ...l, tax_rate: rate };
+    });
     // VAT-included (gross) pricing: menu prices already include VAT. Break it out
     // of the price rather than adding on top; store subtotal NET (see 0017 migration).
-    const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
+    const gross = items.reduce((s, l) => s + l.price * l.qty, 0);
     const discount = Math.min(
       Math.max(payload.discountAmount ?? 0, 0) + gross * (Math.max(payload.discountPct ?? 0, 0) / 100),
       gross,
     );
     const discountedGross = +(gross - discount).toFixed(2);
-    const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
+    const tax = sumTax(computeTaxGroups(items, taxRate, discount));
     const tip = payload.tip ?? 0;
     const total = +(discountedGross + tip).toFixed(2);
     const subtotal = +(discountedGross - tax).toFixed(2);
+    // Same allowance checks the RPC runs — the demo has no server to enforce
+    // them, so it has to reject the same things or the two modes disagree.
+    const staffId = payload.staffDiscountEmployeeId ?? null;
+    if (staffId) {
+      assertStaffDiscountAllowed(orgId, staffId, discount, gross, payload.approvalPin ?? null);
+    }
     const orderNumber = `ORD-${String(dOrders.list({ org_id: orgId } as Partial<Order>).length + 1).padStart(4, "0")}`;
     const now = new Date().toISOString();
     const order: Order = {
       id: uid(), org_id: orgId, order_number: orderNumber, order_type: payload.orderType,
       table_id: payload.tableId ?? null, customer_id: payload.customerId ?? null, guest_name: null,
-      items: payload.items, subtotal, tax, tip, total, discount: +discount.toFixed(2),
+      items, subtotal, tax, tip, total, discount: +discount.toFixed(2),
       status: payload.payments.length > 0 ? "paid" : "open",
       kitchen_status: "new", kitchen_notes: payload.kitchenNotes ?? null, source: "pos", created_at: now,
+      employee_id: payload.employeeId ?? null,
+      staff_discount_employee_id: staffId,
+      staff_discount_amount: staffId ? +discount.toFixed(2) : 0,
     };
     dOrders.insert(order);
     for (const p of payload.payments) {
@@ -188,6 +367,9 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     _address: payload.address ?? null,
     _discount_amount: payload.discountAmount ?? 0,
     _discount_pct: payload.discountPct ?? 0,
+    _employee_id: payload.employeeId ?? null,
+    _staff_employee_id: payload.staffDiscountEmployeeId ?? null,
+    _approval_pin: payload.approvalPin ?? null,
   });
   if (error) throw error;
   return data as CheckoutResult;

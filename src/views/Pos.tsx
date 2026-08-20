@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { computeTaxGroups, sumTax, type TaxGroup } from "@/lib/tax";
 import {
   Search,
   Plus,
@@ -30,15 +31,22 @@ import {
   EmptyState,
   PageSkeleton,
 } from "@/components/ui";
-import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useInvalidate } from "@/lib/hooks/data";
+import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useEmployees, useInvalidate } from "@/lib/hooks/data";
+import { ReceiptButton } from "@/components/ReceiptButton";
 import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
-import { checkoutOrder, markOrderPaid, setKitchenStatus, type CheckoutResult } from "@/lib/api/orders";
+import {
+  checkoutOrder,
+  markOrderPaid,
+  setKitchenStatus,
+  getStaffDiscountUsage,
+  type CheckoutResult,
+} from "@/lib/api/orders";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import type { Order, OrderType, PaymentMethod } from "@/lib/api/database.types";
+import type { Order, OrderType, PaymentMethod, Recipe } from "@/lib/api/database.types";
 import { isSoldOut } from "@/lib/calc";
 
 // Category pills are derived from the menu actually loaded (see `categories`
@@ -47,7 +55,7 @@ import { isSoldOut } from "@/lib/calc";
 // those dishes behind "All".
 
 type PaymentInput = { method: PaymentMethod; amount: number; tip_amount?: number; split_label?: string };
-type BillLine = { name: string; qty: number; price: number };
+type BillLine = { name: string; qty: number; price: number; tax_rate?: number | null };
 
 const methodMeta = [
   ["card", CreditCard, "Card"],
@@ -72,7 +80,7 @@ function PayModal({
   onClose,
   lines,
   subtotal,
-  taxRate,
+  taxGroups,
   initialTipPct,
   discountAmount,
   discountLabel,
@@ -84,7 +92,8 @@ function PayModal({
   onClose: () => void;
   lines: BillLine[];
   subtotal: number;
-  taxRate: number;
+  /** VAT already contained in the gross prices, split per rate (food vs drinks). */
+  taxGroups: TaxGroup[];
   initialTipPct: number;
   /** Already-applied discount, for display only — `subtotal` is already net of it. */
   discountAmount?: number;
@@ -101,7 +110,7 @@ function PayModal({
   const [assign, setAssign] = useState<Record<number, number | "shared">>({});
   const [methods, setMethods] = useState<PaymentMethod[]>(["card", "card", "card", "card", "card", "card"]);
 
-  const tax = +(subtotal * (taxRate / 100)).toFixed(2);
+  const tax = sumTax(taxGroups);
   const tip = +(subtotal * (tipPct / 100)).toFixed(2);
   const total = +(subtotal + tax + tip).toFixed(2);
 
@@ -303,10 +312,12 @@ function PayModal({
             <span>Subtotal</span>
             <span>{fmt(subtotal, 2)}</span>
           </div>
-          <div className="flex justify-between text-zinc-400">
-            <span>Incl. tax ({taxRate}%)</span>
-            <span>{fmt(tax, 2)}</span>
-          </div>
+          {taxGroups.map((g) => (
+            <div key={g.rate} className="flex justify-between text-zinc-400">
+              <span>Incl. tax ({g.rate}%)</span>
+              <span>{fmt(g.tax, 2)}</span>
+            </div>
+          ))}
           {tip > 0 && (
             <div className="flex justify-between text-zinc-400">
               <span>Tip ({tipPct}%)</span>
@@ -332,6 +343,28 @@ function PayModal({
   );
 }
 
+/** A single menu tile — shared by the flat grid and the grouped-by-category view. */
+function ProductCard({ r, onAdd, fmt }: { r: Recipe; onAdd: () => void; fmt: (n: number, d?: number) => string }) {
+  return (
+    <button onClick={onAdd} className="group cursor-pointer text-left">
+      <Card className="overflow-hidden p-0 transition-all group-hover:border-brand-400/40 group-hover:shadow-lg group-hover:shadow-brand-500/10 group-active:scale-[0.97]">
+        {r.image_url ? (
+          <img src={r.image_url} alt={r.name} className="h-20 w-full object-cover" />
+        ) : (
+          <div className="flex h-20 items-center justify-center bg-white/[0.02] text-4xl">{r.emoji}</div>
+        )}
+        <div className="p-3">
+          <p className="line-clamp-2 min-h-10 text-sm font-semibold text-white">{r.name}</p>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-xs text-zinc-500">{r.category}</span>
+            <span className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</span>
+          </div>
+        </div>
+      </Card>
+    </button>
+  );
+}
+
 export default function Pos() {
   const { org } = useOrg();
   const fmt = useFmt();
@@ -340,6 +373,7 @@ export default function Pos() {
   const customersQ = useCustomers();
   const tablesQ = useTables();
   const ordersQ = useOrders();
+  const employeesQ = useEmployees();
   const invalidate = useInvalidate();
   const { cart, addToCart, setCartQty, clearCart } = useUi();
 
@@ -353,8 +387,10 @@ export default function Pos() {
   const [customerId, setCustomerId] = useState<string>("");
   const [kitchenNotes, setKitchenNotes] = useState("");
   const [tipPct, setTipPct] = useState<number>(0);
-  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount">("none");
+  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff">("none");
   const [discountValue, setDiscountValue] = useState<string>("");
+  const [staffEmployeeId, setStaffEmployeeId] = useState<string>("");
+  const [approvalPin, setApprovalPin] = useState<string>("");
   const [address, setAddress] = useState("");
   const [tableId, setTableId] = useState("");
   const [payOpen, setPayOpen] = useState(false);
@@ -363,6 +399,13 @@ export default function Pos() {
   const [receipt, setReceipt] = useState<
     (CheckoutResult & { lines: BillLine[]; tax: number; tip: number; method: string }) | null
   >(null);
+  // The full, server-computed order for the receipt just paid — used so the
+  // POS modal can offer the exact same print/email Beleg as the Orders page,
+  // instead of a third, duplicated rendering of the same receipt.
+  const receiptOrder = useMemo(
+    () => (ordersQ.data ?? []).find((o) => o.id === receipt?.order_id) ?? null,
+    [ordersQ.data, receipt?.order_id],
+  );
 
   const recipes = useMemo(
     () => (recipesQ.data ?? []).filter((r) => r.is_active && !isSoldOut(r)),
@@ -419,10 +462,33 @@ export default function Pos() {
     [inMenu, effectiveCategory, query],
   );
 
+  // Browsing "All" with no search: group into Wolt-style labeled sections
+  // instead of one undifferentiated wall of cards — staff scan for a
+  // category, not search text, most of the time. A specific category or an
+  // active search is already a single scoped list, so a header would be
+  // redundant there.
+  const groupedProducts = useMemo(() => {
+    if (effectiveCategory !== "All" || query.trim()) return null;
+    const byCategory = new Map<string, Recipe[]>();
+    for (const r of products) {
+      const list = byCategory.get(r.category) ?? [];
+      list.push(r);
+      byCategory.set(r.category, list);
+    }
+    // Same order as the category pills, so the pill bar and the grouped
+    // sections agree on where everything is.
+    return [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [products, effectiveCategory, query]);
+
   const lines = cart
     .map((l) => ({ ...l, recipe: recipes.find((r) => r.id === l.recipeId) }))
     .filter((l) => l.recipe);
-  const billLines: BillLine[] = lines.map((l) => ({ name: l.recipe!.name, qty: l.qty, price: l.recipe!.price }));
+  const billLines: BillLine[] = lines.map((l) => ({
+    name: l.recipe!.name,
+    qty: l.qty,
+    price: l.recipe!.price,
+    tax_rate: l.recipe!.tax_rate,
+  }));
   // VAT-included (gross) pricing, mirroring checkout_order (migration 0017):
   // menu prices already contain VAT, so break it out rather than adding on top.
   // `subtotal` is the NET amount — which is also what PayModal and the settle
@@ -430,15 +496,48 @@ export default function Pos() {
   const taxRate = org?.tax_rate ?? 8.5;
   const gross = lines.reduce((s, l) => s + l.recipe!.price * l.qty, 0);
   const discountNum = Math.max(+discountValue || 0, 0);
-  const discountPct = discountType === "percent" ? Math.min(discountNum, 100) : 0;
+  // A staff discount is a percentage like any other, but clamped to the org's
+  // ceiling. The server clamps it too — this just stops the till showing a
+  // total the checkout would refuse.
+  const isStaffDiscount = discountType === "staff";
+  const staffMaxPct = org?.staff_discount_max_pct ?? 0;
+  const discountPct =
+    discountType === "percent"
+      ? Math.min(discountNum, 100)
+      : isStaffDiscount
+        ? Math.min(discountNum, staffMaxPct)
+        : 0;
   const discountAmountInput = discountType === "amount" ? discountNum : 0;
   const discount = Math.min(discountAmountInput + gross * (discountPct / 100), gross);
   const discountedGross = +(gross - discount).toFixed(2);
-  const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
+  const taxGroups = computeTaxGroups(billLines, taxRate, discount);
+  const tax = sumTax(taxGroups);
   const subtotal = +(discountedGross - tax).toFixed(2);
   const tip = +(discountedGross * (tipPct / 100)).toFixed(2);
   const total = +(discountedGross + tip).toFixed(2);
   const cartCount = lines.reduce((s, l) => s + l.qty, 0);
+
+  // How much of this month's allowance the chosen employee has left. Refetched
+  // per employee; the server checks it again at checkout, so a stale figure
+  // here can only ever under-promise, never let an over-limit sale through.
+  const staffUsageQ = useQuery({
+    queryKey: ["staffDiscountUsage", org?.id, staffEmployeeId],
+    queryFn: () => getStaffDiscountUsage(org!.id, staffEmployeeId),
+    enabled: !!org?.id && !!staffEmployeeId,
+  });
+  const staffUsage = staffUsageQ.data;
+  const staffEmployees = useMemo(
+    () => (employeesQ.data ?? []).filter((e) => e.is_active),
+    [employeesQ.data],
+  );
+  const needsPin =
+    isStaffDiscount &&
+    staffUsage?.pin_threshold != null &&
+    discount > staffUsage.pin_threshold;
+  // Don't let the sale start until the staff discount is actually chargeable —
+  // the server would reject it anyway, this just fails earlier and clearer.
+  const staffDiscountIncomplete =
+    isStaffDiscount && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()));
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
 
@@ -458,6 +557,8 @@ export default function Pos() {
     setTipPct(0);
     setDiscountType("none");
     setDiscountValue("");
+    setStaffEmployeeId("");
+    setApprovalPin("");
     setCustomerId("");
     setAddress("");
     setTableId("");
@@ -482,6 +583,8 @@ export default function Pos() {
         address: orderType === "delivery" ? address : null,
         discountAmount: discountAmountInput,
         discountPct,
+        staffDiscountEmployeeId: isStaffDiscount ? staffEmployeeId : null,
+        approvalPin: isStaffDiscount ? approvalPin || null : null,
         payments: vars.payments,
       }).then(async (result) => {
         // Pre-prepared event menu: hand-over is immediate, so don't queue a
@@ -505,6 +608,9 @@ export default function Pos() {
         "orders", "payments", "inventory", "inventory_tx",
         "customers", "deliveries", "restaurant_tables",
       );
+      // The allowance just moved — drop the cached figure so the next staff
+      // discount reads the real remaining balance, not the pre-sale one.
+      staffUsageQ.refetch();
       if (paid) {
         const method = vars.payments.length > 1 ? "split" : vars.payments[0].method;
         setReceipt({ ...result, lines: snapshot, tax: +tax.toFixed(2), tip: vars.tip, method });
@@ -664,25 +770,23 @@ export default function Pos() {
                   hint="Add recipes first — they appear here automatically."
                 />
               </Card>
+            ) : groupedProducts ? (
+              <div className="space-y-6">
+                {groupedProducts.map(([cat, items]) => (
+                  <div key={cat}>
+                    <h3 className="mb-2 text-xs font-semibold tracking-wide text-zinc-400 uppercase">{cat}</h3>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
+                      {items.map((r) => (
+                        <ProductCard key={r.id} r={r} onAdd={() => addToCart(r.id)} fmt={fmt} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
                 {products.map((r) => (
-                  <button key={r.id} onClick={() => addToCart(r.id)} className="group cursor-pointer text-left">
-                    <Card className="overflow-hidden p-0 transition-all group-hover:border-brand-400/40 group-hover:shadow-lg group-hover:shadow-brand-500/10 group-active:scale-[0.97]">
-                      {r.image_url ? (
-                        <img src={r.image_url} alt={r.name} className="h-20 w-full object-cover" />
-                      ) : (
-                        <div className="flex h-20 items-center justify-center bg-white/[0.02] text-4xl">{r.emoji}</div>
-                      )}
-                      <div className="p-3">
-                        <p className="truncate text-sm font-semibold text-white">{r.name}</p>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="text-xs text-zinc-500">{r.category}</span>
-                          <span className="text-sm font-bold text-brand-300">{fmt(r.price, 2)}</span>
-                        </div>
-                      </div>
-                    </Card>
-                  </button>
+                  <ProductCard key={r.id} r={r} onAdd={() => addToCart(r.id)} fmt={fmt} />
                 ))}
                 {products.length === 0 && (
                   <p className="col-span-full py-10 text-center text-sm text-zinc-500">No items match “{query}”.</p>
@@ -749,7 +853,7 @@ export default function Pos() {
                     <div key={l.recipeId} className="flex items-center gap-3 rounded-xl border border-line bg-white/[0.02] p-2.5">
                       <span className="text-xl">{l.recipe!.emoji}</span>
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-white">{l.recipe!.name}</p>
+                        <p className="text-sm font-medium text-white">{l.recipe!.name}</p>
                         <p className="text-xs text-zinc-500">{fmt(l.recipe!.price, 2)} each</p>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -831,7 +935,8 @@ export default function Pos() {
                         ["none", "None"],
                         ["percent", "%"],
                         ["amount", "Amount"],
-                      ] as ["none" | "percent" | "amount", string][]
+                        ...(staffMaxPct > 0 ? ([["staff", "Staff"]] as ["staff", string][]) : []),
+                      ] as ["none" | "percent" | "amount" | "staff", string][]
                     ).map(([t, label]) => (
                       <button
                         key={t}
@@ -850,8 +955,9 @@ export default function Pos() {
                       <Input
                         type="number"
                         min="0"
-                        step={discountType === "percent" ? "1" : "0.5"}
-                        placeholder={discountType === "percent" ? "10" : "5.00"}
+                        max={isStaffDiscount ? staffMaxPct : undefined}
+                        step={discountType === "amount" ? "0.5" : "1"}
+                        placeholder={isStaffDiscount ? String(staffMaxPct) : discountType === "percent" ? "10" : "5.00"}
                         value={discountValue}
                         onChange={(e) => setDiscountValue(e.target.value)}
                         className="w-20 text-center"
@@ -859,6 +965,58 @@ export default function Pos() {
                       />
                     )}
                   </div>
+
+                  {isStaffDiscount && (
+                    <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
+                      <Select
+                        value={staffEmployeeId}
+                        onChange={(e) => {
+                          setStaffEmployeeId(e.target.value);
+                          setApprovalPin("");
+                        }}
+                        className="text-xs"
+                      >
+                        <option value="">Whose discount is this?</option>
+                        {staffEmployees.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </Select>
+
+                      {staffEmployeeId && staffUsage && (
+                        <p className="text-xs text-zinc-500">
+                          Up to {staffUsage.max_pct}% ·{" "}
+                          {staffUsage.cap == null ? (
+                            <>no monthly limit</>
+                          ) : (
+                            <>
+                              <strong
+                                className={cn(
+                                  (staffUsage.remaining ?? 0) < discount ? "text-rose-300" : "text-zinc-300",
+                                )}
+                              >
+                                {fmt(staffUsage.remaining ?? 0, 2)}
+                              </strong>{" "}
+                              left of {fmt(staffUsage.cap, 2)} this month
+                            </>
+                          )}
+                          {staffUsage.orders > 0 && <> · {staffUsage.orders} so far</>}
+                        </p>
+                      )}
+
+                      {needsPin && (
+                        <Input
+                          type="password"
+                          inputMode="numeric"
+                          placeholder={`Manager PIN (over ${fmt(staffUsage!.pin_threshold!, 2)})`}
+                          value={approvalPin}
+                          onChange={(e) => setApprovalPin(e.target.value)}
+                          className="text-xs"
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="mt-4 space-y-1.5 border-t border-line pt-4 text-sm">
@@ -870,7 +1028,10 @@ export default function Pos() {
                   )}
                   {discount > 0 && (
                     <div className="flex justify-between text-brand-300">
-                      <span>Discount{discountType === "percent" ? ` (${discountPct}%)` : ""}</span>
+                      <span>
+                        {isStaffDiscount ? "Staff discount" : "Discount"}
+                        {discountType !== "amount" ? ` (${discountPct}%)` : ""}
+                      </span>
                       <span>−{fmt(discount, 2)}</span>
                     </div>
                   )}
@@ -878,10 +1039,12 @@ export default function Pos() {
                     <span>Subtotal</span>
                     <span>{fmt(subtotal, 2)}</span>
                   </div>
-                  <div className="flex justify-between text-zinc-400">
-                    <span>Incl. tax ({taxRate}%)</span>
-                    <span>{fmt(tax, 2)}</span>
-                  </div>
+                  {taxGroups.map((g) => (
+                    <div key={g.rate} className="flex justify-between text-zinc-400">
+                      <span>Incl. tax ({g.rate}%)</span>
+                      <span>{fmt(g.tax, 2)}</span>
+                    </div>
+                  ))}
                   {tip > 0 && (
                     <div className="flex justify-between text-zinc-400">
                       <span>Tip ({tipPct}%)</span>
@@ -919,7 +1082,7 @@ export default function Pos() {
                     variant="ghost"
                     className="mt-3 w-full"
                     onClick={() => checkout.mutate({ payments: [], tip: 0 })}
-                    disabled={checkout.isPending}
+                    disabled={checkout.isPending || staffDiscountIncomplete}
                   >
                     <ChefHat className="h-4 w-4" /> Send to kitchen · pay later
                   </Button>
@@ -928,11 +1091,16 @@ export default function Pos() {
                 <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
                   <Button
                     onClick={() => checkout.mutate({ payments: [{ method: payment, amount: total, tip_amount: tip }], tip })}
-                    disabled={checkout.isPending}
+                    disabled={checkout.isPending || staffDiscountIncomplete}
                   >
                     {checkout.isPending ? "Processing…" : `Charge ${fmt(total, 2)}`}
                   </Button>
-                  <Button variant="ghost" onClick={() => setPayOpen(true)} disabled={checkout.isPending} title="Split bill / multiple payers">
+                  <Button
+                    variant="ghost"
+                    onClick={() => setPayOpen(true)}
+                    disabled={checkout.isPending || staffDiscountIncomplete}
+                    title="Split bill / multiple payers"
+                  >
                     <SplitSquareHorizontal className="h-4 w-4" /> Split
                   </Button>
                 </div>
@@ -964,7 +1132,7 @@ export default function Pos() {
         onClose={() => setPayOpen(false)}
         lines={billLines}
         subtotal={subtotal}
-        taxRate={taxRate}
+        taxGroups={taxGroups}
         initialTipPct={tipPct}
         discountAmount={discount}
         discountLabel={discountType === "percent" ? `Discount (${discountPct}%)` : "Discount"}
@@ -980,7 +1148,7 @@ export default function Pos() {
           onClose={() => setSettling(null)}
           lines={settling.items as BillLine[]}
           subtotal={settling.subtotal}
-          taxRate={taxRate}
+          taxGroups={computeTaxGroups(settling.items, taxRate, settling.discount || 0)}
           initialTipPct={0}
           discountAmount={settling.discount}
           discountLabel="Discount"
@@ -1024,9 +1192,12 @@ export default function Pos() {
                 </div>
               )}
             </div>
-            <Button className="w-full" onClick={() => setReceipt(null)}>
-              New Order
-            </Button>
+            <div className="flex gap-2">
+              {receiptOrder && <ReceiptButton order={receiptOrder} />}
+              <Button className="flex-1" onClick={() => setReceipt(null)}>
+                New Order
+              </Button>
+            </div>
           </div>
         )}
       </Modal>

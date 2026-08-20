@@ -1,8 +1,11 @@
 import { useRef, useState, useEffect } from "react";
-import { Check, Upload, Trash2, Puzzle, Truck, Plus, X } from "lucide-react";
+import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent } from "lucide-react";
 import { Card, SectionTitle, Button, Badge, Input, Field, Select } from "@/components/ui";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { useOrg } from "@/lib/hooks/useOrg";
+import { useEmployees, useInvalidate } from "@/lib/hooks/data";
+import { updateEmployee } from "@/lib/api/people";
+import type { Employee } from "@/lib/api/database.types";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { updateOrg, uploadOrgAsset } from "@/lib/api/orgs";
 import { clearDemoData } from "@/lib/api/demoDb";
@@ -18,6 +21,131 @@ import {
 
 const CURRENCIES = ["USD", "EUR", "GBP", "INR", "AED", "AUD", "CAD", "SGD"];
 const ACCENTS = [null, "#34d399", "#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#60a5fa"];
+
+type SettingsForm = {
+  name: string; currency: string; tax: string; target: string;
+  staffMaxPct: string; staffCap: string; staffPinAt: string;
+};
+
+/**
+ * "Friends & family" discount: staff may take up to a set % off for their own
+ * guests. The limits set here are enforced in checkout_order, not in the POS —
+ * the till is the thing being restrained, so it can't be the thing enforcing
+ * the restraint. This card just configures them.
+ */
+function StaffDiscountCard({
+  isAdmin,
+  form,
+  setForm,
+}: {
+  isAdmin: boolean;
+  form: SettingsForm;
+  setForm: React.Dispatch<React.SetStateAction<SettingsForm>>;
+}) {
+  const { org } = useOrg();
+  const employeesQ = useEmployees();
+  const invalidate = useInvalidate();
+  const enabled = +form.staffMaxPct > 0;
+
+  const toggleApprover = async (e: Employee) => {
+    try {
+      await updateEmployee(org!.id, e.id, { can_approve_discounts: !e.can_approve_discounts });
+      invalidate("employees");
+    } catch (err) {
+      toast.error("Could not update", err instanceof Error ? err.message : "");
+    }
+  };
+
+  const staff = (employeesQ.data ?? []).filter((e) => e.is_active);
+
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <Percent className="h-4 w-4 text-accent-400" />
+        <h3 className="font-semibold text-white">Staff Discount</h3>
+        <Badge tone={enabled ? "green" : "neutral"}>{enabled ? "On" : "Off"}</Badge>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Max %">
+          <Input
+            type="number" min="0" max="100" step="1"
+            value={form.staffMaxPct}
+            onChange={(e) => setForm((f) => ({ ...f, staffMaxPct: e.target.value }))}
+            disabled={!isAdmin}
+            placeholder="0"
+          />
+        </Field>
+        <Field label="Monthly cap">
+          <Input
+            type="number" min="0" step="10"
+            value={form.staffCap}
+            onChange={(e) => setForm((f) => ({ ...f, staffCap: e.target.value }))}
+            disabled={!isAdmin || !enabled}
+            placeholder="No limit"
+          />
+        </Field>
+        <Field label="PIN needed over">
+          <Input
+            type="number" min="0" step="5"
+            value={form.staffPinAt}
+            onChange={(e) => setForm((f) => ({ ...f, staffPinAt: e.target.value }))}
+            disabled={!isAdmin || !enabled}
+            placeholder="Never"
+          />
+        </Field>
+      </div>
+
+      <p className="mt-2 text-xs text-zinc-500">
+        {enabled ? (
+          <>
+            Staff may give up to <strong className="text-zinc-300">{form.staffMaxPct}%</strong> off, choosing any
+            amount up to that.{" "}
+            {form.staffCap.trim() === ""
+              ? "No monthly limit per person."
+              : `Each person may give away ${form.staffCap} per month.`}{" "}
+            {form.staffPinAt.trim() === ""
+              ? "No approval needed."
+              : `Anything over ${form.staffPinAt} needs an approver's PIN.`}
+          </>
+        ) : (
+          <>Set a max % above 0 to let staff discount their friends&rsquo; orders. Leave at 0 to keep it off.</>
+        )}
+      </p>
+
+      {enabled && form.staffPinAt.trim() !== "" && (
+        <div className="mt-4 border-t border-line pt-4">
+          <p className="mb-2 text-xs font-medium text-zinc-400">
+            Who can approve — they enter their own PIN at the till
+          </p>
+          {staff.length === 0 ? (
+            <p className="text-xs text-zinc-500">No active employees yet. Add them in Staff.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {staff.map((e) => (
+                <button
+                  key={e.id}
+                  onClick={() => isAdmin && toggleApprover(e)}
+                  disabled={!isAdmin}
+                  title={e.pin ? undefined : "This employee has no PIN set — add one in Staff"}
+                  className={cn(
+                    "cursor-pointer rounded-full border px-3 py-1.5 text-xs font-semibold transition-all disabled:cursor-default",
+                    e.can_approve_discounts
+                      ? "border-brand-400/40 bg-brand-400/10 text-brand-300"
+                      : "border-line bg-white/[0.02] text-zinc-500",
+                  )}
+                >
+                  {e.name}
+                  {e.can_approve_discounts && !e.pin && <span className="ml-1 text-amber-400">no PIN</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function DeliveryZonesCard({ orgId, isAdmin }: { orgId: string; isAdmin: boolean }) {
   const [zones, setZones] = useState<DeliveryZone[]>([]);
@@ -190,6 +318,9 @@ export default function Settings() {
     currency: org?.currency ?? "USD",
     tax: String(org?.tax_rate ?? 8.5),
     target: String(org?.target_food_cost_pct ?? 28),
+    staffMaxPct: String(org?.staff_discount_max_pct ?? 0),
+    staffCap: org?.staff_discount_monthly_cap == null ? "" : String(org.staff_discount_monthly_cap),
+    staffPinAt: org?.staff_discount_pin_threshold == null ? "" : String(org.staff_discount_pin_threshold),
   });
   const [accent, setAccent] = useState<string | null>(org?.accent_color ?? null);
   const [enabled, setEnabled] = useState<Set<string>>(
@@ -208,6 +339,10 @@ export default function Settings() {
         currency: form.currency,
         tax_rate: +form.tax || org.tax_rate,
         target_food_cost_pct: +form.target || org.target_food_cost_pct,
+        staff_discount_max_pct: Math.max(+form.staffMaxPct || 0, 0),
+        // Blank means "no limit", which is a real setting — not the same as 0.
+        staff_discount_monthly_cap: form.staffCap.trim() === "" ? null : +form.staffCap,
+        staff_discount_pin_threshold: form.staffPinAt.trim() === "" ? null : +form.staffPinAt,
         accent_color: accent,
         settings: { ...org.settings, enabled_modules: [...enabled] },
       });
@@ -325,6 +460,7 @@ export default function Settings() {
           </div>
         </Card>
         <PaymentsCard isAdmin={isAdmin} />
+        <StaffDiscountCard isAdmin={isAdmin} form={form} setForm={setForm} />
       </div>
 
       <Card className="p-5">

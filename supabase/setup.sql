@@ -46,6 +46,9 @@ create table if not exists public.orgs (
   accent_color text,
   currency text not null default 'USD',
   tax_rate numeric not null default 8.5,
+  staff_discount_max_pct numeric not null default 0,
+  staff_discount_monthly_cap numeric,
+  staff_discount_pin_threshold numeric,
   target_food_cost_pct numeric not null default 28,
   onboarding_completed boolean not null default false,
   next_order_no integer not null default 1,
@@ -274,6 +277,7 @@ create table if not exists public.recipes (
   name_de text,
   description_de text,
   category_de text,
+  tax_rate numeric,
   is_active boolean not null default true,
   sold_out_until timestamptz,
   created_at timestamptz not null default now(),
@@ -359,6 +363,7 @@ create table if not exists public.orders (
   kitchen_status kitchen_status not null default 'new',
   kitchen_notes text,
   source text not null default 'pos',
+  staff_discount_amount numeric not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   created_by uuid
@@ -423,9 +428,19 @@ create table if not exists public.employees (
   shift_note text,
   avatar_hue integer not null default 180,
   is_active boolean not null default true,
+  can_approve_discounts boolean not null default false,
   created_at timestamptz not null default now(),
   created_by uuid
 );
+
+-- Staff-discount attribution on orders. Declared here rather than inline in the
+-- orders table because employees is defined after orders in this file.
+alter table public.orders
+  add column if not exists employee_id uuid references public.employees(id) on delete set null,
+  add column if not exists staff_discount_employee_id uuid references public.employees(id) on delete set null;
+create index if not exists orders_staff_discount_idx
+  on public.orders (org_id, staff_discount_employee_id, created_at)
+  where staff_discount_employee_id is not null;
 
 create table if not exists public.time_entries (
   id uuid primary key default gen_random_uuid(),

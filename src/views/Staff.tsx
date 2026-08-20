@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Users, BadgeDollarSign, Gauge, Plus } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Users, BadgeDollarSign, Gauge, Plus, Percent } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import {
   Card,
@@ -18,10 +18,139 @@ import { useEmployees, useOrders, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { addEmployee } from "@/lib/api/people";
+import { getStaffDiscountReport } from "@/lib/api/orders";
 import { revenueByDay } from "@/lib/calc";
 import { toast } from "@/lib/toast";
+import { cn } from "@/lib/utils";
 
 const WEEKLY_HOURS_ESTIMATE = 38;
+
+const REPORT_RANGES = [
+  { id: "month", label: "This month" },
+  { id: "90d", label: "Last 90 days" },
+  { id: "all", label: "All time" },
+] as const;
+
+/** ISO lower bound for a range id — null means no bound. */
+function rangeStart(id: (typeof REPORT_RANGES)[number]["id"]): string | null {
+  const d = new Date();
+  if (id === "month") return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+  if (id === "90d") {
+    d.setDate(d.getDate() - 90);
+    return d.toISOString();
+  }
+  return null;
+}
+
+/**
+ * Who is giving away staff discounts, how often, and what it costs. Aggregated
+ * server-side so it covers all history rather than the orders the client
+ * happens to have cached.
+ */
+function StaffDiscountReport() {
+  const fmt = useFmt();
+  const { org } = useOrg();
+  const [range, setRange] = useState<(typeof REPORT_RANGES)[number]["id"]>("month");
+
+  const reportQ = useQuery({
+    queryKey: ["staffDiscountReport", org?.id, range],
+    queryFn: () => getStaffDiscountReport(org!.id, rangeStart(range)),
+    enabled: !!org?.id,
+  });
+
+  // Nothing configured and nothing ever given — don't take up space explaining
+  // a feature that isn't switched on.
+  const enabled = (org?.staff_discount_max_pct ?? 0) > 0;
+  const rows = reportQ.data ?? [];
+  if (!enabled && rows.length === 0) return null;
+
+  const totals = rows.reduce(
+    (a, r) => ({
+      orders: a.orders + r.orders,
+      given: +(a.given + r.discount_given).toFixed(2),
+      revenue: +(a.revenue + r.revenue).toFixed(2),
+    }),
+    { orders: 0, given: 0, revenue: 0 },
+  );
+
+  return (
+    <Card className="p-5">
+      <div className="mb-1 flex flex-wrap items-center gap-3">
+        <Percent className="h-4 w-4 text-accent-400" />
+        <h3 className="font-semibold text-white">Staff Discounts</h3>
+        <div className="ml-auto flex gap-1.5">
+          {REPORT_RANGES.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setRange(r.id)}
+              className={cn(
+                "cursor-pointer rounded-full px-3 py-1 text-xs font-semibold transition-all",
+                range === r.id
+                  ? "border border-brand-400/40 bg-brand-500/15 text-brand-200"
+                  : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+              )}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="mb-4 text-xs text-zinc-500">
+        Orders each person brought in on their own discount, and what it cost.
+        {org?.staff_discount_monthly_cap != null && <> Monthly limit {fmt(org.staff_discount_monthly_cap, 2)} each.</>}
+      </p>
+
+      {reportQ.isLoading ? (
+        <p className="text-xs text-zinc-500">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-xs text-zinc-500">No staff discounts given in this period.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[420px] text-sm">
+            <thead>
+              <tr className="border-b border-line text-left text-xs text-zinc-500">
+                <th className="pb-2 font-medium">Employee</th>
+                <th className="pb-2 text-right font-medium">Orders</th>
+                <th className="pb-2 text-right font-medium">Revenue</th>
+                <th className="pb-2 text-right font-medium">Given away</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line/60">
+              {rows.map((r) => {
+                const cap = org?.staff_discount_monthly_cap;
+                const overHalf = range === "month" && cap != null && r.discount_given > cap * 0.8;
+                return (
+                  <tr key={r.employee_id}>
+                    <td className="py-2">
+                      <span className="font-medium text-white">{r.employee_name}</span>
+                      {r.role_title && <span className="ml-2 text-xs text-zinc-500">{r.role_title}</span>}
+                    </td>
+                    <td className="py-2 text-right text-zinc-300">{r.orders}</td>
+                    <td className="py-2 text-right text-zinc-300">{fmt(r.revenue, 2)}</td>
+                    <td className={cn("py-2 text-right font-semibold", overHalf ? "text-amber-300" : "text-brand-300")}>
+                      {fmt(r.discount_given, 2)}
+                      {range === "month" && cap != null && (
+                        <span className="ml-1 text-xs font-normal text-zinc-500">/ {fmt(cap, 0)}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-line font-semibold">
+                <td className="pt-2 text-zinc-400">Total</td>
+                <td className="pt-2 text-right text-white">{totals.orders}</td>
+                <td className="pt-2 text-right text-white">{fmt(totals.revenue, 2)}</td>
+                <td className="pt-2 text-right text-brand-300">{fmt(totals.given, 2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function AddEmployeeForm({ onDone }: { onDone: () => void }) {
   const { org } = useOrg();
@@ -173,6 +302,8 @@ export default function Staff() {
           </Card>
         </div>
       )}
+
+      <StaffDiscountReport />
 
       <Modal open={adding} onClose={() => setAdding(false)} title="Add Employee">
         <AddEmployeeForm onDone={() => setAdding(false)} />

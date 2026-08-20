@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, ListOrdered, ChevronDown, Ban, Undo2 } from "lucide-react";
-import { Card, SectionTitle, Badge, Button, Input, EmptyState, PageSkeleton } from "@/components/ui";
+import { Search, ListOrdered, ChevronDown, Ban, Undo2, Download } from "lucide-react";
+import { Card, SectionTitle, Badge, Button, Input, Select, EmptyState, PageSkeleton } from "@/components/ui";
+import { computeTaxGroups } from "@/lib/tax";
 import { ReceiptButton } from "@/components/ReceiptButton";
 import { useOrders, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -42,6 +43,82 @@ const STATUS_TONE: Record<OrderStatus, "green" | "amber" | "rose" | "neutral"> =
   refunded: "neutral",
 };
 
+/** One CSV field, quoted only when it needs to be (has a comma/quote/newline). */
+function csvField(v: string | number): string {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadFile(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const CSV_COLUMNS = [
+  "order_number", "created_at", "order_type", "status", "source", "guest_name",
+  "items", "subtotal", "tax", "discount", "tip", "total",
+] as const;
+
+/**
+ * Orders can mix VAT rates (food 7% / drinks 19%), so a single `tax` column
+ * isn't enough for the bookkeeper — they need each rate's net and VAT split
+ * out. Which rates appear varies by export, so the columns are built from the
+ * rates actually present, and every row carries all of them (0 where unused)
+ * to keep the sheet rectangular.
+ */
+function ordersToCSV(orders: Order[], orgRate: number): string {
+  const breakdowns = orders.map((o) => computeTaxGroups(o.items, orgRate, o.discount || 0));
+  const rates = [...new Set(breakdowns.flat().map((g) => g.rate))].sort((a, b) => a - b);
+  const rateColumns = rates.flatMap((r) => [`net_${r}pct`, `vat_${r}pct`]);
+
+  const header = [...CSV_COLUMNS, ...rateColumns].join(",");
+  const rows = orders.map((o, i) => {
+    const byRate = new Map(breakdowns[i].map((g) => [g.rate, g]));
+    const base = CSV_COLUMNS.map((col) => {
+      if (col === "items") return csvField(o.items.map((l) => `${l.qty}x ${l.name}`).join("; "));
+      if (col === "guest_name") return csvField(o.guest_name ?? "");
+      return csvField(o[col] as string | number);
+    });
+    const split = rates.flatMap((r) => {
+      const g = byRate.get(r);
+      return [csvField(g?.net ?? 0), csvField(g?.tax ?? 0)];
+    });
+    return [...base, ...split].join(",");
+  });
+  return [header, ...rows].join("\n");
+}
+
+const RANGE_TABS = [
+  { id: "all", label: "All time" },
+  { id: "today", label: "Today" },
+  { id: "7d", label: "7 days" },
+  { id: "30d", label: "30 days" },
+  { id: "custom", label: "Custom" },
+] as const;
+
+type RangeId = (typeof RANGE_TABS)[number]["id"];
+
+/** Inclusive local-date bounds for a preset, as `YYYY-MM-DD` strings. */
+function presetRange(id: RangeId): { from: string; to: string } {
+  const today = new Date();
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const back = (days: number) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - days);
+    return iso(d);
+  };
+  if (id === "today") return { from: iso(today), to: iso(today) };
+  if (id === "7d") return { from: back(6), to: iso(today) };
+  if (id === "30d") return { from: back(29), to: iso(today) };
+  return { from: "", to: "" };
+}
+
 function when(iso: string): string {
   const d = new Date(iso);
   const today = new Date().toISOString().slice(0, 10);
@@ -59,6 +136,11 @@ export default function Orders() {
 
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<"all" | OrderStatus>("all");
+  const [range, setRange] = useState<RangeId>("all");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [type, setType] = useState<"all" | OrderType>("all");
+  const [source, setSource] = useState<string>("all");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const orders = ordersQ.data ?? [];
@@ -73,10 +155,23 @@ export default function Orders() {
     onError: (e) => toast.error("Could not update order", e instanceof Error ? e.message : ""),
   });
 
+  /** Every distinct origin actually present, so the filter never offers an empty option. */
+  const sources = useMemo(
+    () => [...new Set(orders.map((o) => o.source))].sort(),
+    [orders],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return orders.filter((o) => {
       if (status !== "all" && o.status !== status) return false;
+      if (type !== "all" && o.order_type !== type) return false;
+      if (source !== "all" && o.source !== source) return false;
+      // `created_at` is an ISO timestamp; its first 10 chars are the UTC date,
+      // which is what the date inputs produce, so a string compare is enough.
+      const day = o.created_at.slice(0, 10);
+      if (from && day < from) return false;
+      if (to && day > to) return false;
       if (!q) return true;
       return (
         o.order_number.toLowerCase().includes(q) ||
@@ -84,12 +179,30 @@ export default function Orders() {
         o.items.some((l) => l.name.toLowerCase().includes(q))
       );
     });
-  }, [orders, status, query]);
+  }, [orders, status, type, source, from, to, query]);
 
-  const totalTakings = useMemo(
-    () => filtered.filter((o) => o.status === "paid").reduce((s, o) => s + o.total, 0),
-    [filtered],
-  );
+  const pickRange = (id: RangeId) => {
+    setRange(id);
+    if (id === "custom") return; // keep whatever dates are already typed
+    const r = presetRange(id);
+    setFrom(r.from);
+    setTo(r.to);
+  };
+
+  // Headline figures for the current filter — the point of filtering is usually
+  // to ask "how much did X take", so answer it without a trip to Sales.
+  const stats = useMemo(() => {
+    const paid = filtered.filter((o) => o.status === "paid");
+    const takings = paid.reduce((s, o) => s + o.total, 0);
+    return {
+      takings,
+      paidCount: paid.length,
+      avg: paid.length ? takings / paid.length : 0,
+      vat: paid.reduce((s, o) => s + o.tax, 0),
+    };
+  }, [filtered]);
+
+  const exportName = `orders-${from || "start"}_${to || "today"}`;
 
   if (ordersQ.isLoading) return <PageSkeleton />;
 
@@ -98,6 +211,32 @@ export default function Orders() {
       <SectionTitle
         title="Orders"
         subtitle="Every order, newest first. Search, filter, and re-send a receipt."
+        action={
+          // Export is a manager action: it pulls guest names and full takings
+          // out of the app in one click.
+          isManager ? (
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  downloadFile(JSON.stringify(filtered, null, 2), `${exportName}.json`, "application/json")
+                }
+                title={`Export ${filtered.length} filtered order${filtered.length === 1 ? "" : "s"} as JSON`}
+              >
+                <Download className="h-4 w-4" /> JSON
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  downloadFile(ordersToCSV(filtered, org?.tax_rate ?? 0), `${exportName}.csv`, "text/csv")
+                }
+                title={`Export ${filtered.length} filtered order${filtered.length === 1 ? "" : "s"} as CSV, with VAT split per rate`}
+              >
+                <Download className="h-4 w-4" /> CSV
+              </Button>
+            </div>
+          ) : undefined
+        }
       />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -128,6 +267,103 @@ export default function Orders() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        {RANGE_TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => pickRange(t.id)}
+            className={cn(
+              "shrink-0 cursor-pointer rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+              range === t.id
+                ? "border border-brand-400/40 bg-brand-500/15 text-brand-200"
+                : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+        {range === "custom" && (
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              className="h-8 w-auto py-1 text-xs"
+              aria-label="From date"
+            />
+            <span className="text-xs text-zinc-500">to</span>
+            <Input
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              className="h-8 w-auto py-1 text-xs"
+              aria-label="To date"
+            />
+          </div>
+        )}
+
+        <span className="mx-1 hidden h-4 w-px bg-line sm:block" />
+
+        <Select
+          value={type}
+          onChange={(e) => setType(e.target.value as "all" | OrderType)}
+          className="h-8 w-auto py-1 text-xs"
+          aria-label="Order type"
+        >
+          <option value="all">All types</option>
+          {(Object.keys(TYPE_LABEL) as OrderType[]).map((t) => (
+            <option key={t} value={t}>
+              {TYPE_LABEL[t]}
+            </option>
+          ))}
+        </Select>
+
+        {sources.length > 1 && (
+          <Select
+            value={source}
+            onChange={(e) => setSource(e.target.value)}
+            className="h-8 w-auto py-1 text-xs"
+            aria-label="Order source"
+          >
+            <option value="all">All channels</option>
+            {sources.map((s) => (
+              <option key={s} value={s}>
+                {SOURCE_LABEL[s] ?? "POS"}
+              </option>
+            ))}
+          </Select>
+        )}
+
+        {(range !== "all" || type !== "all" || source !== "all" || status !== "all" || query) && (
+          <button
+            onClick={() => {
+              pickRange("all");
+              setType("all");
+              setSource("all");
+              setStatus("all");
+              setQuery("");
+            }}
+            className="cursor-pointer text-xs font-semibold text-zinc-500 underline-offset-2 hover:text-white hover:underline"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[
+          { label: "Paid takings", value: fmt(stats.takings, 2), tone: true },
+          { label: "Paid orders", value: String(stats.paidCount) },
+          { label: "Average order", value: fmt(stats.avg, 2) },
+          { label: "VAT collected", value: fmt(stats.vat, 2) },
+        ].map((s) => (
+          <Card key={s.label} className="p-3">
+            <p className="text-xs text-zinc-500">{s.label}</p>
+            <p className={cn("mt-0.5 text-lg font-bold", s.tone ? "text-brand-300" : "text-white")}>{s.value}</p>
+          </Card>
+        ))}
+      </div>
+
       <Card>
         <div className="flex items-center justify-between border-b border-line p-4">
           <div>
@@ -139,7 +375,7 @@ export default function Orders() {
             </p>
           </div>
           <div className="text-right">
-            <p className="text-sm font-semibold text-brand-300">{fmt(totalTakings, 2)}</p>
+            <p className="text-sm font-semibold text-brand-300">{fmt(stats.takings, 2)}</p>
             <p className="text-xs text-zinc-500">paid takings (filtered)</p>
           </div>
         </div>

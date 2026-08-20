@@ -35,6 +35,8 @@ export interface NewRecipeInput {
   prep_minutes: number;
   emoji: string;
   description: string | null;
+  /** null = inherit the org's default rate. */
+  tax_rate: number | null;
   ingredients: {
     name: string;
     qty_display: string;
@@ -51,7 +53,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
       id: uid(), org_id: orgId, name: input.name, category: input.category,
       price: input.price, prep_minutes: input.prep_minutes, emoji: input.emoji,
       description: input.description, name_de: null, description_de: null, category_de: null,
-      image_url: null, is_active: true, sold_out_until: null,
+      image_url: null, is_active: true, sold_out_until: null, tax_rate: input.tax_rate,
     };
     dRecipes.insert(recipe);
     for (const ing of input.ingredients) {
@@ -66,6 +68,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
     .insert({
       org_id: orgId, name: input.name, category: input.category, price: input.price,
       prep_minutes: input.prep_minutes, emoji: input.emoji, description: input.description,
+      tax_rate: input.tax_rate,
     })
     .select("id")
     .single();

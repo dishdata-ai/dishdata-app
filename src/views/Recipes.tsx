@@ -57,6 +57,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const [prep, setPrep] = useState(recipe ? String(recipe.prep_minutes) : "");
   const [emoji, setEmoji] = useState(recipe?.emoji ?? "🍽️");
   const [description, setDescription] = useState(recipe?.description ?? "");
+  const [taxRate, setTaxRate] = useState(recipe?.tax_rate == null ? "" : String(recipe.tax_rate));
   const [rows, setRows] = useState<IngRow[]>(
     recipe && recipe.ingredients.length
       ? recipe.ingredients.map((i) => ({
@@ -98,13 +99,15 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           prep_minutes: +prep || 10,
           emoji: emoji || "🍽️",
           description: description.trim() || null,
+          tax_rate: taxRate.trim() === "" ? null : +taxRate,
         });
         await replaceRecipeIngredients(org!.id, recipe!.id, ingredients);
         return recipe!.id;
       }
       const input: NewRecipeInput = {
         name: name.trim(), category, price: +price, prep_minutes: +prep || 10, emoji: emoji || "🍽️",
-        description: description.trim() || null, ingredients,
+        description: description.trim() || null, tax_rate: taxRate.trim() === "" ? null : +taxRate,
+        ingredients,
       };
       return createRecipe(org!.id, input);
     },
@@ -128,7 +131,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           </Field>
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Field label="Category">
           <Input value={category} onChange={(e) => setCategory(e.target.value)} list="recipe-categories" placeholder="Mains" />
           <datalist id="recipe-categories">
@@ -143,7 +146,21 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
         <Field label="Prep (min)">
           <Input type="number" min="0" value={prep} onChange={(e) => setPrep(e.target.value)} placeholder="15" />
         </Field>
+        <Field label="VAT %">
+          <Input
+            type="number"
+            min="0"
+            step="0.1"
+            value={taxRate}
+            onChange={(e) => setTaxRate(e.target.value)}
+            placeholder={`${org?.tax_rate ?? 0} (default)`}
+          />
+        </Field>
       </div>
+      <p className="-mt-2 text-xs text-zinc-500">
+        Leave VAT blank to use the restaurant default ({org?.tax_rate ?? 0}%). In Germany drinks are usually 19% while
+        food is 7% — set 19 on drink items.
+      </p>
 
       <Field label="Description (shown to customers on the menu)">
         <Textarea

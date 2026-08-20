@@ -33,6 +33,12 @@ export interface Org {
   accent_color: string | null;
   currency: string;
   tax_rate: number;
+  /** Ceiling on a staff ("friends & family") discount, in %. 0 disables the feature. */
+  staff_discount_max_pct: number;
+  /** € of staff discount one employee may give per calendar month. null = uncapped. */
+  staff_discount_monthly_cap: number | null;
+  /** € above which an approver's PIN is required at the till. null = never. */
+  staff_discount_pin_threshold: number | null;
   target_food_cost_pct: number;
   onboarding_completed: boolean;
   settings: Record<string, unknown>;
@@ -164,6 +170,8 @@ export interface Recipe {
   is_active: boolean;
   /** null = available. In the future = sold out until then (today's cutoff or a far-future "indefinitely" date). */
   sold_out_until: string | null;
+  /** null = inherit the org's default tax_rate. Set explicitly for e.g. drinks (19%) on an org whose default is the reduced food rate. */
+  tax_rate: number | null;
 }
 
 export interface RecipeIngredient {
@@ -278,6 +286,8 @@ export interface OrderLine {
   name: string;
   qty: number;
   price: number;
+  /** VAT rate snapshotted at checkout — what applied then, not the recipe's current setting. Missing on pre-0032 orders (treat as the org's rate). */
+  tax_rate?: number;
 }
 
 export interface Order {
@@ -299,6 +309,12 @@ export interface Order {
   kitchen_notes: string | null;
   source: string;
   created_at: string;
+  /** Who rang the order up. Null on storefront/platform orders and pre-0033 orders. */
+  employee_id?: string | null;
+  /** Whose staff allowance paid for the discount. Null = not a staff discount. */
+  staff_discount_employee_id?: string | null;
+  /** The staff-discount portion of `discount` — excludes any loyalty voucher on the same order. */
+  staff_discount_amount?: number;
 }
 
 export interface Payment {
@@ -360,6 +376,8 @@ export interface Employee {
   shift_note: string | null;
   avatar_hue: number;
   is_active: boolean;
+  /** May approve a staff discount above the org's PIN threshold, using their `pin`. */
+  can_approve_discounts?: boolean;
 }
 
 export interface TimeEntry {
