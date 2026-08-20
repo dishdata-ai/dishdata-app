@@ -128,12 +128,14 @@ export function generateReceiptHTML(data: ReceiptData): string {
 <title>Beleg ${esc(receiptNumber)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Courier New', Courier, ui-monospace, monospace; color: #000; background: #f4f4f5; padding: 24px 12px; font-size: 13px; line-height: 1.4; }
-  .sheet { width: 76mm; max-width: 100%; margin: 0 auto; background: #fff; padding: 6mm 3mm; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+  body { font-family: 'Courier New', Courier, ui-monospace, monospace; color: #000; background: #f4f4f5; padding: 12px 8px; font-size: 13px; line-height: 1.4; }
+  .sheet { width: 76mm; max-width: 100%; margin: 0 auto; background: #fff; padding: 5mm 3mm; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
   .c { text-align: center; } .r { text-align: right; } .bold { font-weight: bold; }
   .divider { border-top: 1px dashed #000; margin: 8px 0; }
-  .logo { width: 130px; max-width: 60%; height: auto; margin-bottom: 6px; }
-  .org { font-size: 18px; font-weight: bold; }
+  /* display:block kills the inline-image baseline gap, which otherwise adds
+     a stray few px under the logo on top of the margin. */
+  .logo { display: block; width: 120px; max-width: 55%; height: auto; margin: 0 auto 2px; }
+  .org { font-size: 18px; font-weight: bold; line-height: 1.2; }
   .addr { white-space: pre-line; }
   .small { font-size: 11px; }
   .title { font-size: 16px; font-weight: bold; text-align: center; margin: 5px 0 10px; letter-spacing: 1px; }

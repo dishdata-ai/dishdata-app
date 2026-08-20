@@ -121,8 +121,14 @@ export function ReceiptButton({ order }: { order: Order }) {
           </div>
         ) : html ? (
           <div className="space-y-4">
-            <div className="overflow-hidden rounded-xl border border-line bg-white">
-              <iframe title="Beleg" srcDoc={html} className="h-[52vh] w-full" />
+            {/*
+              The receipt is a 76mm strip. Left full-width it sits marooned in a
+              wide white field and reads as "nothing generated", so the frame is
+              constrained to roughly paper width and centred — it looks like a
+              receipt, and the top of it is visible without scrolling.
+            */}
+            <div className="mx-auto w-full max-w-[360px] overflow-hidden rounded-xl border border-line bg-white">
+              <iframe title="Beleg" srcDoc={html} className="h-[58vh] w-full" />
             </div>
 
             <div className="flex flex-wrap items-end gap-3">

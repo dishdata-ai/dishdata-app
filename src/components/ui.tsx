@@ -1,4 +1,5 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X, TrendingUp, TrendingDown, Inbox, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -183,6 +184,13 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
+  // Rendered into <body> rather than in place. An ancestor with backdrop-filter
+  // (our `.glass` cards) becomes the containing block for `position: fixed`
+  // descendants, which pinned the overlay to the middle of a long card instead
+  // of the viewport — the modal opened thousands of pixels down the page.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -190,8 +198,18 @@ export function Modal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
-  return (
+  // Lock background scrolling so the page behind doesn't move under the dialog.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  if (!open || !mounted) return null;
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
       onClick={onClose}
@@ -214,7 +232,8 @@ export function Modal({
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
