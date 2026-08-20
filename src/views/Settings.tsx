@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from "react";
-import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent } from "lucide-react";
+import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer } from "lucide-react";
 import { Card, SectionTitle, Button, Badge, Input, Field, Select } from "@/components/ui";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -8,6 +8,8 @@ import { updateEmployee } from "@/lib/api/people";
 import type { Employee } from "@/lib/api/database.types";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { updateOrg, uploadOrgAsset } from "@/lib/api/orgs";
+import { printViaEpos } from "@/lib/escpos";
+import { getPrinterConfig, type PrinterConfig } from "@/lib/printer";
 import { clearDemoData } from "@/lib/api/demoDb";
 import { MODULES, MODULE_GROUPS } from "@/lib/modules";
 import { toast } from "@/lib/toast";
@@ -21,6 +23,161 @@ import {
 
 const CURRENCIES = ["USD", "EUR", "GBP", "INR", "AED", "AUD", "CAD", "SGD"];
 const ACCENTS = [null, "#34d399", "#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#60a5fa"];
+
+/**
+ * Receipt printer — an Epson TM with ePOS-Print talks HTTP on the local
+ * network, so the browser can print to it directly with no dialog and nothing
+ * installed on the till. Works on iPad too, where WebUSB doesn't exist.
+ */
+function ReceiptPrinterCard({ isAdmin }: { isAdmin: boolean }) {
+  const { org, refresh } = useOrg();
+  const [cfg, setCfg] = useState<PrinterConfig>(() => getPrinterConfig(org));
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  const set = <K extends keyof PrinterConfig>(k: K, v: PrinterConfig[K]) =>
+    setCfg((c) => ({ ...c, [k]: v }));
+
+  const save = async () => {
+    if (!org) return;
+    setSaving(true);
+    try {
+      await updateOrg(org.id, { settings: { ...org.settings, printer: cfg } });
+      refresh();
+      toast.success("Printer settings saved");
+    } catch (e) {
+      toast.error("Could not save", e instanceof Error ? e.message : "");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Prints a real receipt with obviously fake amounts, so staff can't confuse a
+  // test print with a customer's bill.
+  const testPrint = async () => {
+    if (!cfg.host.trim()) {
+      toast.error("Enter the printer address first");
+      return;
+    }
+    setTesting(true);
+    try {
+      await printViaEpos(
+        cfg.host,
+        {
+          orgName: org?.name ?? "DishData",
+          address: (org?.settings as Record<string, unknown>)?.address as string | null,
+          receiptNumber: "TEST",
+          orderNumber: "TESTDRUCK",
+          createdAt: new Date().toISOString(),
+          orderTypeLabel: "Testdruck",
+          lines: [{ name: "Testartikel", qty: 1, price: 1.0 }],
+          gross: 1, discount: 0, tip: 0, total: 1,
+          taxGroups: [{ rate: org?.tax_rate ?? 7, tax: 0.07, net: 0.93, gross: 1 }],
+          taxTotal: 0.07,
+          netTotal: 0.93,
+          paymentLabel: "Testdruck",
+          openDrawer: cfg.openDrawer,
+          columns: cfg.columns,
+        },
+        { useHttps: cfg.useHttps },
+      );
+      toast.success("Test sent to the printer");
+    } catch (e) {
+      toast.error("Printer not reachable", e instanceof Error ? e.message : "");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <Printer className="h-4 w-4 text-accent-400" />
+        <h3 className="font-semibold text-white">Receipt Printer</h3>
+        <Badge tone={cfg.enabled && cfg.host ? "green" : "neutral"}>
+          {cfg.enabled && cfg.host ? "On" : "Off"}
+        </Badge>
+      </div>
+
+      <div className="space-y-3">
+        <Field label="Printer address on your network">
+          <Input
+            value={cfg.host}
+            onChange={(e) => set("host", e.target.value)}
+            placeholder="192.168.1.50"
+            disabled={!isAdmin}
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Paper width">
+            <Select
+              value={String(cfg.columns)}
+              onChange={(e) => set("columns", +e.target.value)}
+              disabled={!isAdmin}
+            >
+              <option value="48">80 mm (48 chars)</option>
+              <option value="32">58 mm (32 chars)</option>
+            </Select>
+          </Field>
+          <Field label="Connection">
+            <Select
+              value={cfg.useHttps ? "https" : "http"}
+              onChange={(e) => set("useHttps", e.target.value === "https")}
+              disabled={!isAdmin}
+            >
+              <option value="https">HTTPS (required)</option>
+              <option value="http">HTTP (local testing)</option>
+            </Select>
+          </Field>
+        </div>
+
+        <div className="flex flex-wrap gap-4">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              onChange={(e) => set("enabled", e.target.checked)}
+              disabled={!isAdmin}
+              className="h-4 w-4 accent-brand-400"
+            />
+            Print directly (skip the dialog)
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={cfg.openDrawer}
+              onChange={(e) => set("openDrawer", e.target.checked)}
+              disabled={!isAdmin}
+              className="h-4 w-4 accent-brand-400"
+            />
+            Open the cash drawer
+          </label>
+        </div>
+
+        <div className="flex gap-2">
+          <Button onClick={save} disabled={!isAdmin || saving}>
+            {saving ? "Saving…" : "Save printer"}
+          </Button>
+          <Button variant="ghost" onClick={testPrint} disabled={testing}>
+            {testing ? "Sending…" : "Test print"}
+          </Button>
+        </div>
+
+        <div className="rounded-xl border border-line bg-white/[0.02] p-3 text-xs text-zinc-500">
+          <p className="mb-1.5 font-semibold text-zinc-400">Epson TM-m30 setup</p>
+          <p>
+            Give the printer a fixed IP on your router, then enable ePOS-Print in its web config.
+            Because DishData runs over HTTPS, the browser refuses to talk to a plain-HTTP printer —
+            so create a self-signed certificate on the printer, then visit{" "}
+            <span className="font-mono text-zinc-400">https://{cfg.host || "printer-ip"}</span> once
+            on each till device and accept the warning. After that, printing is instant.
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 type SettingsForm = {
   name: string; currency: string; tax: string; target: string;
@@ -529,6 +686,7 @@ export default function Settings() {
         </Card>
         <PaymentsCard isAdmin={isAdmin} />
         <StaffDiscountCard isAdmin={isAdmin} form={form} setForm={setForm} />
+        <ReceiptPrinterCard isAdmin={isAdmin} />
       </div>
 
       <Card className="p-5">

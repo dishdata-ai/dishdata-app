@@ -1,5 +1,6 @@
 import type { Order, Org, Payment, OrderLine } from "./api/database.types";
 import { computeTaxGroups } from "./tax";
+import type { EscPosReceipt } from "./escpos";
 
 /**
  * Data needed to render a customer receipt (Kundenbeleg / Rechnung).
@@ -43,6 +44,53 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
   );
+}
+
+/**
+ * Same receipt, shaped for a thermal printer instead of a browser.
+ * Shares the label maps and the per-rate VAT split with the HTML version, so
+ * the printed and emailed receipts can't drift apart.
+ */
+export function buildEscPosReceipt(data: ReceiptData, opts: { openDrawer?: boolean; columns?: number } = {}) {
+  const { receiptNumber, order, org, payments = [] } = data;
+  const settings = (org.settings ?? {}) as Record<string, unknown>;
+  const items: OrderLine[] = Array.isArray(order.items) ? order.items : [];
+  const discount = order.discount || 0;
+  const groups = computeTaxGroups(items, org.tax_rate, discount);
+  const letterOf = new Map(groups.map((g, i) => [g.rate, RATE_LETTERS[i] ?? "?"]));
+  const showLetters = groups.length > 1;
+
+  return {
+    orgName: org.name,
+    address: (settings.address as string) || null,
+    phone: (settings.phone as string) || null,
+    vatId: (settings.vat_id as string) || (settings.ust_id as string) || null,
+    taxNumber: (settings.tax_number as string) || (settings.steuernummer as string) || null,
+    receiptNumber,
+    orderNumber: order.order_number,
+    createdAt: order.created_at,
+    orderTypeLabel: ORDER_TYPE_LABELS[order.order_type] || order.order_type,
+    guestName: data.customerName ?? order.guest_name ?? null,
+    lines: items.map((l) => ({
+      name: l.name,
+      qty: l.qty,
+      price: l.price,
+      taxLetter: showLetters ? letterOf.get(l.tax_rate ?? org.tax_rate) : undefined,
+    })),
+    gross: items.reduce((s, l) => s + l.price * l.qty, 0),
+    discount,
+    tip: order.tip || 0,
+    total: order.total,
+    taxGroups: groups.map((g) => ({ ...g, letter: showLetters ? letterOf.get(g.rate) : undefined })),
+    taxTotal: order.tax,
+    netTotal: order.subtotal,
+    paymentLabel:
+      payments.length > 0
+        ? Array.from(new Set(payments.map((p) => PAYMENT_LABELS[p.method] || p.method))).join(", ")
+        : "—",
+    openDrawer: opts.openDrawer,
+    columns: opts.columns,
+  } satisfies EscPosReceipt;
 }
 
 /**

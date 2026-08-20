@@ -5,7 +5,9 @@ import { Receipt as ReceiptIcon, Printer, Mail, Loader2 } from "lucide-react";
 import { Button, Modal, Field, Input } from "@/components/ui";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { generateReceiptHTML } from "@/lib/receipts";
+import { generateReceiptHTML, buildEscPosReceipt } from "@/lib/receipts";
+import { printViaEpos } from "@/lib/escpos";
+import { getPrinterConfig, isPrinterReady } from "@/lib/printer";
 import { toast } from "@/lib/toast";
 import type { Order } from "@/lib/api/database.types";
 
@@ -64,8 +66,37 @@ export function PrintReceiptButton({
 
   async function run() {
     setBusy(true);
-    // The window must be opened inside the click handler, before any await —
-    // after one, it's no longer a user gesture and pop-up blockers kill it.
+    const cfg = getPrinterConfig(org);
+
+    // Direct to the thermal printer when one is set up: no dialog, no pop-up.
+    if (isPrinterReady(org) && org) {
+      try {
+        const { receiptNumber } = await loadReceipt(order, org);
+        await printViaEpos(
+          cfg.host,
+          buildEscPosReceipt(
+            { receiptNumber, order, org, payments: [] },
+            { openDrawer: cfg.openDrawer, columns: cfg.columns },
+          ),
+          { useHttps: cfg.useHttps },
+        );
+        toast.success("Bon gedruckt", receiptNumber);
+      } catch (e) {
+        // Don't silently swallow it — staff need to know the bill didn't print,
+        // and the dialog is a usable fallback while the printer is sorted out.
+        toast.error(
+          "Drucker nicht erreichbar",
+          e instanceof Error ? e.message : "Check the printer settings.",
+        );
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    // No printer configured — fall back to the browser print dialog. The window
+    // must be opened inside the click handler, before any await: after one it's
+    // no longer a user gesture and pop-up blockers kill it.
     const w = window.open("", "_blank", "width=440,height=820");
     try {
       const { html } = await loadReceipt(order, org ?? null);
