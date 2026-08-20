@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { computeTaxGroups, sumTax, type TaxGroup } from "@/lib/tax";
 import {
@@ -17,8 +17,6 @@ import {
   Users,
   Clock,
   SplitSquareHorizontal,
-  ChevronLeft,
-  ChevronRight,
 } from "lucide-react";
 import {
   Card,
@@ -379,7 +377,6 @@ export default function Pos() {
 
   const [tab, setTab] = useState<"order" | "tabs">("order");
   const [category, setCategory] = useState<string>("All");
-  const categoryScrollRef = useRef<HTMLDivElement>(null);
   const [eventMenuId, setEventMenuId] = useState<string>(""); // "" = full menu
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState<PaymentMethod>("card");
@@ -713,52 +710,36 @@ export default function Pos() {
               </div>
             )}
 
-            <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="relative min-w-0 shrink-0 sm:w-56">
+            <div className="flex min-w-0 flex-col gap-3">
+              <div className="relative min-w-0 sm:max-w-xs">
                 <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                 <Input placeholder="Search menu…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
               </div>
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => categoryScrollRef.current?.scrollBy({ left: -160, behavior: "smooth" })}
-                  aria-label="Scroll categories left"
-                  className="hidden shrink-0 cursor-pointer rounded-full border border-line bg-white/[0.03] p-1.5 text-zinc-400 transition-colors hover:text-white sm:flex"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                <div className="relative min-w-0 flex-1">
-                  <div
-                    ref={categoryScrollRef}
-                    className="flex gap-1.5 overflow-x-auto scroll-smooth pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                  >
-                    {categories.map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => setCategory(c)}
-                        className={cn(
-                          "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
-                          category === c
-                            ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
-                            : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
-                        )}
-                      >
-                        {c}
-                      </button>
-                    ))}
-                  </div>
-                  {/* Edge fades hint that more categories can be scrolled into view */}
-                  <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-base to-transparent" />
-                  <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-base to-transparent" />
+              {/*
+                Categories get the full width on their own row and WRAP from `sm`
+                up, so every name is fully readable at a glance — a half-clipped
+                pill is the one thing staff can't act on quickly mid-order.
+                Below `sm` there isn't room to wrap without eating the screen,
+                so it stays a swipeable strip with a fade hinting at more.
+              */}
+              <div className="relative min-w-0">
+                <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:flex-wrap sm:overflow-visible [&::-webkit-scrollbar]:hidden">
+                  {categories.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setCategory(c)}
+                      className={cn(
+                        "shrink-0 cursor-pointer rounded-full px-4 py-2 text-sm font-semibold whitespace-nowrap transition-all",
+                        category === c
+                          ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                          : "border border-line bg-white/[0.03] text-zinc-300 hover:text-white",
+                      )}
+                    >
+                      {c}
+                    </button>
+                  ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => categoryScrollRef.current?.scrollBy({ left: 160, behavior: "smooth" })}
-                  aria-label="Scroll categories right"
-                  className="hidden shrink-0 cursor-pointer rounded-full border border-line bg-white/[0.03] p-1.5 text-zinc-400 transition-colors hover:text-white sm:flex"
-                >
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
+                <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-base to-transparent sm:hidden" />
               </div>
             </div>
 
