@@ -149,8 +149,10 @@ export function buildReceipt(r: EscPosReceipt): Directive[] {
   const d: Directive[] = [];
   const rule = "-".repeat(w);
   const dt = new Date(r.createdAt);
-  const date = dt.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-  const time = dt.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  // Pinned to Europe/Berlin for the same reason as generateReceiptHTML — see
+  // the comment there.
+  const date = dt.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
+  const time = dt.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
 
   const push = (s: string, o: Partial<Directive & { t: "text" }> = {}) =>
     d.push({ t: "text", s, ...o } as Directive);

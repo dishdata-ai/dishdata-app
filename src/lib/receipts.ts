@@ -131,8 +131,12 @@ export function generateReceiptHTML(data: ReceiptData): string {
   const customerEmail = data.customerEmail ?? "";
 
   const created = new Date(order.created_at);
-  const dateStr = created.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-  const timeStr = created.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+  // Without an explicit timeZone this renders in whatever timezone the code
+  // happens to run in — UTC on the server, the device's own zone in the
+  // browser — so the printed time silently drifted depending on which path
+  // built the receipt. Every DishData restaurant is in Germany today.
+  const dateStr = created.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Europe/Berlin" });
+  const timeStr = created.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
 
   const items: OrderLine[] = Array.isArray(order.items) ? order.items : [];
   const tip = order.tip || 0;

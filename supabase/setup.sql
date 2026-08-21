@@ -1702,3 +1702,85 @@ do $$ begin alter publication supabase_realtime add table public.channel_orders;
 
 -- Done. Create a user via the app's signup, then the onboarding wizard calls
 -- create_organization() and (optionally) seed_demo_data().
+
+-- ============================================================================
+-- 13. EVENT PREORDERS (mirrors 0036_preorders.sql + 0037_preorders_module.sql)
+-- Named preorder campaigns (Onam Sadhya, Christmas...) with per-hour dine-in
+-- capacity, fed by staff entry, CSV import, or the website form via webhook.
+-- ============================================================================
+
+create table if not exists public.preorder_events (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  name text not null,
+  is_active boolean not null default true,
+  service_dates date[] not null default '{}',
+  slot_minutes integer not null default 60,
+  day_start_hour integer not null default 11,
+  day_end_hour integer not null default 22,
+  dine_in_capacity integer not null default 20,
+  webhook_secret text not null unique default encode(gen_random_bytes(24), 'hex'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid
+);
+
+create table if not exists public.preorder_orders (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  event_id uuid not null references public.preorder_events(id) on delete cascade,
+  external_id text,
+  customer_name text not null default '',
+  customer_email text,
+  customer_phone text,
+  requested_date date not null,
+  quantity integer not null default 1,
+  fulfillment_type order_type not null default 'takeaway',
+  timeslot_start time,
+  timeslot_end time,
+  address_street text,
+  address_apartment text,
+  address_city text,
+  address_zip text,
+  addon_qty integer not null default 0,
+  special_requests text,
+  order_total numeric not null default 0,
+  status text not null default 'confirmed' check (status in ('confirmed','cancelled')),
+  raw jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid
+);
+
+create index if not exists preorder_orders_org_event_idx
+  on public.preorder_orders (org_id, event_id);
+create index if not exists preorder_orders_event_date_idx
+  on public.preorder_orders (event_id, requested_date);
+create unique index if not exists preorder_orders_event_external_uidx
+  on public.preorder_orders (event_id, external_id) where external_id is not null;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['preorder_events','preorder_orders'] loop
+    execute format('drop trigger if exists set_updated_at on public.%I', t);
+    execute format('create trigger set_updated_at before update on public.%I for each row execute function public.set_updated_at()', t);
+    execute format('drop trigger if exists set_created_by on public.%I', t);
+    execute format('create trigger set_created_by before insert on public.%I for each row execute function public.set_created_by()', t);
+
+    execute format('alter table public.%I enable row level security', t);
+
+    execute format('drop policy if exists %I_member_select on public.%I', t, t);
+    execute format('create policy %I_member_select on public.%I for select using (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_member_insert on public.%I', t, t);
+    execute format('create policy %I_member_insert on public.%I for insert with check (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_member_update on public.%I', t, t);
+    execute format('create policy %I_member_update on public.%I for update using (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_manager_delete on public.%I', t, t);
+    execute format('create policy %I_manager_delete on public.%I for delete using (has_org_role(org_id,''owner'',''admin'',''manager''))', t, t);
+  end loop;
+end $$;
+
+insert into public.modules (id, name, grouping, sort)
+values ('preorders', 'Preorders', 'Operate', 12)
+on conflict (id) do update set name = excluded.name, grouping = excluded.grouping;

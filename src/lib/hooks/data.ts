@@ -20,6 +20,7 @@ import { listAcctInvoices, listAcctDocuments } from "@/lib/api/accounting";
 import { listPayProfiles, listPayrollRuns } from "@/lib/api/payroll";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import { listChannels, listChannelOrders } from "@/lib/api/channels";
+import { listPreorderEvents, listPreorderOrders } from "@/lib/api/preorders";
 
 function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
   const { org } = useOrg();
@@ -32,6 +33,7 @@ function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
 
 export const useRecipes = () => useOrgQuery("recipes", listRecipes);
 export const useEventMenus = () => useOrgQuery("event_menus", listEventMenus);
+export const usePreorderEvents = () => useOrgQuery("preorder_events", listPreorderEvents);
 export const useInventory = () => useOrgQuery("inventory", listInventory);
 export const useInventoryTransactions = () => useOrgQuery("inventory_tx", (id) => listTransactions(id));
 export const useLocations = () => useOrgQuery("locations", listLocations);
@@ -68,4 +70,17 @@ export function useInvalidate() {
       qc.invalidateQueries({ queryKey: ["org", org?.id, d] });
     }
   };
+}
+
+/**
+ * Orders for one event. Keyed under the same "preorder_orders" domain as the
+ * other hooks, so `useInvalidate()("preorder_orders")` still matches by prefix.
+ */
+export function usePreorderOrders(eventId: string | undefined) {
+  const { org } = useOrg();
+  return useQuery({
+    queryKey: ["org", org?.id, "preorder_orders", eventId],
+    queryFn: () => listPreorderOrders(org!.id, eventId!),
+    enabled: !!org && !!eventId,
+  });
 }
