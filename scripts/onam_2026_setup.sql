@@ -17,15 +17,25 @@
 do $$
 declare
   -- ↓↓↓ Set this to the restaurant's org slug before running. ↓↓↓
-  _org_slug text := 'kokoland';
+  _org_slug text := 'kokoland-berlin';
 
   _org_id uuid;
   _event_id uuid;
   _secret text;
 begin
   select id into _org_id from public.orgs where slug = _org_slug;
+
+  -- Most installs have exactly one org; fall back to it rather than making
+  -- the slug a guessing game. Anything ambiguous still stops with the list.
   if _org_id is null then
-    raise exception 'No org with slug "%". Check the slug in the app under Settings.', _org_slug;
+    if (select count(*) from public.orgs) = 1 then
+      select id, slug into _org_id, _org_slug from public.orgs;
+      raise notice 'Slug "%" not found; using the only org present ("%").', _org_slug, _org_slug;
+    else
+      raise exception 'No org with slug "%". Available: %',
+        _org_slug,
+        (select string_agg(format('%s (%s)', name, slug), ', ' order by name) from public.orgs);
+    end if;
   end if;
 
   select id into _event_id

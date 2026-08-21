@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
 import {
+  buildOrderFromFields,
   normalizeFulfillment,
   parseRequestedDate,
   parseTimeslot,
@@ -73,6 +74,39 @@ export async function POST(
   const externalId = str("external_id") || str("submission_id");
   if (!externalId) {
     return NextResponse.json({ error: "Missing external_id." }, { status: 400 });
+  }
+
+  // Two shapes are accepted. The WordPress snippet sends our flat contract,
+  // having done the label mapping itself. The mailbox forwarder can't map
+  // reliably — it only sees the form's own field labels — so it sends those
+  // verbatim under `fields` and lets the shared mapper here do the work, which
+  // keeps one definition of "what "Dine-in" means" for every intake route.
+  if (body.fields && typeof body.fields === "object") {
+    const raw = body.fields as Record<string, unknown>;
+    const fields: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      fields[k] = v === null || v === undefined ? "" : String(v);
+    }
+
+    const { row, error } = buildOrderFromFields(fields);
+    if (error || !row) {
+      return NextResponse.json({ error: `Couldn't read the submission: ${error}.` }, { status: 400 });
+    }
+
+    const { error: upsertErr } = await admin.from("preorder_orders").upsert(
+      {
+        org_id: event.org_id,
+        event_id: event.id,
+        external_id: externalId,
+        ...row,
+        timeslot_end: row.fulfillment_type === "dine_in" ? row.timeslot_end : null,
+        raw: body,
+      },
+      { onConflict: "event_id,external_id" },
+    );
+    if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 });
+
+    return NextResponse.json({ received: true, guest: row.customer_name, date: row.requested_date });
   }
 
   const requestedDate = parseRequestedDate(str("requested_date"));

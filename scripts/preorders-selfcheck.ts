@@ -9,6 +9,7 @@
 import {
   parseTimeslot, normalizeFulfillment, parseRequestedDate, parseImportRows,
   computeHourCapacity, computeDayTotals, unassignedParties, hoursWithRoom,
+  buildOrderFromFields,
 } from "../src/lib/api/preorders";
 import type { PreorderEvent, PreorderOrder } from "../src/lib/api/database.types";
 
@@ -134,6 +135,139 @@ check("takeaway never consumes seats",
   hour([party("Pickup", 20, "14:00:00", null, "takeaway")], 14).booked === 0);
 check("cancelled orders leave the day totals",
   computeDayTotals([party("Gone", 9, null, null, "dine_in", "cancelled")]).covers === 0);
+
+
+console.log("== Email intake (Gmail forwarder → server mapping) ==");
+
+/**
+ * Mirrors extractFields() in the Gmail Apps Script forwarder. Kept in step
+ * with it deliberately: the script runs in Google's environment where it
+ * can't be tested, so its parsing rules are exercised here instead — most
+ * recently rewritten after Kokoland's actual notification email turned out to
+ * be a numbered list ("1. Name / Hannah Beeck / 2. Email Address / ...")
+ * rather than "Label: value" pairs, which the first version couldn't read at
+ * all. "Label: value" is kept as a fallback in case the template changes.
+ */
+function extractFields(body: string): Record<string, string> {
+  const boilerplate = (line: string) => {
+    const l = line.trim().toLowerCase();
+    return ["you have a new website form submission", "this message was sent", "this email was sent",
+            "you are receiving this", "powered by", "sent from", "do not reply", "unsubscribe",
+            "--", "___", "==="].some((p) => l.indexOf(p) === 0);
+  };
+
+  const lines = String(body || "").split(/\r?\n/);
+  // Decided once for the whole email, not line by line — see the .gs comment
+  // this mirrors for why per-line detection breaks the pure colon format.
+  const numbered = lines.some((l) => /^\s*\d{1,2}[.)]\s+\S/.test(l));
+
+  const fields: Record<string, string> = {};
+  let current: string | null = null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    if (boilerplate(line)) { current = null; continue; }
+
+    if (numbered) {
+      const m = line.match(/^\s*\d{1,2}[.)]\s+(\S.*?)\s*$/);
+      if (m) { current = m[1].trim(); fields[current] = ""; }
+      else if (current) { fields[current] = fields[current] ? `${fields[current]}\n${line.trim()}` : line.trim(); }
+      continue;
+    }
+
+    const inline = line.match(/^\s*([^:]{1,60}?)\s*:\s*(.*)$/);
+    if (inline) { current = inline[1].trim(); fields[current] = inline[2].trim(); }
+    else if (current) { fields[current] = (fields[current] + "\n" + line.trim()).trim(); }
+  }
+  return fields;
+}
+
+// The real notification Kokoland receives (screenshotted from Gmail): a
+// numbered list, an unanswered field ("3. Phone Number") shown with nothing
+// under it, and — because this order is Takeaway — no Timeslot or Address
+// items at all, not even blank ones. entry #117, 21 Aug 2026.
+const REAL_NOTIFICATION = [
+  "You have a new website form submission:",
+  "",
+  "1. Name",
+  "Hannah Beeck",
+  "2. Email Address",
+  "hannahbeeck@tutamail.com",
+  "3. Phone Number",
+  "4. Choose Date",
+  "30 August 2026",
+  "5. Number",
+  "2",
+  "6. How would you like to receive your order?",
+  "Takeaway",
+  "7. Real Leaf addon",
+  "2",
+  "8. Any special requests?",
+  "If possible, no fresh coriander garnish, thank you",
+  "9. Order Total",
+  "50.98",
+  "",
+  "---",
+  "This message was sent from https://kokoland.de.",
+].join("\n");
+
+const realFields = extractFields(REAL_NOTIFICATION);
+check("unanswered field parses as blank, not missing the next label",
+  realFields["Phone Number"] === "" && "Choose Date" in realFields);
+check("omitted fields (Timeslot, Address) are simply absent",
+  !("Timeslot" in realFields) && !("Address - Street Address" in realFields));
+check("footer after '---' doesn't leak into Order Total",
+  realFields["Order Total"] === "50.98", JSON.stringify(realFields["Order Total"]));
+
+const realOrder = buildOrderFromFields(realFields);
+check("real notification maps without error", !realOrder.error, realOrder.error || "");
+check("real: name", realOrder.row?.customer_name === "Hannah Beeck");
+check("real: takeaway, no seating window", realOrder.row?.fulfillment_type === "takeaway" && !realOrder.row?.timeslot_start);
+check("real: blank phone stored as null, not empty string", realOrder.row?.customer_phone === null);
+check("real: addon and total", realOrder.row?.addon_qty === 2 && realOrder.row?.order_total === 50.98);
+check("real: multi-line special request kept whole",
+  (realOrder.row?.special_requests || "").includes("no fresh coriander"));
+
+// A real abandoned submission Kokoland has actually received: a guest closed
+// the form after entering only name/email. Blank date, blank quantity, no
+// fulfillment answered, total "0". This must be rejected with a reason, never
+// silently turned into a phantom order — and in the live script it now gets
+// labelled "needs review" instead of retried forever every 5 minutes.
+const abandoned = buildOrderFromFields(extractFields([
+  "1. Name", "Helna James kuttickattu",
+  "2. Email Address", "helnajames91@gmail.co",
+  "3. Phone Number",
+  "4. Choose Date",
+  "5. Number",
+  "6. How would you like to receive your order?", "Takeaway",
+  "9. Order Total", "0",
+].join("\n")));
+check("abandoned submission is rejected with a reason, not silently zeroed",
+  !!abandoned.error && !abandoned.row, JSON.stringify(abandoned));
+
+// The same awkward cases as the spreadsheet path, arriving by email instead —
+// via the numbered-list format this time, since that's what's actually sent.
+const takeawayMail = buildOrderFromFields(extractFields(
+  "1. Name\nRanjani\n2. Choose Date\n26 August 2026\n3. Number\n2\n" +
+  "4. How would you like to receive your order?\nTakeaway\n5. Timeslot\n14\n6. Real Leaf addon\n3"));
+check("emailed takeaway keeps pickup, gets no seating window",
+  takeawayMail.row?.timeslot_start === "14:00:00" && takeawayMail.row?.timeslot_end === null);
+
+const offGridMail = buildOrderFromFields(extractFields(
+  "1. Name\nJicksy\n2. Choose Date\n29 August 2026\n3. Number\n5\n" +
+  "4. How would you like to receive your order?\nDine-in\n5. Timeslot\n11:30-12:30"));
+check("emailed off-grid booking keeps its real window",
+  offGridMail.row?.timeslot_start === "11:30:00" && offGridMail.row?.timeslot_end === "12:30:00");
+
+check("emailed unreadable date is rejected, not guessed",
+  !!buildOrderFromFields(extractFields(
+    "1. Name\nX\n2. Choose Date\nwhenever\n3. Number\n2\n" +
+    "4. How would you like to receive your order?\nDine in")).error);
+
+// "Label: value" is still accepted, in case the notification template changes.
+check("inline colon format still works as a fallback",
+  buildOrderFromFields(extractFields(
+    "Name: Fallback Guest\nChoose Date: 22 August 2026\nNumber: 3\n" +
+    "How would you like to receive your order?: Dine in")).row?.customer_name === "Fallback Guest");
 
 console.log(failures === 0 ? "\nALL CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

@@ -597,20 +597,77 @@ const COLUMN_ALIASES: Record<string, string[]> = {
 
 const canon = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 
+/** Which of our fields a source column/label refers to, or null if none. */
+export function matchField(label: string): string | null {
+  const h = canon(label);
+  if (!h) return null;
+  for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
+    if (aliases.some((a) => h === a || h.startsWith(a))) return field;
+  }
+  return null;
+}
+
 function mapHeaders(header: string[]): Record<string, number> {
   const index: Record<string, number> = {};
   header.forEach((raw, i) => {
-    const h = canon(raw);
-    if (!h) return;
-    for (const [field, aliases] of Object.entries(COLUMN_ALIASES)) {
-      if (field in index) continue;
-      if (aliases.some((a) => h === a || h.startsWith(a))) {
-        index[field] = i;
-        return;
-      }
-    }
+    const field = matchField(raw);
+    if (field && !(field in index)) index[field] = i;
   });
   return index;
+}
+
+/**
+ * Build one order from a bag of label→value pairs.
+ *
+ * Both ingestion routes land here — the spreadsheet importer (labels are the
+ * header row) and the mailbox forwarder (labels are the form's field names in
+ * the notification email) — so normalization has exactly one definition.
+ */
+export function buildOrderFromFields(
+  fields: Record<string, string>,
+): { row?: NewPreorderOrder; error?: string } {
+  const get = (want: string): string => {
+    for (const [label, value] of Object.entries(fields)) {
+      if (matchField(label) === want) return (value ?? "").trim();
+    }
+    return "";
+  };
+
+  // Email intake can glue a trailing footer onto the last answer, since a
+  // boilerplate line has no "Label:" of its own. Numbers therefore read only
+  // the first line — a stray signature must never corrupt a cover count.
+  const getNum = (want: string): string => get(want).split("\n")[0].trim();
+
+  const name = get("name");
+  const date = parseRequestedDate(getNum("date"));
+  if (!date) return { error: `couldn't read the date "${get("date")}"` };
+
+  const quantity = Number(getNum("quantity")) || 0;
+  if (quantity <= 0) return { error: "quantity must be at least 1" };
+
+  const fulfillment = normalizeFulfillment(get("fulfillment"));
+  const slot = parseTimeslot(get("timeslot"));
+
+  return {
+    row: {
+      customer_name: name,
+      customer_email: get("email") || null,
+      customer_phone: get("phone") || null,
+      requested_date: date,
+      quantity,
+      fulfillment_type: fulfillment,
+      timeslot_start: slot.start,
+      // Takeaway has a pickup time, not a seating window.
+      timeslot_end: fulfillment === "dine_in" ? slot.end : null,
+      address_street: get("street") || null,
+      address_apartment: get("apartment") || null,
+      address_city: get("city") || null,
+      address_zip: get("zip") || null,
+      addon_qty: Number(getNum("addon")) || 0,
+      special_requests: get("notes") || null,
+      order_total: parseMoney(getNum("total")),
+    },
+  };
 }
 
 /** Stable id from the fields a resubmission wouldn't change, so a re-paste of
@@ -667,45 +724,31 @@ export function parseImportRows(text: string): ParsedImport {
   const rows: NewPreorderOrder[] = [];
   const errors: string[] = [];
 
+  // Header index → label bag, so the row builder is shared with email intake.
+  const labelFor = Object.fromEntries(
+    Object.entries(index).map(([field, i]) => [i, field]),
+  ) as Record<number, string>;
+
   lines.slice(1).forEach((line, i) => {
     const cells = split(line);
     const rowNo = i + 2;
 
+    const fields: Record<string, string> = {};
+    cells.forEach((value, col) => {
+      const field = labelFor[col];
+      if (field) fields[field] = value;
+    });
+
     const name = at(cells, "name");
-    const date = parseRequestedDate(at(cells, "date"));
-    if (!date) {
-      errors.push(`Row ${rowNo}${name ? ` (${name})` : ""}: couldn't read the date "${at(cells, "date")}".`);
+    const { row, error } = buildOrderFromFields(fields);
+    if (error || !row) {
+      errors.push(`Row ${rowNo}${name ? ` (${name})` : ""}: ${error}.`);
       return;
     }
-
-    const quantity = Number(at(cells, "quantity")) || 0;
-    if (quantity <= 0) {
-      errors.push(`Row ${rowNo}${name ? ` (${name})` : ""}: quantity must be at least 1.`);
-      return;
-    }
-
-    const fulfillment = normalizeFulfillment(at(cells, "fulfillment"));
-    const slot = parseTimeslot(at(cells, "timeslot"));
-    const email = at(cells, "email");
 
     rows.push({
-      external_id: synthesizeExternalId(at(cells, "submitted"), email, at(cells, "date")),
-      customer_name: name,
-      customer_email: email || null,
-      customer_phone: at(cells, "phone") || null,
-      requested_date: date,
-      quantity,
-      fulfillment_type: fulfillment,
-      // Takeaway has a pickup time, not a seating window.
-      timeslot_start: slot.start,
-      timeslot_end: fulfillment === "dine_in" ? slot.end : null,
-      address_street: at(cells, "street") || null,
-      address_apartment: at(cells, "apartment") || null,
-      address_city: at(cells, "city") || null,
-      address_zip: at(cells, "zip") || null,
-      addon_qty: Number(at(cells, "addon")) || 0,
-      special_requests: at(cells, "notes") || null,
-      order_total: parseMoney(at(cells, "total")),
+      ...row,
+      external_id: synthesizeExternalId(at(cells, "submitted"), at(cells, "email"), at(cells, "date")),
     });
   });
 
