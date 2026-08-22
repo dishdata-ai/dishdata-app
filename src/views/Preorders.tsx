@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   CalendarClock, Users, UtensilsCrossed, ShoppingBag, Euro, AlertTriangle,
   Plus, Upload, Settings2, Check, X, Undo2, Search, Link2, MapPin, MessageSquare,
+  Download, Phone, Mail, Eye, Globe, FileSpreadsheet, UserRound,
 } from "lucide-react";
 import {
   Card, SectionTitle, Badge, Button, Input, Textarea, Select, Field, Modal,
@@ -59,6 +60,79 @@ function isOffGrid(o: PreorderOrder, slotMinutes: number): boolean {
   return start % slotMinutes !== 0 || end - start !== slotMinutes;
 }
 
+/** Strip everything but digits and a leading "+" — spaces/dashes in the
+ *  stored number are fine for display but can break a dialer's tel: parsing. */
+function telHref(phone: string): string {
+  return "tel:" + phone.replace(/(?!^\+)[^\d]/g, "");
+}
+
+function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const h = Math.floor(mins / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+}
+
+function submittedLabel(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+/**
+ * Where an order came from, read off `external_id`'s prefix — set by whichever
+ * intake produced it (the webhook route, the CSV importer, or left null for a
+ * manually added phone order). Purely informational; nothing depends on it.
+ */
+function orderSource(o: PreorderOrder): { label: string; icon: typeof Globe } {
+  const id = o.external_id ?? "";
+  if (id.startsWith("csv-")) return { label: "Imported from a spreadsheet", icon: FileSpreadsheet };
+  if (id) return { label: "Website form", icon: Globe };
+  return { label: "Added by staff", icon: UserRound };
+}
+
+/** One CSV field, quoted only when it needs to be (has a comma/quote/newline). */
+function csvField(v: string | number): string {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadFile(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const PREORDER_CSV_COLUMNS: Array<[string, (o: PreorderOrder) => string | number]> = [
+  ["Submitted", (o) => o.created_at],
+  ["Name", (o) => o.customer_name],
+  ["Email", (o) => o.customer_email ?? ""],
+  ["Phone", (o) => o.customer_phone ?? ""],
+  ["Date", (o) => o.requested_date],
+  ["Covers", (o) => o.quantity],
+  ["Type", (o) => FULFILMENT_LABEL[o.fulfillment_type]],
+  ["Seating/pickup", (o) => (o.timeslot_start ? slotLabel(o) : "")],
+  ["Street", (o) => o.address_street ?? ""],
+  ["Apartment", (o) => o.address_apartment ?? ""],
+  ["City", (o) => o.address_city ?? ""],
+  ["ZIP", (o) => o.address_zip ?? ""],
+  ["Addon", (o) => o.addon_qty],
+  ["Special requests", (o) => o.special_requests ?? ""],
+  ["Total", (o) => o.order_total],
+  ["Status", (o) => o.status],
+];
+
+function ordersToCSV(rows: PreorderOrder[]): string {
+  const header = PREORDER_CSV_COLUMNS.map(([label]) => csvField(label)).join(",");
+  const lines = rows.map((o) => PREORDER_CSV_COLUMNS.map(([, get]) => csvField(get(o))).join(","));
+  return [header, ...lines].join("\n");
+}
+
 export default function Preorders() {
   const { org } = useOrg();
   const fmt = useFmt();
@@ -78,6 +152,7 @@ export default function Preorders() {
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [detailOrder, setDetailOrder] = useState<PreorderOrder | null>(null);
 
   // Every date the event serves, plus any date an order landed on that isn't
   // configured — an order for an unlisted day must never become invisible.
@@ -289,9 +364,17 @@ export default function Preorders() {
             }
             onCancel={(id) => run(() => cancelPreorderOrder(org!.id, id))}
             onRestore={(id) => run(() => restorePreorderOrder(org!.id, id))}
+            onOpenDetail={setDetailOrder}
           />
         </>
       )}
+
+      <OrderDetailModal
+        order={detailOrder}
+        event={activeEvent}
+        fmt={fmt}
+        onClose={() => setDetailOrder(null)}
+      />
 
       <AddOrderModal
         open={addOpen}
@@ -561,7 +644,7 @@ function TakeawayLane({ orders, fmt }: { orders: PreorderOrder[]; fmt: (n: numbe
 /** Every order for the date, with the edits staff actually make by phone. */
 function OrderList({
   event, rows, dayOrders, fmt, search, onSearch, showCancelled, onToggleCancelled,
-  slotFilter, onClearSlotFilter, busy, onQuantity, onSeat, onCancel, onRestore,
+  slotFilter, onClearSlotFilter, busy, onQuantity, onSeat, onCancel, onRestore, onOpenDetail,
 }: {
   event: PreorderEvent;
   rows: PreorderOrder[];
@@ -578,6 +661,7 @@ function OrderList({
   onSeat: (id: string, startMin: number | null) => void;
   onCancel: (id: string) => void;
   onRestore: (id: string) => void;
+  onOpenDetail: (order: PreorderOrder) => void;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -633,6 +717,14 @@ function OrderList({
           <Button variant="ghost" onClick={onToggleCancelled}>
             {showCancelled ? "Hide cancelled" : "Show cancelled"}
           </Button>
+          <Button
+            variant="ghost"
+            disabled={rows.length === 0}
+            onClick={() => downloadFile(ordersToCSV(rows), `preorders-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv")}
+            title={`Export ${rows.length} order${rows.length === 1 ? "" : "s"} shown below as CSV`}
+          >
+            <Download className="h-4 w-4" /> Export
+          </Button>
         </div>
       </div>
 
@@ -647,12 +739,33 @@ function OrderList({
               return (
                 <tr key={o.id} className={cn("align-top", cancelled && "opacity-50")}>
                   <td className="px-4 py-3">
-                    <p className={cn("font-medium text-white", cancelled && "line-through")}>
+                    <button
+                      onClick={() => onOpenDetail(o)}
+                      className={cn(
+                        "group inline-flex cursor-pointer items-center gap-1.5 font-medium text-white hover:text-brand-300",
+                        cancelled && "line-through",
+                      )}
+                      title="View full order details"
+                    >
                       {o.customer_name || "Unnamed"}
+                      <Eye className="h-3 w-3 shrink-0 text-zinc-600 group-hover:text-brand-300" />
+                    </button>
+
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500">
+                      {o.customer_phone && (
+                        <a href={telHref(o.customer_phone)} className="hover:text-brand-300" onClick={(e) => e.stopPropagation()}>
+                          {o.customer_phone}
+                        </a>
+                      )}
+                      {o.customer_email && (
+                        <a href={`mailto:${o.customer_email}`} className="hover:text-brand-300" onClick={(e) => e.stopPropagation()}>
+                          {o.customer_email}
+                        </a>
+                      )}
+                      {!o.customer_phone && !o.customer_email && "No contact"}
                     </p>
-                    <p className="text-xs text-zinc-500">
-                      {[o.customer_phone, o.customer_email].filter(Boolean).join(" · ") || "No contact"}
-                    </p>
+                    <p className="mt-0.5 text-xs text-zinc-600">Submitted {timeAgo(o.created_at)}</p>
+
                     {(o.address_street || o.address_city) && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-zinc-500">
                         <MapPin className="mt-0.5 h-3 w-3 shrink-0" />
@@ -661,7 +774,7 @@ function OrderList({
                       </p>
                     )}
                     {o.special_requests && (
-                      <p className="mt-1 flex items-start gap-1 text-xs text-violet-soft">
+                      <p className="mt-1 line-clamp-2 flex items-start gap-1 text-xs text-violet-soft">
                         <MessageSquare className="mt-0.5 h-3 w-3 shrink-0" />
                         {o.special_requests}
                       </p>
@@ -1122,6 +1235,122 @@ function EventSettingsModal({
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button onClick={submit}>Save</Button>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Everything about one order in one place — the thing a spreadsheet gives you
+ * for free (every column, right there) that a compact table row can't. Opens
+ * from clicking a guest's name in the order list.
+ */
+function OrderDetailModal({
+  order, event, fmt, onClose,
+}: {
+  order: PreorderOrder | null;
+  event: PreorderEvent;
+  fmt: (n: number) => string;
+  onClose: () => void;
+}) {
+  if (!order) return null;
+  const source = orderSource(order);
+  const cancelled = order.status === "cancelled";
+
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="grid grid-cols-[110px_1fr] gap-3 py-2 text-sm">
+      <span className="text-zinc-500">{label}</span>
+      <span className="text-zinc-100">{children}</span>
+    </div>
+  );
+
+  return (
+    <Modal open={!!order} onClose={onClose} title={order.customer_name || "Unnamed guest"}>
+      <div className="space-y-1 divide-y divide-line/60">
+        <Row label="Status">
+          <div className="flex items-center gap-2">
+            <Badge tone={cancelled ? "rose" : "green"}>{cancelled ? "Cancelled" : "Confirmed"}</Badge>
+            <Badge tone={order.fulfillment_type === "dine_in" ? "cyan" : "neutral"}>
+              {FULFILMENT_LABEL[order.fulfillment_type]}
+            </Badge>
+          </div>
+        </Row>
+
+        <Row label="Contact">
+          <div className="space-y-1">
+            {order.customer_phone ? (
+              <a href={telHref(order.customer_phone)} className="flex items-center gap-1.5 hover:text-brand-300">
+                <Phone className="h-3.5 w-3.5 text-zinc-500" /> {order.customer_phone}
+              </a>
+            ) : (
+              <p className="text-zinc-500">No phone</p>
+            )}
+            {order.customer_email ? (
+              <a href={`mailto:${order.customer_email}`} className="flex items-center gap-1.5 hover:text-brand-300">
+                <Mail className="h-3.5 w-3.5 text-zinc-500" /> {order.customer_email}
+              </a>
+            ) : (
+              <p className="text-zinc-500">No email</p>
+            )}
+          </div>
+        </Row>
+
+        <Row label="Service date">{dayLabel(order.requested_date)}</Row>
+
+        <Row label={order.fulfillment_type === "dine_in" ? "Seating" : "Pickup"}>
+          {order.timeslot_start ? (
+            <span className="flex items-center gap-2">
+              {slotLabel(order)}
+              {isOffGrid(order, event.slot_minutes) && <Badge tone="violet">Off the hourly grid</Badge>}
+            </span>
+          ) : (
+            <span className="text-amber-soft">Not yet placed</span>
+          )}
+        </Row>
+
+        <Row label="Covers">
+          <span className="font-display text-base font-bold">{order.quantity}</span> sadhya{order.quantity === 1 ? "" : "s"}
+          {order.addon_qty > 0 && <span className="text-zinc-400"> · {order.addon_qty} Real Leaf addon</span>}
+        </Row>
+
+        {(order.address_street || order.address_city) && (
+          <Row label="Address">
+            <div className="flex items-start gap-1.5">
+              <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-zinc-500" />
+              <span>
+                {[order.address_street, order.address_apartment].filter(Boolean).join(", ")}
+                {(order.address_street || order.address_apartment) && (order.address_zip || order.address_city) ? <br /> : null}
+                {[order.address_zip, order.address_city].filter(Boolean).join(" ")}
+              </span>
+            </div>
+          </Row>
+        )}
+
+        {order.special_requests && (
+          <Row label="Special requests">
+            <span className="whitespace-pre-wrap text-violet-soft">{order.special_requests}</span>
+          </Row>
+        )}
+
+        <Row label="Total">
+          <span className="font-display text-base font-bold">{fmt(Number(order.order_total) || 0)}</span>
+          <span className="ml-2 text-xs text-zinc-500">as submitted — not recalculated on edits</span>
+        </Row>
+
+        <Row label="Submitted">
+          {submittedLabel(order.created_at)}
+          <span className="ml-1 text-zinc-500">({timeAgo(order.created_at)})</span>
+        </Row>
+
+        <Row label="Source">
+          <span className="flex items-center gap-1.5 text-zinc-400">
+            <source.icon className="h-3.5 w-3.5" /> {source.label}
+          </span>
+        </Row>
+      </div>
+
+      <div className="mt-4 flex justify-end">
+        <Button variant="ghost" onClick={onClose}>Close</Button>
       </div>
     </Modal>
   );
