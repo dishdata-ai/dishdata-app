@@ -644,6 +644,22 @@ export function buildOrderFromFields(
 
   const quantity = Number(getNum("quantity")) || 0;
   if (quantity <= 0) return { error: "quantity must be at least 1" };
+  // `quantity` and `addon_qty` are integer columns — a decimal here almost
+  // always means a column landed in the wrong place (e.g. the total leaking
+  // into the covers count from a misaligned row). Reject with the offending
+  // value rather than silently truncating it: a wrong-but-plausible cover
+  // count is far worse than a skipped row, and this is a batch upsert — one
+  // bad value here would otherwise fail the Postgres insert for every row in
+  // the same import, not just this one.
+  if (!Number.isInteger(quantity)) {
+    return { error: `quantity must be a whole number, got "${getNum("quantity")}" — check this row's columns line up` };
+  }
+
+  const addonRaw = getNum("addon");
+  const addon_qty = Number(addonRaw) || 0;
+  if (!Number.isInteger(addon_qty)) {
+    return { error: `Real Leaf addon must be a whole number, got "${addonRaw}" — check this row's columns line up` };
+  }
 
   const fulfillment = normalizeFulfillment(get("fulfillment"));
   const slot = parseTimeslot(get("timeslot"));
@@ -663,7 +679,7 @@ export function buildOrderFromFields(
       address_apartment: get("apartment") || null,
       address_city: get("city") || null,
       address_zip: get("zip") || null,
-      addon_qty: Number(getNum("addon")) || 0,
+      addon_qty,
       special_requests: get("notes") || null,
       order_total: parseMoney(getNum("total")),
     },

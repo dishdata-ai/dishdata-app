@@ -117,6 +117,17 @@ check("16 seated", totals.coversSeated === 16);
 check("15 still to place", totals.coversUnplaced === 15);
 check("unassigned queue matches", unassignedParties(aug29).reduce((n, o) => n + o.quantity, 0) === 15);
 
+console.log("== Integer column guards (a decimal here means columns are misaligned) ==");
+check("a decimal quantity is rejected, not truncated",
+  !!buildOrderFromFields({ Name: "X", "Choose Date": "22 August 2026", Number: "47.98",
+    "How would you like to receive your order?": "Takeaway" }).error);
+check("a decimal addon count is rejected",
+  !!buildOrderFromFields({ Name: "X", "Choose Date": "22 August 2026", Number: "2",
+    "How would you like to receive your order?": "Takeaway", "Real Leaf addon": "47.98" }).error);
+check("a whole-number addon count is accepted",
+  !buildOrderFromFields({ Name: "X", "Choose Date": "22 August 2026", Number: "2",
+    "How would you like to receive your order?": "Takeaway", "Real Leaf addon": "3" }).error);
+
 console.log("== Overbooking guards ==");
 const full = [...aug29, party("Walk-up", 13, "14:00:00", "15:00:00")];
 check("exactly at capacity reads full", hour(full, 14).state === "full" && hour(full, 14).booked === 20);
