@@ -117,6 +117,26 @@ check("16 seated", totals.coversSeated === 16);
 check("15 still to place", totals.coversUnplaced === 15);
 check("unassigned queue matches", unassignedParties(aug29).reduce((n, o) => n + o.quantity, 0) === 15);
 
+console.log("== Multi-line quoted cell (a special request with a line break) ==");
+const MULTILINE_HEADER = ["Submission Time","Name","Email Address","Phone Number","Choose Date","Number",
+  "How would you like to receive your order?","Timeslot","Any special requests?","Order Total"].join("\t");
+const MULTILINE_ROW = [
+  "Aug 20, 2026 @ 7:43 PM", "Shaleena Ann Thomas", "shaleenaann93@gmail.com", "15205923283",
+  "29 August 2026", "7", "Dine in", "14-15",
+  "\"We would like to have kids seat as well\n\n2 are in the age 3 and 2 are in the age 1 to 1.5\"",
+  "184.43",
+].join("\t");
+const TRAILING_ROW = ["Aug 20, 2026 @ 5:27 PM", "Sajan Thomas", "saj.thomas@outlook.com", "15258730899",
+  "22 August 2026", "3", "Dine in", "13-14", "", "77.97"].join("\t");
+const multi = parseImportRows([MULTILINE_HEADER, MULTILINE_ROW, TRAILING_ROW].join("\n"));
+check("both rows parsed, not shredded into fragments",
+  multi.rows.length === 2, JSON.stringify({ rows: multi.rows.length, errors: multi.errors }));
+check("Shaleena's date survives the embedded line break", multi.rows[0]?.requested_date === "2026-08-29");
+check("the line break itself is kept in the note, not lost",
+  (multi.rows[0]?.special_requests || "").includes("age 1 to 1.5"));
+check("the row AFTER the multi-line cell still parses (nothing shifted)",
+  multi.rows[1]?.customer_name === "Sajan Thomas");
+
 console.log("== Integer column guards (a decimal here means columns are misaligned) ==");
 check("a decimal quantity is rejected, not truncated",
   !!buildOrderFromFields({ Name: "X", "Choose Date": "22 August 2026", Number: "47.98",

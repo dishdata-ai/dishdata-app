@@ -721,14 +721,49 @@ export interface ParsedImport {
  * what a spreadsheet selection yields on copy, so staff can select rows in
  * Sheets and paste straight in.
  */
+/**
+ * Split pasted TSV text into rows of cells, respecting a quoted cell that
+ * spans multiple physical lines — e.g. a special request with a line break,
+ * which Sheets exports as `"line one\nline two"` inside one cell. Splitting
+ * naively on "\n" shreds that one row into several bogus ones (this broke a
+ * real 7-cover Onam order: the date landed in a fragment reading "Berlin").
+ * `""` inside a quoted cell is an escaped literal quote, per the same
+ * convention Sheets/Excel use.
+ */
+function parseDelimitedRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; } else { inQuotes = false; }
+      } else {
+        cell += c;
+      }
+      continue;
+    }
+    if (c === '"' && cell === "") { inQuotes = true; continue; }
+    if (c === "\t") { row.push(cell.trim()); cell = ""; continue; }
+    if (c === "\r") continue;
+    if (c === "\n") { row.push(cell.trim()); rows.push(row); row = []; cell = ""; continue; }
+    cell += c;
+  }
+  if (cell !== "" || row.length > 0) { row.push(cell.trim()); rows.push(row); }
+
+  return rows.filter((r) => r.some((c) => c !== ""));
+}
+
 export function parseImportRows(text: string): ParsedImport {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length < 2) {
+  const parsed = parseDelimitedRows(text);
+  if (parsed.length < 2) {
     return { rows: [], errors: ["Paste the header row plus at least one order."], missingColumns: [] };
   }
 
-  const split = (line: string) => line.split("\t").map((c) => c.trim().replace(/^"|"$/g, ""));
-  const index = mapHeaders(split(lines[0]));
+  const index = mapHeaders(parsed[0]);
 
   const required = ["name", "date", "quantity", "fulfillment"];
   const missingColumns = required.filter((f) => !(f in index));
@@ -745,8 +780,7 @@ export function parseImportRows(text: string): ParsedImport {
     Object.entries(index).map(([field, i]) => [i, field]),
   ) as Record<number, string>;
 
-  lines.slice(1).forEach((line, i) => {
-    const cells = split(line);
+  parsed.slice(1).forEach((cells, i) => {
     const rowNo = i + 2;
 
     const fields: Record<string, string> = {};
