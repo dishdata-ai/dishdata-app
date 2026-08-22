@@ -311,7 +311,7 @@ export async function listPreorderEvents(orgId: string): Promise<PreorderEvent[]
     .select("*")
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data ?? []) as PreorderEvent[];
 }
 
@@ -344,7 +344,7 @@ export async function createPreorderEvent(
     .insert({ org_id: orgId, ...patch })
     .select("id")
     .single();
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data as { id: string }).id;
 }
 
@@ -363,7 +363,7 @@ export async function updatePreorderEvent(
     .update(patch)
     .eq("id", id)
     .eq("org_id", orgId);
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ export async function listPreorderOrders(
     .eq("event_id", eventId);
   if (date) q = q.eq("requested_date", date);
   const { data, error } = await q.order("created_at");
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data ?? []) as PreorderOrder[];
 }
 
@@ -439,7 +439,7 @@ export async function addPreorderOrder(
     .insert({ org_id: orgId, event_id: eventId, ...order })
     .select("id")
     .single();
-  if (error) throw error;
+  if (error) throw new Error(error.message);
   return (data as { id: string }).id;
 }
 
@@ -458,7 +458,7 @@ export async function updatePreorderOrder(
     .update(patch)
     .eq("id", id)
     .eq("org_id", orgId);
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 }
 
 /** Seat a party. Passing null start clears the seating and returns it to the queue. */
@@ -497,7 +497,7 @@ export async function deletePreorderOrder(orgId: string, id: string): Promise<vo
     .delete()
     .eq("id", id)
     .eq("org_id", orgId);
-  if (error) throw error;
+  if (error) throw new Error(error.message);
 }
 
 /**
@@ -545,7 +545,7 @@ export async function importPreorderOrders(
       .eq("org_id", orgId)
       .eq("event_id", eventId)
       .in("external_id", keyed.map((r) => r.external_id as string));
-    if (exErr) throw exErr;
+    if (exErr) throw new Error(exErr.message);
     updated = (existing ?? []).length;
 
     const { error } = await sb
@@ -554,14 +554,14 @@ export async function importPreorderOrders(
         keyed.map((r) => ({ org_id: orgId, event_id: eventId, ...r })),
         { onConflict: "event_id,external_id" },
       );
-    if (error) throw error;
+    if (error) throw new Error(error.message);
   }
 
   if (unkeyed.length > 0) {
     const { error } = await sb
       .from("preorder_orders")
       .insert(unkeyed.map((r) => ({ org_id: orgId, event_id: eventId, ...r })));
-    if (error) throw error;
+    if (error) throw new Error(error.message);
   }
 
   return { inserted: keyed.length - updated + unkeyed.length, updated };

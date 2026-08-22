@@ -1756,8 +1756,12 @@ create index if not exists preorder_orders_org_event_idx
   on public.preorder_orders (org_id, event_id);
 create index if not exists preorder_orders_event_date_idx
   on public.preorder_orders (event_id, requested_date);
+-- Plain, not partial: a plain unique index already lets unlimited manually
+-- added orders (external_id null) coexist, since NULL never equals NULL for
+-- uniqueness — and a partial index breaks upsert's ON CONFLICT matching
+-- (fixed in 0038 after it broke every import in production).
 create unique index if not exists preorder_orders_event_external_uidx
-  on public.preorder_orders (event_id, external_id) where external_id is not null;
+  on public.preorder_orders (event_id, external_id);
 
 do $$
 declare t text;
