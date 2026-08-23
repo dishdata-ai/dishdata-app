@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useCallback } from "react";
 import { View, Text, ScrollView, Pressable, Modal, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -28,6 +28,14 @@ import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/t
 import { setKitchenStatus, type PaymentInput } from "@/lib/api/orders";
 import { emailReceipt } from "@/lib/api/receipts";
 import { printReceipt, isPrinterReady } from "@/lib/api/printing";
+import {
+  bluetoothPrintingSupported,
+  listPairedPrinters,
+  getSavedPrinter,
+  savePrinter,
+  printReceiptViaBluetooth,
+  type BluetoothPrinterDevice,
+} from "@/lib/api/bluetoothPrinter";
 
 const TIP_OPTIONS = [0, 10, 15, 18, 20] as const;
 const METHODS: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -371,6 +379,31 @@ export default function Pos() {
   const [belegSending, setBelegSending] = useState(false);
   const [belegNote, setBelegNote] = useState("");
   const [printing, setPrinting] = useState(false);
+
+  // Bluetooth printing (Android only). The chosen device is per-tablet, not
+  // per-restaurant, so it lives in AsyncStorage rather than org.settings.
+  const [btPrinter, setBtPrinter] = useState<BluetoothPrinterDevice | null>(null);
+  const [btPickerOpen, setBtPickerOpen] = useState(false);
+  const [btDevices, setBtDevices] = useState<BluetoothPrinterDevice[]>([]);
+  const [btLoading, setBtLoading] = useState(false);
+
+  useEffect(() => {
+    if (bluetoothPrintingSupported()) getSavedPrinter().then(setBtPrinter).catch(() => {});
+  }, []);
+
+  const openBtPicker = useCallback(async () => {
+    setBtLoading(true);
+    setBelegNote("");
+    try {
+      setBtDevices(await listPairedPrinters());
+      setBtPickerOpen(true);
+    } catch (e) {
+      // Most often the permission prompt was declined, or Bluetooth is off.
+      setBelegNote(e instanceof Error ? e.message : "Bluetooth-Geräte konnten nicht gelesen werden.");
+    } finally {
+      setBtLoading(false);
+    }
+  }, []);
 
   // Event/popup menus: when one is picked, the grid shows only its dishes.
   const eventMenus = eventMenusQ.data ?? [];
@@ -993,6 +1026,52 @@ export default function Pos() {
                 </Pressable>
               ) : null}
 
+              {/* Bluetooth print — for a printer that isn't on the network.
+                  Android only: iOS has no public classic-Bluetooth API. */}
+              {bluetoothPrintingSupported() ? (
+                <View className="mt-3 flex-row gap-2">
+                  <Pressable
+                    disabled={printing || !btPrinter}
+                    onPress={async () => {
+                      setPrinting(true);
+                      setBelegNote("");
+                      const r = await printReceiptViaBluetooth(receipt.order_id);
+                      setBelegNote(r.message);
+                      setPrinting(false);
+                    }}
+                    className={`flex-1 flex-row items-center justify-center gap-2 rounded-xl py-3.5 ${
+                      printing || !btPrinter ? "bg-white/5" : "bg-white/10 active:bg-white/20"
+                    }`}
+                  >
+                    <Ionicons
+                      name="bluetooth"
+                      size={17}
+                      color={printing || !btPrinter ? colors.zinc500 : colors.white}
+                    />
+                    <Text
+                      className={`text-sm font-bold ${
+                        printing || !btPrinter ? "text-zinc-500" : "text-white"
+                      }`}
+                    >
+                      {printing ? "Drucken…" : btPrinter ? "Bluetooth-Bon" : "Kein Drucker"}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={btLoading}
+                    onPress={openBtPicker}
+                    className="items-center justify-center rounded-xl bg-white/10 px-4 active:bg-white/20"
+                  >
+                    {btLoading ? (
+                      <ActivityIndicator size="small" color={colors.white} />
+                    ) : (
+                      <Ionicons name="settings-outline" size={17} color={colors.white} />
+                    )}
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {btPrinter ? <Muted className="mt-1">Drucker: {btPrinter.name}</Muted> : null}
+
               {/* Beleg — email a German receipt if the guest asks for one */}
               <View className="mt-3 gap-2">
                 <Muted>Beleg per E-Mail (optional)</Muted>
@@ -1030,6 +1109,77 @@ export default function Pos() {
               <Button title="New order" className="mt-4" onPress={() => setReceipt(null)} />
             </Card>
           ) : null}
+        </View>
+      </Modal>
+
+      {/* Bluetooth printer picker — lists devices already paired to this
+          tablet in Android's Bluetooth settings. */}
+      <Modal visible={btPickerOpen} transparent animationType="fade" onRequestClose={() => setBtPickerOpen(false)}>
+        <View className="flex-1 items-center justify-center bg-black/70 p-6">
+          <Card className="w-full">
+            <Text className="text-lg font-bold text-white">Bluetooth-Drucker</Text>
+            <Muted className="mt-1">
+              Geräte, die bereits mit diesem Tablet gekoppelt sind.
+            </Muted>
+
+            {btDevices.length === 0 ? (
+              <Muted className="mt-4">
+                Keine gekoppelten Geräte gefunden. Koppeln Sie den Drucker zuerst in den
+                Android-Bluetooth-Einstellungen.
+              </Muted>
+            ) : (
+              <View className="mt-4 gap-2">
+                {btDevices.map((d) => {
+                  const selected = btPrinter?.address === d.address;
+                  return (
+                    <Pressable
+                      key={d.address}
+                      onPress={async () => {
+                        await savePrinter(d);
+                        setBtPrinter(d);
+                        setBtPickerOpen(false);
+                        setBelegNote(`Drucker gesetzt: ${d.name}`);
+                      }}
+                      className={`flex-row items-center justify-between rounded-xl border px-4 py-3 ${
+                        selected ? "border-brand-400 bg-brand-500/10" : "border-line bg-white/5"
+                      }`}
+                    >
+                      <View className="flex-1 pr-3">
+                        <Text className="font-semibold text-white" numberOfLines={1}>
+                          {d.name || "Unbenannt"}
+                        </Text>
+                        <Muted>{d.address}</Muted>
+                      </View>
+                      {selected ? (
+                        <Ionicons name="checkmark-circle" size={20} color={colors.brand400} />
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+
+            <View className="mt-4 flex-row gap-2">
+              {btPrinter ? (
+                <Pressable
+                  onPress={async () => {
+                    await savePrinter(null);
+                    setBtPrinter(null);
+                    setBtPickerOpen(false);
+                  }}
+                  className="flex-1 items-center justify-center rounded-xl bg-white/5 py-3 active:bg-white/10"
+                >
+                  <Text className="text-sm font-semibold text-zinc-400">Entfernen</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                onPress={() => setBtPickerOpen(false)}
+                className="flex-1 items-center justify-center rounded-xl bg-white/10 py-3 active:bg-white/20"
+              >
+                <Text className="text-sm font-bold text-white">Schließen</Text>
+              </Pressable>
+            </View>
+          </Card>
         </View>
       </Modal>
     </Screen>

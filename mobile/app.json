@@ -33,7 +33,8 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH_CONNECT"
       ],
       "usesCleartextTraffic": true
     },
@@ -55,7 +56,8 @@
         {
           "locationWhenInUsePermission": "DishData shares your location with customers while you're out on a delivery."
         }
-      ]
+      ],
+      "with-rn-bluetooth-classic"
     ],
     "experiments": {
       "typedRoutes": true

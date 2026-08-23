@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { generateReceiptHTML, buildEscPosReceipt } from "@/lib/receipts";
-import { buildEposXml } from "@/lib/escpos";
+import { buildEposXml, encodeReceipt } from "@/lib/escpos";
 import QRCode from "qrcode";
 import type { Order, Org, Payment } from "@/lib/api/database.types";
 
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
   }
   const { supabase } = auth;
 
-  let body: { order_id?: string; email?: string; send?: boolean; format?: "html" | "epos"; columns?: number; openDrawer?: boolean };
+  let body: { order_id?: string; email?: string; send?: boolean; format?: "html" | "epos" | "raw"; columns?: number; openDrawer?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -164,26 +164,36 @@ export async function POST(req: NextRequest) {
   // building the receipt there would mean a second copy of the layout and the
   // per-rate VAT rules. Rendering the printer payload here keeps one
   // implementation — the client just forwards these bytes to the printer.
-  const epos =
-    body.format === "epos"
-      ? buildEposXml(
-          buildEscPosReceipt(
-            {
-              receiptNumber: receipt.receipt_number,
-              order: order as Order,
-              org: org as Org,
-              payments: (payments as Payment[]) ?? [],
-              customerName: receipt.customer_name,
-            },
-            { openDrawer: body.openDrawer, columns: body.columns },
-          ),
-        )
-      : undefined;
+  // "epos" is XML for a printer's network web service; "raw" is the same
+  // receipt as literal ESC/POS bytes, base64-encoded for JSON transport — for
+  // a Bluetooth (or USB/agent) transport that writes bytes directly rather
+  // than speaking HTTP to the printer. Both go through buildEscPosReceipt so
+  // the layout and VAT math can't drift between transports.
+  let epos: string | undefined;
+  let rawBase64: string | undefined;
+  if (body.format === "epos" || body.format === "raw") {
+    const escPosReceipt = buildEscPosReceipt(
+      {
+        receiptNumber: receipt.receipt_number,
+        order: order as Order,
+        org: org as Org,
+        payments: (payments as Payment[]) ?? [],
+        customerName: receipt.customer_name,
+      },
+      { openDrawer: body.openDrawer, columns: body.columns },
+    );
+    if (body.format === "epos") {
+      epos = buildEposXml(escPosReceipt);
+    } else {
+      rawBase64 = Buffer.from(encodeReceipt(escPosReceipt)).toString("base64");
+    }
+  }
 
   return NextResponse.json({
     receiptNumber: receipt.receipt_number,
     html,
     ...(epos ? { epos } : {}),
+    ...(rawBase64 ? { rawBase64 } : {}),
     emailed,
     ...(emailError ? { emailError } : {}),
   });
