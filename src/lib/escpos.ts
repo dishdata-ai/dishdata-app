@@ -13,6 +13,8 @@
  * and lets the printer's web service handle it.
  */
 
+import type { RasterImage } from "./escpos-image";
+
 /** Font A on an 80mm roll is 48 columns. 58mm rolls are 32 — set per printer. */
 export const DEFAULT_COLUMNS = 48;
 
@@ -45,6 +47,7 @@ type Align = "left" | "center" | "right";
 type Directive =
   | { t: "text"; s: string; align?: Align; bold?: boolean; dw?: boolean; dh?: boolean }
   | { t: "qr"; data: string }
+  | { t: "image"; img: RasterImage }
   | { t: "feed"; n: number }
   | { t: "cut" }
   | { t: "pulse" };
@@ -129,6 +132,8 @@ export interface EscPosReceipt {
   /** Pop the cash drawer as part of this job. */
   openDrawer?: boolean;
   columns?: number;
+  /** Pre-rasterized by escpos-image.ts (server-only) — the layout builder never touches image bytes itself. */
+  logo?: RasterImage | null;
   /**
    * TSE signature block (KassenSichV §6). The QR carries every required field,
    * so printing it means the plain-text values are only a fallback.
@@ -158,6 +163,7 @@ export function buildReceipt(r: EscPosReceipt): Directive[] {
     d.push({ t: "text", s, ...o } as Directive);
 
   // --- header -------------------------------------------------------------
+  if (r.logo) d.push({ t: "image", img: r.logo });
   // Double-width halves the usable columns, so wrap the name accordingly.
   for (const l of wrap(r.orgName, Math.floor(w / 2))) {
     push(l, { align: "center", bold: true, dw: true, dh: true });
@@ -293,6 +299,23 @@ export function encodeReceipt(r: EscPosReceipt): Uint8Array {
       b.push(GS, 0x28, 0x6b, 3, 0, 49, 69, 49); // error correction M
       b.push(GS, 0x28, 0x6b, len & 0xff, (len >> 8) & 0xff, 49, 80, 48, ...bytes); // store
       b.push(GS, 0x28, 0x6b, 3, 0, 49, 81, 48); // print
+    } else if (dir.t === "image") {
+      // GS v 0 — print raster bit image. Epson lists it "obsolete" in favour
+      // of GS ( L, but it's simpler, needs no store/print split, and every
+      // TM-series firmware still supports it — the right tradeoff for a
+      // one-shot logo rather than a reusable stored image.
+      if (align !== "center") {
+        b.push(ESC, 0x61, 1);
+        align = "center";
+      }
+      const { widthPx, heightPx, bits } = dir.img;
+      const xBytes = widthPx / 8;
+      b.push(
+        GS, 0x76, 0x30, 0,
+        xBytes & 0xff, (xBytes >> 8) & 0xff,
+        heightPx & 0xff, (heightPx >> 8) & 0xff,
+        ...bits,
+      );
     } else {
       const a = dir.align ?? "left";
       if (a !== align) {
@@ -349,6 +372,17 @@ export function buildEposXml(r: EscPosReceipt): string {
     } else if (dir.t === "qr") {
       body.push(
         `<symbol type="qrcode_model2" level="level_m" width="4" align="center">${xmlEscape(dir.data)}</symbol>`,
+      );
+    } else if (dir.t === "image") {
+      // Same packed 1-bit raster bytes as the GS v 0 byte renderer — ePOS-Print
+      // XML's <image> takes the identical raster format, just base64 instead
+      // of inline binary. NOTE: attribute names/values here follow Epson's
+      // documented schema but haven't been exercised against a live network
+      // printer yet (only the Bluetooth/raw-byte path has). Re-check against a
+      // real ePOS-Print response once the network path is actually in use.
+      const b64 = Buffer.from(dir.img.bits).toString("base64");
+      body.push(
+        `<image width="${dir.img.widthPx}" height="${dir.img.heightPx}" color="color_1" mode="mono" align="center">${b64}</image>`,
       );
     } else {
       const attrs = [

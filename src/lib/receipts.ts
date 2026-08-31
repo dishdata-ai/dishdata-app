@@ -1,6 +1,7 @@
 import type { Order, Org, Payment, OrderLine } from "./api/database.types";
 import { computeTaxGroups } from "./tax";
 import type { EscPosReceipt } from "./escpos";
+import type { RasterImage } from "./escpos-image";
 
 /**
  * Data needed to render a customer receipt (Kundenbeleg / Rechnung).
@@ -56,7 +57,10 @@ function esc(s: string): string {
  * Shares the label maps and the per-rate VAT split with the HTML version, so
  * the printed and emailed receipts can't drift apart.
  */
-export function buildEscPosReceipt(data: ReceiptData, opts: { openDrawer?: boolean; columns?: number } = {}) {
+export function buildEscPosReceipt(
+  data: ReceiptData,
+  opts: { openDrawer?: boolean; columns?: number; logo?: RasterImage | null } = {},
+) {
   const { receiptNumber, order, org, payments = [] } = data;
   const settings = (org.settings ?? {}) as Record<string, unknown>;
   const items: OrderLine[] = Array.isArray(order.items) ? order.items : [];
@@ -95,6 +99,7 @@ export function buildEscPosReceipt(data: ReceiptData, opts: { openDrawer?: boole
         : "—",
     openDrawer: opts.openDrawer,
     columns: opts.columns,
+    logo: opts.logo ?? null,
     tseQrData: order.tse_status === "signed" ? order.tse_qr_data ?? null : null,
     // Printed under the QR as a human-readable fallback. Kept short: the QR is
     // the authoritative carrier, and the full signature is far too long to be

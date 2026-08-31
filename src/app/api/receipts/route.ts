@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 import { generateReceiptHTML, buildEscPosReceipt } from "@/lib/receipts";
-import { buildEposXml, encodeReceipt } from "@/lib/escpos";
+import { buildEposXml, encodeReceipt, DEFAULT_COLUMNS } from "@/lib/escpos";
+import { rasterizeLogo } from "@/lib/escpos-image";
 import QRCode from "qrcode";
 import type { Order, Org, Payment } from "@/lib/api/database.types";
 
@@ -172,6 +173,13 @@ export async function POST(req: NextRequest) {
   let epos: string | undefined;
   let rawBase64: string | undefined;
   if (body.format === "epos" || body.format === "raw") {
+    // Fixed dot width regardless of the printer's column count (which only
+    // sets the *text* grid) — a raster image is addressed in dots, not
+    // characters, and 576 is the TM-m30's native 80mm width. A 58mm printer
+    // would need a narrower raster; not a restaurant DishData serves today.
+    const logoUrl = (org as Org).receipt_logo_url || (org as Org).logo_url;
+    const logo = logoUrl ? await rasterizeLogo(logoUrl, 576) : null;
+
     const escPosReceipt = buildEscPosReceipt(
       {
         receiptNumber: receipt.receipt_number,
@@ -180,7 +188,7 @@ export async function POST(req: NextRequest) {
         payments: (payments as Payment[]) ?? [],
         customerName: receipt.customer_name,
       },
-      { openDrawer: body.openDrawer, columns: body.columns },
+      { openDrawer: body.openDrawer, columns: body.columns ?? DEFAULT_COLUMNS, logo },
     );
     if (body.format === "epos") {
       epos = buildEposXml(escPosReceipt);
