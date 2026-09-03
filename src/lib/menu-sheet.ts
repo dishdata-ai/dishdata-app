@@ -51,6 +51,36 @@ const FOOTER = 24; // reserved on every page, so the last one always has room
 /** Drinks conventionally close a menu, whatever order the categories were created in. */
 const LAST_CATEGORIES = ["beverages", "drinks", "getränke", "getraenke"];
 
+export type SheetLang = "en" | "de";
+
+/**
+ * Wording that belongs to the sheet itself rather than to any dish.
+ *
+ * Only the fixed furniture is translated here — dish names, descriptions and
+ * category labels come from the recipe's own `*_de` columns, so a German sheet
+ * shows exactly the German the kitchen wrote and silently falls back to the
+ * English for anything not translated yet, rather than printing a blank.
+ */
+export const SHEET_STRINGS: Record<SheetLang, {
+  title: string;
+  stocks: string;
+  footnote: string;
+  continued: string;
+}> = {
+  en: {
+    title: "Today's Menu",
+    stocks: "Available today while stocks last",
+    footnote: "Please ask our team about allergens and dietary requirements.",
+    continued: "(cont.)",
+  },
+  de: {
+    title: "Tageskarte",
+    stocks: "Heute verfügbar, solange der Vorrat reicht",
+    footnote: "Bitte sprechen Sie unser Team auf Allergene und Ernährungswünsche an.",
+    continued: "(Fortsetzung)",
+  },
+};
+
 export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">): boolean {
   return r.is_active && !isSoldOut(r);
 }
@@ -64,23 +94,31 @@ export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">
  * menu in, and reordering is a matter of creating categories in the order you
  * want them read.
  */
-export function buildSections(recipes: Recipe[], withDescriptions = false): SheetSection[] {
+export function buildSections(
+  recipes: Recipe[],
+  { withDescriptions = false, lang = "en" }: { withDescriptions?: boolean; lang?: SheetLang } = {},
+): SheetSection[] {
   const order: string[] = [];
   const byCategory = new Map<string, SheetItem[]>();
+
+  // German falls back to English field by field, so a half-translated menu
+  // prints the translations that exist rather than gaps where they don't.
+  const de = lang === "de";
+  const pick = (german: string | null, english: string) => (de && german ? german : english);
 
   // Oldest-first so category order reads the way the menu was built up.
   for (const r of [...recipes].reverse()) {
     if (!isAvailableToday(r)) continue;
-    const category = (r.category || "Weitere").trim();
+    const category = pick(r.category_de, r.category || "Weitere").trim();
     if (!byCategory.has(category)) {
       byCategory.set(category, []);
       order.push(category);
     }
     const description = withDescriptions
-      ? (r.description_de || r.description || "").trim() || null
+      ? pick(r.description_de, r.description || "").trim() || null
       : null;
     byCategory.get(category)!.push({
-      name: (r.name_de || r.name).trim(),
+      name: pick(r.name_de, r.name).trim(),
       // A zero price means "ask us" rather than "free" — printing "0.00 €"
       // on a menu is worse than printing nothing at all.
       price: r.price > 0 ? r.price : null,

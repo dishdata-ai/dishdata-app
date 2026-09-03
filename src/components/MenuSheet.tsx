@@ -5,8 +5,8 @@ import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 import { Modal, Button } from "@/components/ui";
 import {
-  buildSections, paginate, sheetDate,
-  type SheetPage, type SheetSection,
+  buildSections, paginate, sheetDate, SHEET_STRINGS,
+  type SheetLang, type SheetPage, type SheetSection,
 } from "@/lib/menu-sheet";
 import { cn } from "@/lib/utils";
 import type { Org, Recipe } from "@/lib/api/database.types";
@@ -32,13 +32,20 @@ function money(value: number, currency: string): string {
   }
 }
 
-function Section({ section, currency, ink }: { section: SheetSection; currency: string; ink: string }) {
+function Section({
+  section, currency, ink, continuedLabel,
+}: {
+  section: SheetSection;
+  currency: string;
+  ink: string;
+  continuedLabel: string;
+}) {
   return (
     <div className="mb-[7mm]">
       <h3 className="text-[13pt] leading-none font-bold tracking-tight" style={{ color: ink }}>
         {section.category}
         {section.continued && (
-          <span className="ml-1.5 text-[8.5pt] font-normal opacity-60">(Fortsetzung)</span>
+          <span className="ml-1.5 text-[8.5pt] font-normal opacity-60">{continuedLabel}</span>
         )}
       </h3>
       <div className="mt-[2mm] mb-[3mm] h-px w-full" style={{ background: ink, opacity: 0.35 }} />
@@ -69,7 +76,7 @@ function Section({ section, currency, ink }: { section: SheetSection; currency: 
 }
 
 function Page({
-  page, org, ink, index, total, tagline, footnote,
+  page, org, ink, index, total, tagline, footnote, t,
 }: {
   page: SheetPage;
   org: Org;
@@ -78,6 +85,7 @@ function Page({
   total: number;
   tagline: string;
   footnote: string;
+  t: (typeof SHEET_STRINGS)[SheetLang];
 }) {
   const first = index === 0;
   const last = index === total - 1;
@@ -101,7 +109,7 @@ function Page({
           <div className="pt-[2mm] text-right">
             <p className="text-[8.5pt] text-zinc-500">{sheetDate()}</p>
             <h1 className="mt-[6mm] text-[30pt] leading-none font-light" style={{ color: ink }}>
-              Today&rsquo;s Menu
+              {t.title}
             </h1>
             <div className="mt-[3mm] flex items-center gap-[2mm]">
               <span className="h-[2mm] w-[2mm] rounded-full" style={{ background: ink }} />
@@ -114,7 +122,7 @@ function Page({
         // this is, and the space is better spent on dishes.
         <div className="flex shrink-0 items-baseline justify-between border-b pb-[2mm]" style={{ borderColor: `${ink}59` }}>
           <span className="text-[10pt] font-bold" style={{ color: ink }}>
-            {org.name} · Today&rsquo;s Menu
+            {org.name} · {t.title}
           </span>
           <span className="text-[8.5pt] text-zinc-500">{sheetDate()}</span>
         </div>
@@ -124,12 +132,24 @@ function Page({
         <div className="grid grid-cols-2 content-start gap-x-[12mm]">
           <div>
             {left.map((s, i) => (
-              <Section key={`${s.category}-${i}`} section={s} currency={org.currency} ink={ink} />
+              <Section
+                key={`${s.category}-${i}`}
+                section={s}
+                currency={org.currency}
+                ink={ink}
+                continuedLabel={t.continued}
+              />
             ))}
           </div>
           <div>
             {right.map((s, i) => (
-              <Section key={`${s.category}-${i}`} section={s} currency={org.currency} ink={ink} />
+              <Section
+                key={`${s.category}-${i}`}
+                section={s}
+                currency={org.currency}
+                ink={ink}
+                continuedLabel={t.continued}
+              />
             ))}
           </div>
         </div>
@@ -147,7 +167,7 @@ function Page({
               </p>
             )}
             <p className="text-[8.5pt] font-bold" style={{ color: ink }}>
-              Available today while stocks last
+              {t.stocks}
             </p>
             <p className="mt-[1mm] text-[8pt] text-zinc-500">{footnote}</p>
           </>
@@ -162,22 +182,27 @@ function Page({
 }
 
 export function MenuSheet({
-  org, recipes, withDescriptions,
+  org, recipes, withDescriptions, lang,
 }: {
   org: Org;
   recipes: Recipe[];
   withDescriptions: boolean;
+  lang: SheetLang;
 }) {
   const ink = org.accent_color || "#14523C";
-  const settings = (org.settings ?? {}) as { menuSheet?: { tagline?: string; footnote?: string } };
+  const t = SHEET_STRINGS[lang];
+  const settings = (org.settings ?? {}) as {
+    menuSheet?: { tagline?: string; footnote?: string; footnote_de?: string };
+  };
   const tagline = settings.menuSheet?.tagline ?? "";
   const footnote =
+    (lang === "de" ? settings.menuSheet?.footnote_de : undefined) ??
     settings.menuSheet?.footnote ??
-    "Please ask our team about allergens and dietary requirements.";
+    t.footnote;
 
   const pages = useMemo(
-    () => paginate(buildSections(recipes, withDescriptions)),
-    [recipes, withDescriptions],
+    () => paginate(buildSections(recipes, { withDescriptions, lang })),
+    [recipes, withDescriptions, lang],
   );
   const empty = pages.length === 1 && !pages[0][0].length && !pages[0][1].length;
 
@@ -206,6 +231,7 @@ export function MenuSheet({
           total={pages.length}
           tagline={tagline}
           footnote={footnote}
+          t={t}
         />
       ))}
     </>
@@ -230,6 +256,7 @@ export function MenuSheetModal({
   recipes: Recipe[];
 }) {
   const [withDescriptions, setWithDescriptions] = useState(false);
+  const [lang, setLang] = useState<SheetLang>("en");
 
   // Both the body class and the borderless @page live only while this dialog
   // is open, so the app's other in-place printers (Z-report, floor plan) keep
@@ -241,12 +268,21 @@ export function MenuSheetModal({
   }, [open]);
 
   const { count, pageCount } = useMemo(() => {
-    const sections = buildSections(recipes, withDescriptions);
+    const sections = buildSections(recipes, { withDescriptions, lang });
     return {
       count: sections.reduce((n, s) => n + s.items.length, 0),
       pageCount: paginate(sections).length,
     };
-  }, [recipes, withDescriptions]);
+  }, [recipes, withDescriptions, lang]);
+
+  // How much German the kitchen has actually written, so choosing Deutsch is
+  // an informed choice rather than a surprise half-English sheet.
+  const translated = useMemo(
+    () =>
+      recipes.filter((r) => r.is_active && (withDescriptions ? r.description_de : r.name_de))
+        .length,
+    [recipes, withDescriptions],
+  );
 
   return (
     <>
@@ -257,6 +293,30 @@ export function MenuSheetModal({
             {pageCount === 1 ? "" : "s"} — built from what is visible and not sold out in Recipes.
             Hide a dish or mark it sold out and it disappears from here too.
           </p>
+
+          <div className="flex gap-2">
+            {(["en", "de"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setLang(v)}
+                className={cn(
+                  "flex-1 cursor-pointer rounded-xl border p-3 text-left transition-all",
+                  lang === v
+                    ? "border-brand-400/60 bg-brand-400/10"
+                    : "border-line bg-white/[0.02] hover:border-zinc-500",
+                )}
+              >
+                <span className="block text-sm font-semibold text-white">
+                  {v === "en" ? "English" : "Deutsch"}
+                </span>
+                <span className="block text-xs text-zinc-500">
+                  {v === "en"
+                    ? "Today's Menu"
+                    : `Tageskarte · ${translated} übersetzt`}
+                </span>
+              </button>
+            ))}
+          </div>
 
           <div className="flex gap-2">
             {([false, true] as const).map((v) => (
@@ -285,7 +345,12 @@ export function MenuSheetModal({
           <div className="max-h-[46vh] overflow-y-auto rounded-xl border border-line">
             <div style={{ height: `calc(297mm * ${PREVIEW_SCALE} * ${pageCount})` }}>
               <div style={{ transform: `scale(${PREVIEW_SCALE})`, transformOrigin: "top left" }}>
-                <MenuSheet org={org} recipes={recipes} withDescriptions={withDescriptions} />
+                <MenuSheet
+                  org={org}
+                  recipes={recipes}
+                  withDescriptions={withDescriptions}
+                  lang={lang}
+                />
               </div>
             </div>
           </div>
@@ -304,7 +369,12 @@ export function MenuSheetModal({
         createPortal(
           <div className={SHEET_CLASS}>
             <style>{"@page { size: A4 portrait; margin: 0; }"}</style>
-            <MenuSheet org={org} recipes={recipes} withDescriptions={withDescriptions} />
+            <MenuSheet
+              org={org}
+              recipes={recipes}
+              withDescriptions={withDescriptions}
+              lang={lang}
+            />
           </div>,
           document.body,
         )}
