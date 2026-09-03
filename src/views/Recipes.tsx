@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -17,6 +17,7 @@ import {
 } from "@/components/ui";
 import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/data";
 import { EventMenusCard } from "@/components/EventMenus";
+import { MenuSheetModal } from "@/components/MenuSheet";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
@@ -314,6 +315,7 @@ export default function Recipes() {
   const [selected, setSelected] = useState<RecipeWithIngredients | null>(null);
   const [editing, setEditing] = useState<RecipeWithIngredients | null>(null);
   const [adding, setAdding] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const recipes = recipesQ.data ?? [];
   const popularity = useMemo(() => popularityScores(recipes, ordersQ.data ?? []), [recipes, ordersQ.data]);
@@ -388,9 +390,14 @@ export default function Recipes() {
         title="Recipes"
         subtitle="Standardized recipes with live plate costing and stock-linked ingredients."
         action={
-          <Button onClick={() => setAdding(true)}>
-            <Plus className="h-4 w-4" /> New Recipe
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => setSheetOpen(true)}>
+              <FileText className="h-4 w-4" /> Today&rsquo;s Menu
+            </Button>
+            <Button onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4" /> New Recipe
+            </Button>
+          </div>
         }
       />
 
@@ -641,6 +648,15 @@ export default function Recipes() {
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing ? `Edit ${editing.name}` : ""} wide>
         {editing && <RecipeForm recipe={editing} onDone={() => setEditing(null)} />}
       </Modal>
+
+      {org && (
+        <MenuSheetModal
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          org={org}
+          recipes={recipes}
+        />
+      )}
     </div>
   );
 }

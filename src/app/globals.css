@@ -76,3 +76,49 @@ body {
   background-clip: text;
   color: transparent;
 }
+
+/* ---------------------------------------------------------------------------
+   Printing "Today's Menu".
+
+   The app chrome is a dark, glassy, fixed-position layout that prints as a
+   wall of grey — so printing hides the entire document and shows only the
+   portalled A4 sheet, which is a direct child of <body>. `print-color-adjust`
+   is required or browsers strip the sheet's background and brand colour to
+   save ink, which is exactly the ink this page exists to spend.
+
+   Every rule here is scoped to `body.printing-menu`, which only exists while
+   the menu dialog is open. Other views print themselves in place with a plain
+   window.print() (the Z-report and the floor plan do), and an unscoped
+   "hide everything" rule would silently print those as blank pages.
+--------------------------------------------------------------------------- */
+.menu-print-root {
+  display: none;
+}
+
+@media print {
+  body.printing-menu {
+    background: #fff !important;
+    background-image: none !important;
+  }
+
+  body.printing-menu > *:not(.menu-print-root) {
+    display: none !important;
+  }
+
+  body.printing-menu .menu-print-root {
+    display: block;
+    position: static;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Each A4 sheet is its own page; the last must not emit a trailing blank. */
+  body.printing-menu .menu-page {
+    break-after: page;
+    page-break-after: always;
+  }
+  body.printing-menu .menu-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+}
