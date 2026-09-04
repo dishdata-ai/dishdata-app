@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -19,6 +19,7 @@ import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/
 import { EventMenusCard } from "@/components/EventMenus";
 import { MenuSheetModal } from "@/components/MenuSheet";
 import { useOrg } from "@/lib/hooks/useOrg";
+import { isTseEnabledForOrg } from "@/lib/tse-config";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
   createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, translateRecipe,
@@ -330,6 +331,22 @@ export default function Recipes() {
     [recipes, category, query],
   );
 
+  // TSE signs a fixed VAT bucket per recipe: whatever's on `tax_rate`, or the
+  // org default when it's unset. A drink with no explicit rate silently signs
+  // at the food rate — invisible until a receipt is already signed, and a
+  // signed sale can never be re-signed to fix it. Beverages is the one
+  // category almost guaranteed to differ from a food-restaurant's org default,
+  // so that's what's cheap and reliable to catch here before checkout does.
+  const tseOn = isTseEnabledForOrg(org);
+  const untaxedDrinkIds = useMemo(() => {
+    if (!tseOn || org?.tax_rate === 19) return new Set<string>();
+    return new Set(
+      recipes
+        .filter((r) => r.is_active && r.tax_rate == null && /beverage|drink|getr(ä|ae)nk/i.test(r.category || ""))
+        .map((r) => r.id),
+    );
+  }, [recipes, tseOn, org?.tax_rate]);
+
   const uploadPhoto = async (r: RecipeWithIngredients, file: File) => {
     try {
       const url = await uploadOrgAsset(org!.id, file, `recipes/${r.id}.webp`);
@@ -401,6 +418,24 @@ export default function Recipes() {
         }
       />
 
+      {untaxedDrinkIds.size > 0 && (
+        <Card className="border-amber-500/30 bg-amber-500/[0.06]">
+          <div className="flex items-start gap-3">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+            <p className="text-sm text-amber-200">
+              <strong>
+                {untaxedDrinkIds.size} beverage{untaxedDrinkIds.size === 1 ? "" : "s"} will sign at{" "}
+                {fmtPct(org?.tax_rate ?? 0, 0)} VAT
+              </strong>{" "}
+              — the org default, because no rate is set on the recipe. If that&rsquo;s not right for
+              drinks, set 19% on each one below (marked <TriangleAlert className="inline h-3 w-3" />)
+              before it&rsquo;s rung up: TSE signs a rate permanently and it can&rsquo;t be corrected
+              afterwards.
+            </p>
+          </div>
+        </Card>
+      )}
+
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -461,6 +496,11 @@ export default function Recipes() {
                         <Badge tone={margin >= 70 ? "green" : margin >= 60 ? "cyan" : "amber"}>
                           {fmtPct(margin, 0)} margin
                         </Badge>
+                        {untaxedDrinkIds.has(r.id) && (
+                          <Badge tone="amber">
+                            <TriangleAlert className="h-3 w-3" /> VAT
+                          </Badge>
+                        )}
                       </div>
                     </div>
                     <h3 className="mt-3 font-semibold text-white">{r.name}</h3>
