@@ -15,7 +15,15 @@ import "server-only";
  * (one per till). Transactions are signed against a TSS by a Client.
  */
 
-const BASE = process.env.FISKALY_API_URL || "https://kassensichv.fiskaly.com/api/v2";
+/**
+ * The middleware host, not kassensichv.fiskaly.com.
+ *
+ * fiskaly splits SIGN DE across two hosts and signing lives on this one: the
+ * plain API host answers transaction calls with E_USE_MIDDLEWARE (HTTP 432),
+ * so pointing at it fails every signature while looking like a live outage.
+ * Auth is served by both, so one base URL covers the whole client.
+ */
+const BASE = process.env.FISKALY_API_URL || "https://kassensichv-middleware.fiskaly.com/api/v2";
 
 export function isFiskalyConfigured(): boolean {
   return Boolean(process.env.FISKALY_API_KEY && process.env.FISKALY_API_SECRET);
@@ -83,8 +91,14 @@ async function api<T>(path: string, init: RequestInit & { timeoutMs?: number } =
 // Transactions
 // ---------------------------------------------------------------------------
 
-/** VAT buckets fiskaly expects. German food is REDUCED (7%), drinks NORMAL (19%). */
-export type FiskalyVatRate = "NORMAL" | "REDUCED" | "SPECIAL_RATE_1" | "SPECIAL_RATE_2" | "NULL";
+/**
+ * VAT buckets fiskaly expects. German food is REDUCED_1 (7%), drinks NORMAL
+ * (19%).
+ *
+ * The reduced rate is spelled REDUCED_1, with the suffix — plain "REDUCED" is
+ * rejected outright (E_PARSER), which would have failed every food sale.
+ */
+export type FiskalyVatRate = "NORMAL" | "REDUCED_1" | "SPECIAL_RATE_1" | "SPECIAL_RATE_2" | "NULL";
 
 /**
  * Map a percentage to fiskaly's bucket. Anything unrecognised goes to NULL
@@ -93,7 +107,7 @@ export type FiskalyVatRate = "NORMAL" | "REDUCED" | "SPECIAL_RATE_1" | "SPECIAL_
  */
 export function vatBucket(rate: number): FiskalyVatRate {
   if (rate === 19) return "NORMAL";
-  if (rate === 7) return "REDUCED";
+  if (rate === 7) return "REDUCED_1";
   if (rate === 10.7) return "SPECIAL_RATE_1";
   if (rate === 5.5) return "SPECIAL_RATE_2";
   if (rate === 0) return "NULL";
