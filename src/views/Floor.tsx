@@ -14,6 +14,7 @@ import {
   PageSkeleton,
 } from "@/components/ui";
 import { QrCode as QrCodeImage } from "@/components/QrCode";
+import { QrSheetModal } from "@/components/QrSheet";
 import { useTables, useReservations, useInvalidate } from "@/lib/hooks/data";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -128,6 +129,7 @@ export default function Floor() {
   const [booking, setBooking] = useState(false);
   const [addingTable, setAddingTable] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [printingTakeawaySheet, setPrintingTakeawaySheet] = useState(false);
   const [tableForm, setTableForm] = useState({ name: "", seats: "4", zone: "Main" });
 
   const tables = tablesQ.data ?? [];
@@ -316,6 +318,12 @@ export default function Floor() {
                 <ShoppingBag className="h-3.5 w-3.5" /> Takeaway
               </p>
               <p className="text-[10px] text-zinc-500">Scan to order for pickup</p>
+              <button
+                onClick={() => setPrintingTakeawaySheet(true)}
+                className="mt-1.5 cursor-pointer text-[10px] font-semibold text-brand-500 underline underline-offset-2"
+              >
+                Print 10 for cutting
+              </button>
             </div>
             {tables.map((t) => {
               const url = `${window.location.origin}/r/${org?.slug}?table=${encodeURIComponent(t.name)}`;
@@ -333,6 +341,13 @@ export default function Floor() {
           </Button>
         </div>
       </Modal>
+
+      <QrSheetModal
+        open={printingTakeawaySheet}
+        onClose={() => setPrintingTakeawaySheet(false)}
+        value={`${typeof window !== "undefined" ? window.location.origin : ""}/r/${org?.slug}?order=takeaway`}
+        title="Scan to order"
+      />
 
       <Modal open={booking} onClose={() => setBooking(false)} title="New Reservation" wide>
         <NewReservationForm tables={tables} onDone={() => setBooking(false)} />

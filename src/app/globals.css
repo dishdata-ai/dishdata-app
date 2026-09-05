@@ -122,3 +122,28 @@ body {
     page-break-after: auto;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Printing a 10-up QR sheet (see QrSheet.tsx). Same reasoning and same
+   scoping approach as the menu sheet above — its own body class, so it can't
+   blank the Z-report, floor plan, or the menu sheet's own print output.
+--------------------------------------------------------------------------- */
+.qr-sheet-print-root {
+  display: none;
+}
+
+@media print {
+  body.printing-qr-sheet {
+    background: #fff !important;
+    background-image: none !important;
+  }
+
+  body.printing-qr-sheet > *:not(.qr-sheet-print-root) {
+    display: none !important;
+  }
+
+  body.printing-qr-sheet .qr-sheet-print-root {
+    display: block;
+    position: static;
+  }
+}
