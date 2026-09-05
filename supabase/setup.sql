@@ -654,6 +654,16 @@ create policy recipes_public_read on public.recipes for select to anon using (is
 drop policy if exists orgs_public_read on public.orgs;
 create policy orgs_public_read on public.orgs for select to anon using (true);
 
+-- RLS is row-level only — the policy above says nothing about columns, so
+-- without this an anon key can read every column of every org directly,
+-- `settings` included (fiskaly TSE credentials once a restaurant enables
+-- TSE). Column privileges are enforced independently of RLS: restrict anon
+-- to exactly what the public storefront uses (see PublicMenu["org"] in
+-- src/lib/api/public.ts); `authenticated` keeps full column access, gated by
+-- orgs_member_read to a member's own org as before.
+revoke select on public.orgs from anon;
+grant select (id, name, slug, logo_url, accent_color, currency, tax_rate) on public.orgs to anon;
+
 -- ----------------------------------------------------------------------------
 -- 6. AUDIT TRIGGER (key tables)
 -- ----------------------------------------------------------------------------

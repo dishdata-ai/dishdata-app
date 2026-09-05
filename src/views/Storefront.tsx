@@ -278,7 +278,7 @@ export default function Storefront({
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-white">{r.name}</p>
-                        {r.description && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{r.description}</p>}
+                        {r.description && <p className="mt-0.5 text-xs text-zinc-500">{r.description}</p>}
                         <p className="mt-0.5 text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>
                       {soldOut ? (
