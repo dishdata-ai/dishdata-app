@@ -34,12 +34,17 @@ function Sheet({ value, title, subtitle }: { value: string; title: string; subti
       {Array.from({ length: COUNT }).map((_, i) => (
         <div
           key={i}
-          className="flex flex-col items-center justify-center gap-[3mm] border border-dashed border-zinc-300 p-[4mm] text-center"
+          className="flex flex-col items-center justify-center gap-[2mm] overflow-hidden border border-dashed border-zinc-300 p-[3mm] text-center"
         >
-          <QrCode value={value} size={220} />
+          {/* 59.4mm-tall cell, 3mm padding each side, 2mm gap: the QR must
+              stay under ~40mm or it — plus the label — no longer fits, and a
+              row that overflows its grid track doesn't get clipped, it pushes
+              onto a second printed page instead. 150px ≈ 39.7mm, leaving a
+              safety margin rather than sitting exactly at the limit. */}
+          <QrCode value={value} size={150} />
           <div>
-            <p className="font-display text-[13pt] font-bold text-zinc-900">{title}</p>
-            {subtitle && <p className="text-[8.5pt] text-zinc-500">{subtitle}</p>}
+            <p className="font-display text-[11pt] leading-tight font-bold text-zinc-900">{title}</p>
+            {subtitle && <p className="text-[8pt] leading-tight text-zinc-500">{subtitle}</p>}
           </div>
         </div>
       ))}
