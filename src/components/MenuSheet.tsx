@@ -193,6 +193,7 @@ export function MenuSheet({
   const t = SHEET_STRINGS[lang];
   const settings = (org.settings ?? {}) as {
     menuSheet?: { tagline?: string; footnote?: string; footnote_de?: string };
+    categoryOrder?: string[];
   };
   const tagline = settings.menuSheet?.tagline ?? "";
   const footnote =
@@ -201,8 +202,8 @@ export function MenuSheet({
     t.footnote;
 
   const pages = useMemo(
-    () => paginate(buildSections(recipes, { withDescriptions, lang })),
-    [recipes, withDescriptions, lang],
+    () => paginate(buildSections(recipes, { withDescriptions, lang, categoryOrder: settings.categoryOrder })),
+    [recipes, withDescriptions, lang, settings.categoryOrder],
   );
   const empty = pages.length === 1 && !pages[0][0].length && !pages[0][1].length;
 
@@ -267,13 +268,14 @@ export function MenuSheetModal({
     return () => document.body.classList.remove("printing-menu");
   }, [open]);
 
+  const categoryOrder = (org.settings as { categoryOrder?: string[] } | null)?.categoryOrder;
   const { count, pageCount } = useMemo(() => {
-    const sections = buildSections(recipes, { withDescriptions, lang });
+    const sections = buildSections(recipes, { withDescriptions, lang, categoryOrder });
     return {
       count: sections.reduce((n, s) => n + s.items.length, 0),
       pageCount: paginate(sections).length,
     };
-  }, [recipes, withDescriptions, lang]);
+  }, [recipes, withDescriptions, lang, categoryOrder]);
 
   // How much German the kitchen has actually written, so choosing Deutsch is
   // an informed choice rather than a surprise half-English sheet.

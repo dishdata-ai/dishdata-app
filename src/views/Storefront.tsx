@@ -8,6 +8,7 @@ import { fetchPublicMenu, placePublicOrder, placePublicReservation, type PublicM
 import { publicLoyaltySummary, publicLoyaltyClaim, publicLoyaltyRedeem, type LoyaltySummary } from "@/lib/api/loyalty";
 import type { LoyaltyActionType } from "@/lib/api/database.types";
 import { currencyFormatter, isSoldOut } from "@/lib/calc";
+import { orderCategories } from "@/lib/category-order";
 import { cn, errorMessage, fmtNumber } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 
@@ -59,8 +60,34 @@ export default function Storefront({
 
   const categories = useMemo(() => {
     if (!menu) return [];
-    return [...new Set(menu.recipes.map((r) => r.category))];
+    const present = [...new Set(menu.recipes.map((r) => r.category))];
+    return orderCategories(present, menu.org.category_order);
   }, [menu]);
+
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const categoryId = (cat: string) => `cat-${cat.replace(/\s+/g, "-").toLowerCase()}`;
+  const scrollToCategory = (cat: string) => {
+    setActiveCategory(cat);
+    document.getElementById(categoryId(cat))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Tracks whichever section is nearest the top of the viewport, so the pill
+  // bar reflects where the diner actually scrolled to, not only a click.
+  useEffect(() => {
+    if (!categories.length) return;
+    const labelById = new Map(categories.map((c) => [categoryId(c), c]));
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        const label = visible[0] && labelById.get(visible[0].target.id);
+        if (label) setActiveCategory(label);
+      },
+      { rootMargin: "-64px 0px -70% 0px" },
+    );
+    const els = categories.map((c) => document.getElementById(categoryId(c))).filter((el): el is HTMLElement => !!el);
+    els.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [categories]);
 
   const setQty = (id: string, qty: number) =>
     setCart((prev) => {
@@ -188,7 +215,6 @@ export default function Storefront({
           )}
           <h1 className="font-display text-3xl font-bold text-white">{menu.org.name}</h1>
           {tableName && <Badge tone="cyan">Ordering for table {tableName}</Badge>}
-          {orderType === "takeaway" && <Badge tone="cyan">Takeaway order</Badge>}
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => setReserving(true)}>
               <CalendarClock className="h-4 w-4" /> Book a Table
@@ -200,10 +226,32 @@ export default function Storefront({
         </div>
       </header>
 
+      {/* Category quick-jump — sticky so a long menu stays easy to navigate on mobile. */}
+      {categories.length > 1 && (
+        <nav className="sticky top-0 z-30 border-b border-line bg-base/90 backdrop-blur-xl">
+          <div className="mx-auto flex max-w-3xl gap-1.5 overflow-x-auto px-4 py-2.5">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                onClick={() => scrollToCategory(cat)}
+                className={cn(
+                  "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
+                  activeCategory === cat
+                    ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                    : "border border-line bg-white/[0.03] text-zinc-400",
+                )}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
+
       {/* Menu */}
       <main className="mx-auto max-w-3xl space-y-8 px-4 py-8">
         {categories.map((cat) => (
-          <section key={cat}>
+          <section key={cat} id={categoryId(cat)} className="scroll-mt-16">
             <h2 className="mb-3 font-display text-lg font-bold text-white">{cat}</h2>
             <div className="space-y-2.5">
               {menu.recipes

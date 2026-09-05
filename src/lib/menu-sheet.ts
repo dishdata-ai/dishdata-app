@@ -1,4 +1,5 @@
 import { isSoldOut } from "@/lib/calc";
+import { orderCategories } from "@/lib/category-order";
 import type { Recipe } from "@/lib/api/database.types";
 
 /**
@@ -48,9 +49,6 @@ const HEADER_FIRST = 50; // logo, date and the "Today's Menu" title block
 const HEADER_CONT = 16; // slim running header on later pages
 const FOOTER = 24; // reserved on every page, so the last one always has room
 
-/** Drinks conventionally close a menu, whatever order the categories were created in. */
-const LAST_CATEGORIES = ["beverages", "drinks", "getränke", "getraenke"];
-
 export type SheetLang = "en" | "de";
 
 /**
@@ -88,36 +86,45 @@ export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">
 /**
  * Group today's available recipes into printable sections.
  *
- * Category order follows the order the categories were created in (recipes
- * arrive newest-first, so this reverses to oldest-first) rather than
- * alphabetically — that way the sheet keeps the shape the kitchen built the
- * menu in, and reordering is a matter of creating categories in the order you
- * want them read.
+ * `categoryOrder` is the restaurant's own explicit order (see
+ * category-order.ts), matched against each recipe's English `category` even
+ * on a German sheet — a manager arranges the order once, in whichever
+ * language they set categories up in, and it holds regardless of which
+ * language the sheet is printed in.
  */
 export function buildSections(
   recipes: Recipe[],
-  { withDescriptions = false, lang = "en" }: { withDescriptions?: boolean; lang?: SheetLang } = {},
+  {
+    withDescriptions = false,
+    lang = "en",
+    categoryOrder,
+  }: { withDescriptions?: boolean; lang?: SheetLang; categoryOrder?: string[] | null } = {},
 ): SheetSection[] {
-  const order: string[] = [];
-  const byCategory = new Map<string, SheetItem[]>();
+  const order: string[] = []; // English category, for ordering
+  const displayOf = new Map<string, string>(); // English category -> display label
+  const byCategory = new Map<string, SheetItem[]>(); // keyed by display label
 
   // German falls back to English field by field, so a half-translated menu
   // prints the translations that exist rather than gaps where they don't.
   const de = lang === "de";
   const pick = (german: string | null, english: string) => (de && german ? german : english);
 
-  // Oldest-first so category order reads the way the menu was built up.
+  // Oldest-first, as a stable base order before categoryOrder is applied.
   for (const r of [...recipes].reverse()) {
     if (!isAvailableToday(r)) continue;
-    const category = pick(r.category_de, r.category || "Weitere").trim();
-    if (!byCategory.has(category)) {
-      byCategory.set(category, []);
-      order.push(category);
+    const englishCategory = (r.category || "Weitere").trim();
+    const display = pick(r.category_de, englishCategory).trim();
+    if (!byCategory.has(display)) {
+      byCategory.set(display, []);
+      if (!displayOf.has(englishCategory)) {
+        displayOf.set(englishCategory, display);
+        order.push(englishCategory);
+      }
     }
     const description = withDescriptions
       ? pick(r.description_de, r.description || "").trim() || null
       : null;
-    byCategory.get(category)!.push({
+    byCategory.get(display)!.push({
       name: pick(r.name_de, r.name).trim(),
       // A zero price means "ask us" rather than "free" — printing "0.00 €"
       // on a menu is worse than printing nothing at all.
@@ -126,10 +133,10 @@ export function buildSections(
     });
   }
 
-  const rank = (c: string) => (LAST_CATEGORIES.includes(c.toLowerCase()) ? 1 : 0);
-  return order
-    .map((category) => ({ category, items: byCategory.get(category)! }))
-    .sort((a, b) => rank(a.category) - rank(b.category));
+  return orderCategories(order, categoryOrder).map((englishCategory) => {
+    const display = displayOf.get(englishCategory)!;
+    return { category: display, items: byCategory.get(display)! };
+  });
 }
 
 const itemHeight = (item: SheetItem) => ITEM_H + (item.description ? ITEM_DESC_EXTRA : 0);

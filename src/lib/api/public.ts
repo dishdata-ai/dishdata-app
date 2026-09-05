@@ -9,8 +9,22 @@ import { isSoldOut } from "@/lib/calc";
 import { computeTaxGroups, sumTax } from "@/lib/tax";
 
 export interface PublicMenu {
-  org: Pick<Org, "id" | "name" | "slug" | "logo_url" | "accent_color" | "currency" | "tax_rate">;
+  org: Pick<Org, "id" | "name" | "slug" | "logo_url" | "accent_color" | "currency" | "tax_rate"> & {
+    /**
+     * The restaurant's own category order (see category-order.ts), lifted
+     * out of `org.settings` deliberately — `settings` also carries things
+     * like TSE credentials that must never reach an anonymous request, so
+     * this is the one field of it ever forwarded to the public menu.
+     */
+    category_order: string[] | null;
+  };
   recipes: Recipe[];
+}
+
+/** Pulls only category_order out of a settings blob — never forward the rest to the public API. */
+export function publicCategoryOrder(settings: unknown): string[] | null {
+  const order = (settings as { categoryOrder?: unknown } | null)?.categoryOrder;
+  return Array.isArray(order) ? order.filter((c): c is string => typeof c === "string") : null;
 }
 
 /** Tournament-priced items are for in-restaurant/event sale via POS only — never on the public QR/online menu. */
@@ -40,8 +54,10 @@ async function eventMenuRecipeIds(orgId: string): Promise<Set<string>> {
 export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> {
   if (!isSupabaseConfigured) {
     await demoDelay();
-    const org = dOrgs.list().find((o) => o.slug === slug);
-    if (!org) return null;
+    const orgRow = dOrgs.list().find((o) => o.slug === slug);
+    if (!orgRow) return null;
+    const { settings, ...orgPublicFields } = orgRow;
+    const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
 
     const websiteMenu = dEventMenus
       .list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
@@ -66,13 +82,15 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     };
   }
   const sb = getSupabase();
-  const { data: org, error } = await sb
+  const { data: orgRow, error } = await sb
     .from("orgs")
-    .select("id, name, slug, logo_url, accent_color, currency, tax_rate")
+    .select("id, name, slug, logo_url, accent_color, currency, tax_rate, settings")
     .eq("slug", slug)
     .maybeSingle();
   if (error) throw error;
-  if (!org) return null;
+  if (!orgRow) return null;
+  const { settings, ...orgPublicFields } = orgRow;
+  const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
 
   // An event menu explicitly shown on the website replaces the catalog with
   // just its own items (e.g. a tournament-only ordering page).
@@ -91,7 +109,7 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
       .eq("event_menu_id", websiteMenu.id)
       .eq("recipes.is_active", true);
     return {
-      org: org as PublicMenu["org"],
+      org,
       recipes: (items ?? []).map((i) => i.recipes) as unknown as Recipe[],
     };
   }
@@ -108,7 +126,7 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     .not("name", "ilike", "%(Tournament)%");
   if (eventIds.size) query = query.not("id", "in", `(${[...eventIds].join(",")})`);
   const { data: recipes } = await query.order("category");
-  return { org: org as PublicMenu["org"], recipes: (recipes as Recipe[]) ?? [] };
+  return { org, recipes: (recipes as Recipe[]) ?? [] };
 }
 
 export async function placePublicOrder(

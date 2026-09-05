@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -20,12 +20,13 @@ import { EventMenusCard } from "@/components/EventMenus";
 import { MenuSheetModal } from "@/components/MenuSheet";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { isTseEnabledForOrg } from "@/lib/tse-config";
+import { orderCategories } from "@/lib/category-order";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
   createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, translateRecipe,
   type NewRecipeInput,
 } from "@/lib/api/recipes";
-import { uploadOrgAsset } from "@/lib/api/orgs";
+import { uploadOrgAsset, updateOrg } from "@/lib/api/orgs";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { Languages } from "lucide-react";
 import {
@@ -305,8 +306,103 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   );
 }
 
+/**
+ * Lets a manager fix the section order shown on the public ordering page and
+ * the printed menu sheet — both would otherwise default to insertion order,
+ * which reads as arbitrary (dessert before starters) even though it's
+ * technically deterministic. Up/down buttons rather than drag-and-drop: one
+ * dependency-free control that works identically with mouse, touch, or a
+ * screen reader.
+ */
+function CategoryOrderModal({
+  open, onClose, orgId, orgSettings, recipes, onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  orgId: string;
+  orgSettings: Record<string, unknown> | null;
+  recipes: RecipeWithIngredients[];
+  onSaved: () => void;
+}) {
+  const present = useMemo(
+    () => [...new Set(recipes.map((r) => r.category).filter(Boolean))],
+    [recipes],
+  );
+  const currentOrder = (orgSettings as { categoryOrder?: string[] } | null)?.categoryOrder;
+  const [order, setOrder] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  // Re-seed from the live category list each time the dialog opens, so a
+  // category added since the last visit shows up already placed sensibly.
+  useEffect(() => {
+    if (open) setOrder(orderCategories(present, currentOrder));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    setOrder((prev) => {
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await updateOrg(orgId, { settings: { ...orgSettings, categoryOrder: order } });
+      onSaved();
+      toast.success("Category order saved", "Applies to the ordering page and printed menu");
+      onClose();
+    } catch (e) {
+      toast.error("Could not save", e instanceof Error ? e.message : "");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Category order">
+      <div className="space-y-4">
+        <p className="text-sm text-zinc-400">
+          Sets the order sections appear in on the ordering page and the printed menu. Categories
+          added later default to the end, ahead of Beverages.
+        </p>
+        <div className="space-y-1.5">
+          {order.map((cat, i) => (
+            <div key={cat} className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
+              <span className="text-sm font-medium text-white">{cat}</span>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => move(i, -1)}
+                  disabled={i === 0}
+                  className="cursor-pointer rounded-lg p-1.5 text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => move(i, 1)}
+                  disabled={i === order.length - 1}
+                  className="cursor-pointer rounded-lg p-1.5 text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <Button className="w-full" disabled={saving || !order.length} onClick={save}>
+          {saving ? "Saving…" : "Save Order"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Recipes() {
-  const { org, isManager } = useOrg();
+  const { org, isManager, refresh } = useOrg();
   const fmt = useFmt();
   const recipesQ = useRecipes();
   const ordersQ = useOrders();
@@ -317,6 +413,7 @@ export default function Recipes() {
   const [editing, setEditing] = useState<RecipeWithIngredients | null>(null);
   const [adding, setAdding] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [reorderOpen, setReorderOpen] = useState(false);
 
   const recipes = recipesQ.data ?? [];
   const popularity = useMemo(() => popularityScores(recipes, ordersQ.data ?? []), [recipes, ordersQ.data]);
@@ -408,6 +505,9 @@ export default function Recipes() {
         subtitle="Standardized recipes with live plate costing and stock-linked ingredients."
         action={
           <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => setReorderOpen(true)}>
+              <ArrowUpDown className="h-4 w-4" /> Category Order
+            </Button>
             <Button variant="ghost" onClick={() => setSheetOpen(true)}>
               <FileText className="h-4 w-4" /> Today&rsquo;s Menu
             </Button>
@@ -695,6 +795,17 @@ export default function Recipes() {
           onClose={() => setSheetOpen(false)}
           org={org}
           recipes={recipes}
+        />
+      )}
+
+      {org && (
+        <CategoryOrderModal
+          open={reorderOpen}
+          onClose={() => setReorderOpen(false)}
+          orgId={org.id}
+          orgSettings={org.settings as Record<string, unknown> | null}
+          recipes={recipes}
+          onSaved={refresh}
         />
       )}
     </div>

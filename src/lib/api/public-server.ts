@@ -1,6 +1,6 @@
 import "server-only";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import type { PublicMenu } from "@/lib/api/public";
+import { publicCategoryOrder, type PublicMenu } from "@/lib/api/public";
 import type { Recipe } from "@/lib/api/database.types";
 
 /**
@@ -11,12 +11,14 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
   const sb = await createSupabaseServerClient();
   if (!sb) return null;
 
-  const { data: org } = await sb
+  const { data: orgRow } = await sb
     .from("orgs")
-    .select("id, name, slug, logo_url, accent_color, currency, tax_rate")
+    .select("id, name, slug, logo_url, accent_color, currency, tax_rate, settings")
     .eq("slug", slug)
     .maybeSingle();
-  if (!org) return null;
+  if (!orgRow) return null;
+  const { settings, ...orgPublicFields } = orgRow;
+  const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
 
   // An event menu explicitly shown on the website replaces the catalog with
   // just its own items (e.g. a tournament-only ordering page).
@@ -35,7 +37,7 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
       .eq("event_menu_id", websiteMenu.id)
       .eq("recipes.is_active", true);
     return {
-      org: org as PublicMenu["org"],
+      org,
       recipes: (items ?? []).map((i) => i.recipes) as unknown as Recipe[],
     };
   }
@@ -55,5 +57,5 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
   if (eventIds.length) query = query.not("id", "in", `(${eventIds.join(",")})`);
   const { data: recipes } = await query.order("category");
 
-  return { org: org as PublicMenu["org"], recipes: (recipes as Recipe[]) ?? [] };
+  return { org, recipes: (recipes as Recipe[]) ?? [] };
 }
