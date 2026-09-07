@@ -13,6 +13,7 @@ import {
   Gift,
   Megaphone,
   Wallet,
+  Banknote,
   Settings,
   Flame,
   LayoutGrid,
@@ -69,6 +70,7 @@ export const MODULES: ModuleDef[] = [
   { id: "reports", name: "Reports", path: "/reports", icon: FileBarChart, group: "Grow", blurb: "Exports and period reports" },
   { id: "finance", name: "Finance", path: "/finance", icon: Wallet, group: "Money", blurb: "P&L, cash flow, budgets" },
   { id: "accounting", name: "Accounting", path: "/accounting", icon: Calculator, group: "Money", blurb: "Expenses and tax summary" },
+  { id: "till", name: "Till & Cash", path: "/till", icon: Banknote, group: "Money", blurb: "Drawer float, cash in/out, close-out" },
   { id: "zreport", name: "Z-Report", path: "/zreport", icon: ReceiptText, group: "Money", blurb: "End-of-day close-out" },
   { id: "myday", name: "My Day", path: "/my", icon: Sun, group: "People", blurb: "Your shift, tasks and hours" },
   { id: "staff", name: "Staff", path: "/staff", icon: Users, group: "People", blurb: "Roster and labor cost" },
@@ -89,9 +91,9 @@ export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   owner: "all",
   admin: "all",
   partner: "all",
-  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport"],
-  staff: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks"],
-  accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "insights"],
+  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till"],
+  staff: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks", "till"],
+  accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "till", "insights"],
   viewer: ["dashboard", "sales", "insights"],
 };
 

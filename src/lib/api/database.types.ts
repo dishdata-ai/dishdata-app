@@ -6,6 +6,8 @@ export type OrderType = "dine_in" | "takeaway" | "delivery";
 export type OrderStatus = "open" | "paid" | "void" | "refunded";
 export type KitchenStatus = "new" | "preparing" | "ready" | "served";
 export type PaymentMethod = "card" | "cash" | "wallet" | "stripe";
+export type TillStatus = "open" | "closed";
+export type CashDirection = "in" | "out";
 export type PoStatus = "draft" | "sent" | "confirmed" | "delivered" | "reconciled";
 export type InvReason = "sale" | "purchase" | "waste" | "adjustment" | "count";
 export type WasteReason = "spoiled" | "burnt" | "returned" | "overprep" | "other";
@@ -347,6 +349,36 @@ export interface Payment {
   tip_amount: number;
   split_label: string | null;
   created_at: string;
+}
+
+export interface TillSession {
+  id: string;
+  org_id: string;
+  status: TillStatus;
+  opening_float: number;
+  opened_at: string;
+  opened_by: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
+  /** Snapshots taken at close — null while the session is still open. */
+  expected_closing: number | null;
+  counted_closing: number | null;
+  difference: number | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface CashMovement {
+  id: string;
+  org_id: string;
+  session_id: string;
+  direction: CashDirection;
+  /** Always positive; `direction` carries the sign. */
+  amount: number;
+  reason: string;
+  comment: string | null;
+  created_at: string;
+  created_by: string | null;
 }
 
 export interface Reservation {
