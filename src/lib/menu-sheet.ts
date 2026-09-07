@@ -37,11 +37,28 @@ export type SheetPage = [SheetSection[], SheetSection[]];
  * output, and measurement inside a transform-scaled preview is exactly where
  * that agreement breaks down. The numbers are deliberately a shade generous —
  * ending a column early is invisible, overflowing one is not.
+ *
+ * A flat per-item height (the original approach here) assumed every dish name
+ * and every description sat on exactly one wrapped line. Real menu text
+ * doesn't: a long name ("Porotta with Kerala Chicken Curry (with Bone)")
+ * wraps to two, and a full-sentence description commonly wraps to three or
+ * four in an 85mm column. Undercounting that let a column's real content run
+ * past the page it was estimated to fit in. These constants are calibrated
+ * against real rendered text (see the git history of this file for the
+ * measurements) with the chars-per-line figures deliberately conservative —
+ * biased toward predicting one more wrapped line than a given string usually
+ * needs, never one fewer.
  */
-const ITEM_H = 5.4;
-const ITEM_DESC_EXTRA = 4.4;
 const HEADING_H = 12.5;
 const SECTION_GAP = 7;
+
+const NAME_CHARS_PER_LINE = 34; // real one-line/two-line boundary measured at 36-39 chars
+const NAME_LINE_H = 4.65; // mm, one line of the 10.5pt name/price row
+const DESC_CHARS_PER_LINE = 42; // real tightest-wrap case implied ~46 chars/line
+const DESC_LINE_H = 3.9; // mm, one wrapped line of the 8pt description
+const DESC_BASE = 3.9; // mm, description's own top margin + leading overshoot above its first line
+const ITEM_MARGIN_WITH_DESC = 2.4; // mm, li's mb-[2.4mm]
+const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
@@ -139,7 +156,17 @@ export function buildSections(
   });
 }
 
-const itemHeight = (item: SheetItem) => ITEM_H + (item.description ? ITEM_DESC_EXTRA : 0);
+function itemHeight(item: SheetItem): number {
+  const nameLines = Math.max(1, Math.ceil(item.name.length / NAME_CHARS_PER_LINE));
+  let h = nameLines * NAME_LINE_H;
+  if (item.description) {
+    const descLines = Math.max(1, Math.ceil(item.description.length / DESC_CHARS_PER_LINE));
+    h += DESC_BASE + descLines * DESC_LINE_H + ITEM_MARGIN_WITH_DESC;
+  } else {
+    h += ITEM_MARGIN_NO_DESC;
+  }
+  return h;
+}
 
 const sectionHeight = (s: SheetSection) =>
   HEADING_H + s.items.reduce((h, i) => h + itemHeight(i), 0) + SECTION_GAP;
