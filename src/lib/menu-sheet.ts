@@ -45,18 +45,27 @@ export type SheetPage = [SheetSection[], SheetSection[]];
  * four in an 85mm column. Undercounting that let a column's real content run
  * past the page it was estimated to fit in. These constants are calibrated
  * against real rendered text (see the git history of this file for the
- * measurements) with the chars-per-line figures deliberately conservative —
- * biased toward predicting one more wrapped line than a given string usually
- * needs, never one fewer.
+ * measurements).
+ *
+ * The first calibration pass used the tightest wrap observed (~46 chars/line)
+ * as the chars-per-line figure for every item, which is safe but was a
+ * systematic ~35% overestimate against the real average (~57) — it printed
+ * overflow-free but wasted roughly a third of every page. DESC_CHARS_PER_LINE
+ * is now the real average; DESC_SAFETY covers the boundary cases a flat
+ * average can't (a description landing right at a wrap threshold) without
+ * inflating every item by a full extra line the way the conservative figure
+ * did.
  */
-const HEADING_H = 12.5;
+const HEADING_H = 11; // real h3 + underline block measured ~9.85mm
+
 const SECTION_GAP = 7;
 
-const NAME_CHARS_PER_LINE = 34; // real one-line/two-line boundary measured at 36-39 chars
+const NAME_CHARS_PER_LINE = 35; // real one-line/two-line boundary measured at 36-39 chars
 const NAME_LINE_H = 4.65; // mm, one line of the 10.5pt name/price row
-const DESC_CHARS_PER_LINE = 42; // real tightest-wrap case implied ~46 chars/line
+const DESC_CHARS_PER_LINE = 57; // real measured average across sampled descriptions
 const DESC_LINE_H = 3.9; // mm, one wrapped line of the 8pt description
 const DESC_BASE = 3.9; // mm, description's own top margin + leading overshoot above its first line
+const DESC_SAFETY = 2; // mm, covers a description landing right at a wrap boundary
 const ITEM_MARGIN_WITH_DESC = 2.4; // mm, li's mb-[2.4mm]
 const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
@@ -161,7 +170,7 @@ function itemHeight(item: SheetItem): number {
   let h = nameLines * NAME_LINE_H;
   if (item.description) {
     const descLines = Math.max(1, Math.ceil(item.description.length / DESC_CHARS_PER_LINE));
-    h += DESC_BASE + descLines * DESC_LINE_H + ITEM_MARGIN_WITH_DESC;
+    h += DESC_BASE + descLines * DESC_LINE_H + DESC_SAFETY + ITEM_MARGIN_WITH_DESC;
   } else {
     h += ITEM_MARGIN_NO_DESC;
   }
