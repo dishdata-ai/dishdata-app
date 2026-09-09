@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { fetchMyOrgContext } from "@/lib/api/orgs";
-import { MODULES, defaultModulesFor } from "@/lib/modules";
+import { MODULES, defaultModulesFor, ALWAYS_ENABLED_MODULES } from "@/lib/modules";
 import type { Org, Role } from "@/lib/api/database.types";
 
 interface OrgContextValue {
@@ -38,16 +38,10 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   const enabled = new Set(
     (org?.settings?.enabled_modules as string[] | undefined) ?? MODULES.map((m) => m.id),
   );
-  // Always-on essentials regardless of onboarding selection.
-  // (loyalty was added after some orgs onboarded, so it isn't in their saved
-  //  enabled_modules — force-enable it; member access still gates visibility.)
-  enabled.add("dashboard");
-  enabled.add("settings");
-  enabled.add("myday");
-  enabled.add("loyalty");
-  enabled.add("marketing");
-  enabled.add("orders"); // added after onboarding — force-enable like loyalty/marketing
-  enabled.add("preorders"); // ditto — added after onboarding
+  // Always-on essentials regardless of onboarding selection — see
+  // ALWAYS_ENABLED_MODULES for why (modules added after early orgs onboarded).
+  // Member access still gates visibility on top of this.
+  for (const m of ALWAYS_ENABLED_MODULES) enabled.add(m);
   if (role === "owner" || role === "admin") {
     enabled.add("team");
     enabled.add("audit");

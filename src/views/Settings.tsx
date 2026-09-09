@@ -11,7 +11,7 @@ import { updateOrg, uploadOrgAsset } from "@/lib/api/orgs";
 import { printViaEpos } from "@/lib/escpos";
 import { getPrinterConfig, type PrinterConfig } from "@/lib/printer";
 import { clearDemoData } from "@/lib/api/demoDb";
-import { MODULES, MODULE_GROUPS } from "@/lib/modules";
+import { MODULES, MODULE_GROUPS, ALWAYS_ENABLED_MODULES } from "@/lib/modules";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import {
@@ -481,9 +481,15 @@ export default function Settings() {
     staffPinAt: org?.staff_discount_pin_threshold == null ? "" : String(org.staff_discount_pin_threshold),
   });
   const [accent, setAccent] = useState<string | null>(org?.accent_color ?? null);
-  const [enabled, setEnabled] = useState<Set<string>>(
-    new Set((org?.settings?.enabled_modules as string[] | undefined) ?? MODULES.map((m) => m.id)),
-  );
+  const [enabled, setEnabled] = useState<Set<string>>(() => {
+    const s = new Set((org?.settings?.enabled_modules as string[] | undefined) ?? MODULES.map((m) => m.id));
+    // Same always-on list useOrg.tsx applies — otherwise a module force-enabled
+    // in code shows as an inactive pill here, which is exactly backwards.
+    for (const m of ALWAYS_ENABLED_MODULES) s.add(m);
+    s.add("team");
+    s.add("audit");
+    return s;
+  });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -548,7 +554,7 @@ export default function Settings() {
   };
 
   const toggleModule = (id: string) => {
-    if (["dashboard", "settings", "team", "myday"].includes(id)) return;
+    if ((ALWAYS_ENABLED_MODULES as readonly string[]).includes(id) || id === "team" || id === "audit") return;
     setEnabled((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -704,7 +710,7 @@ export default function Settings() {
               <p className="mb-1.5 text-[10px] font-semibold tracking-widest text-zinc-500 uppercase">{group}</p>
               <div className="flex flex-wrap gap-2">
                 {MODULES.filter((m) => m.group === group).map((m) => {
-                  const essential = ["dashboard", "settings", "team", "myday"].includes(m.id);
+                  const essential = (ALWAYS_ENABLED_MODULES as readonly string[]).includes(m.id) || m.id === "team" || m.id === "audit";
                   const on = enabled.has(m.id);
                   return (
                     <button

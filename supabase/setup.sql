@@ -163,6 +163,33 @@ drop trigger if exists on_member_added on public.org_members;
 create trigger on_member_added after insert on public.org_members
   for each row execute function public.grant_default_modules();
 
+-- grant_default_modules() only fires when a MEMBER is added. A module added
+-- to the app later (channels, till, ...) never backfills to members whose
+-- row predates it — this is the mirror-image trigger, firing when a MODULE
+-- is added instead, so the two directions are both covered from here on.
+create or replace function public.grant_new_module_to_existing_members()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into member_module_access (org_id, user_id, module_id, can_access)
+  select om.org_id, om.user_id, new.id, true
+  from org_members om
+  where new.id = any(default_modules_for_role(om.role))
+  on conflict (org_id, user_id, module_id) do nothing;
+  return new;
+end $$;
+
+drop trigger if exists on_module_added on public.modules;
+create trigger on_module_added after insert on public.modules
+  for each row execute function public.grant_new_module_to_existing_members();
+
+-- One-time backfill for the gap the two triggers above don't cover
+-- retroactively: existing members, for modules that existed before this
+-- migration. No-op on a fresh database (org_members is still empty here).
+insert into public.member_module_access (org_id, user_id, module_id, can_access)
+select om.org_id, om.user_id, m, true
+from public.org_members om, unnest(public.default_modules_for_role(om.role)) as m
+on conflict (org_id, user_id, module_id) do nothing;
+
 -- ----------------------------------------------------------------------------
 -- 4. DOMAIN TABLES
 -- ----------------------------------------------------------------------------

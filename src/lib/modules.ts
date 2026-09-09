@@ -84,6 +84,22 @@ export const MODULES: ModuleDef[] = [
 
 export const MODULE_GROUPS: ModuleGroup[] = ["Operate", "Grow", "Money", "People", "Admin"];
 
+/**
+ * Modules forced on for every org regardless of what's saved in
+ * `org.settings.enabled_modules` — some were added after early orgs
+ * onboarded, so their saved list predates the module and would otherwise
+ * hide it forever.
+ *
+ * Single source of truth: useOrg.tsx applies this to decide what's actually
+ * on, and Settings.tsx uses the same list to render the toggle so the two
+ * never show a different answer again — that drift (this list existing only
+ * in useOrg.tsx, unknown to Settings) is exactly what made already-active
+ * modules show as off in Settings before this.
+ */
+export const ALWAYS_ENABLED_MODULES = [
+  "dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders",
+] as const;
+
 export const moduleById = (id: string) => MODULES.find((m) => m.id === id);
 
 /** Mirrors default_modules_for_role() in setup.sql. */
