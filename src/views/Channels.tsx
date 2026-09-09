@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
-  Bike, Check, X, Link2, Copy, AlertTriangle, Settings2, Inbox, Unlink,
+  Bike, Check, X, Link2, Copy, AlertTriangle, Settings2, Inbox, Unlink, Eye, EyeOff, KeyRound,
 } from "lucide-react";
 import {
   Card, SectionTitle, Button, Badge, Modal, Input, Field, EmptyState, PageSkeleton,
@@ -147,6 +147,12 @@ function SettingsModal({
   const { org } = useOrg();
   const invalidate = useInvalidate();
   const [form, setForm] = useState(() => channel);
+  // Never pre-filled with the real values — `credentials` is write-only from
+  // here on out (see ChannelSafe). Left blank, a save leaves whatever is
+  // already stored untouched rather than overwriting it with nothing.
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [revealSecret, setRevealSecret] = useState(false);
 
   const save = useMutation({
     mutationFn: () =>
@@ -157,10 +163,16 @@ function SettingsModal({
         price_markup_pct: form!.price_markup_pct,
         send_to_kitchen: form!.send_to_kitchen,
         external_store_id: form!.external_store_id,
+        ...(clientId.trim() && clientSecret.trim()
+          ? { credentials: { client_id: clientId.trim(), client_secret: clientSecret.trim() } }
+          : {}),
       }),
     onSuccess: () => {
       invalidate("channels");
-      toast.success("Channel updated");
+      toast.success(
+        "Channel updated",
+        clientId.trim() && clientSecret.trim() ? "API credentials saved" : undefined,
+      );
       onClose();
     },
     onError: (e) => toast.error("Could not save", e instanceof Error ? e.message : ""),
@@ -192,6 +204,54 @@ function SettingsModal({
             onChange={(e) => set("external_store_id", e.target.value)}
           />
         </Field>
+
+        <div className="rounded-xl border border-line bg-white/[0.02] p-3.5">
+          <div className="mb-2.5 flex items-center justify-between">
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-white">
+              <KeyRound className="h-3.5 w-3.5 text-zinc-400" /> API credentials
+            </span>
+            <Badge tone={channel.has_credentials ? "green" : "amber"}>
+              {channel.has_credentials ? "Configured" : "Not set"}
+            </Badge>
+          </div>
+          <p className="mb-3 text-xs text-zinc-500">
+            From the {PROVIDER_LABEL[channel.provider]} developer dashboard — write-only, never shown
+            again once saved. Leave both blank to keep what&rsquo;s already stored.
+          </p>
+          <div className="space-y-2.5">
+            <Field label="Client ID">
+              <Input
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder={channel.has_credentials ? "•••• (unchanged)" : "e.g. sOvnYKqBy1F5T_1RkbI5eYhK9EUCaggF"}
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Client Secret">
+              <div className="relative">
+                <Input
+                  type={revealSecret ? "text" : "password"}
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder={channel.has_credentials ? "•••• (unchanged)" : "paste the client secret"}
+                  autoComplete="off"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setRevealSecret((v) => !v)}
+                  className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-zinc-500 hover:text-zinc-300"
+                  tabIndex={-1}
+                >
+                  {revealSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </Field>
+            {(clientId.trim() || clientSecret.trim()) && !(clientId.trim() && clientSecret.trim()) && (
+              <p className="text-xs text-amber-soft">Both fields are needed to save new credentials.</p>
+            )}
+          </div>
+        </div>
 
         <div className="space-y-2">
           {toggles.map((t) => (
@@ -250,7 +310,11 @@ function SettingsModal({
           actually paid.
         </p>
 
-        <Button className="w-full" onClick={() => save.mutate()} disabled={save.isPending}>
+        <Button
+          className="w-full"
+          onClick={() => save.mutate()}
+          disabled={save.isPending || !!((clientId.trim() || clientSecret.trim()) && !(clientId.trim() && clientSecret.trim()))}
+        >
           {save.isPending ? "Saving…" : "Save settings"}
         </Button>
       </div>
