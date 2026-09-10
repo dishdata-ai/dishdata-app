@@ -33,6 +33,7 @@ import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useEmplo
 import { ReceiptButton, PrintReceiptButton } from "@/components/ReceiptButton";
 import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
+import { orderCategories } from "@/lib/category-order";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
 import {
@@ -439,10 +440,17 @@ export default function Pos() {
     [recipes, eventMenuIds, eventRecipeIds],
   );
 
-  // Category pills reflect what's actually on the selected menu.
+  // Category pills reflect what's actually on the selected menu, in the
+  // restaurant's own configured order (Recipes → Category Order) — the same
+  // order the printed menu, the QR storefront and the Recipes list all use,
+  // so a dish is always in the same place wherever staff look for it.
+  const categoryOrder = (org?.settings as { categoryOrder?: string[] } | null)?.categoryOrder;
   const categories = useMemo(
-    () => ["All", ...[...new Set(inMenu.map((r) => r.category).filter(Boolean))].sort()],
-    [inMenu],
+    () => [
+      "All",
+      ...orderCategories([...new Set(inMenu.map((r) => r.category).filter(Boolean))], categoryOrder),
+    ],
+    [inMenu, categoryOrder],
   );
 
   // Switching menus can strand a category that no longer exists — fall back to
@@ -474,8 +482,11 @@ export default function Pos() {
     }
     // Same order as the category pills, so the pill bar and the grouped
     // sections agree on where everything is.
-    return [...byCategory.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [products, effectiveCategory, query]);
+    const rank = new Map(categories.map((c, i) => [c, i]));
+    return [...byCategory.entries()].sort(
+      ([a], [b]) => (rank.get(a) ?? 999) - (rank.get(b) ?? 999),
+    );
+  }, [products, effectiveCategory, query, categories]);
 
   const lines = cart
     .map((l) => ({ ...l, recipe: recipes.find((r) => r.id === l.recipeId) }))

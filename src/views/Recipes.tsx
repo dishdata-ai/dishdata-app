@@ -42,7 +42,11 @@ import {
 import { toast } from "@/lib/toast";
 import { cn, fmtPct, uid } from "@/lib/utils";
 
-const categories = ["All", "Mains", "Appetizers", "Desserts", "Beverages", "Specials"] as const;
+// Seed suggestions only — for a brand-new org with no recipes yet. Once
+// recipes exist, the filter pills and the new-recipe autocomplete are both
+// built from the categories actually in use (in the restaurant's configured
+// order), so this page matches the POS and the printed menu.
+const SEED_CATEGORIES = ["Starters", "Mains", "Sides", "Desserts", "Beverages"];
 
 interface IngRow {
   key: string;
@@ -57,8 +61,18 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const { org } = useOrg();
   const fmt = useFmt();
   const inventoryQ = useInventory();
+  const recipesQ = useRecipes();
   const invalidate = useInvalidate();
   const isEdit = !!recipe;
+
+  // Autocomplete from the categories already in use, so recipes land in
+  // consistent buckets instead of "Mains" vs "Main" vs "mains".
+  const categorySuggestions = useMemo(() => {
+    const inUse = [...new Set((recipesQ.data ?? []).map((r) => r.category).filter(Boolean))];
+    return inUse.length
+      ? orderCategories(inUse, (org?.settings as { categoryOrder?: string[] } | null)?.categoryOrder)
+      : SEED_CATEGORIES;
+  }, [recipesQ.data, org?.settings]);
   const [name, setName] = useState(recipe?.name ?? "");
   const [category, setCategory] = useState(recipe?.category ?? "Mains");
   const [price, setPrice] = useState(recipe ? String(recipe.price) : "");
@@ -171,7 +185,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
         <Field label="Category">
           <Input value={category} onChange={(e) => setCategory(e.target.value)} list="recipe-categories" placeholder="Mains" />
           <datalist id="recipe-categories">
-            {categories.slice(1).map((c) => (
+            {categorySuggestions.map((c) => (
               <option key={c} value={c} />
             ))}
           </datalist>
@@ -407,7 +421,7 @@ export default function Recipes() {
   const recipesQ = useRecipes();
   const ordersQ = useOrders();
   const invalidate = useInvalidate();
-  const [category, setCategory] = useState<(typeof categories)[number]>("All");
+  const [category, setCategory] = useState<string>("All");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<RecipeWithIngredients | null>(null);
   const [editing, setEditing] = useState<RecipeWithIngredients | null>(null);
@@ -418,14 +432,29 @@ export default function Recipes() {
   const recipes = recipesQ.data ?? [];
   const popularity = useMemo(() => popularityScores(recipes, ordersQ.data ?? []), [recipes, ordersQ.data]);
 
+  // Filter pills from the categories actually in use, in the restaurant's
+  // configured order — the same order the POS, the QR menu and the printed
+  // sheet use, so this page isn't the odd one out with a stale hardcoded list.
+  const categoryOrder = (org?.settings as { categoryOrder?: string[] } | null)?.categoryOrder;
+  const categories = useMemo(
+    () => [
+      "All",
+      ...orderCategories([...new Set(recipes.map((r) => r.category).filter(Boolean))], categoryOrder),
+    ],
+    [recipes, categoryOrder],
+  );
+  // A category can vanish (last recipe in it retyped/deleted) while it's the
+  // active filter — fall back so the grid never renders silently empty.
+  const effectiveCategory = categories.includes(category) ? category : "All";
+
   const filtered = useMemo(
     () =>
       recipes.filter(
         (r) =>
-          (category === "All" || r.category === category) &&
+          (effectiveCategory === "All" || r.category === effectiveCategory) &&
           r.name.toLowerCase().includes(query.toLowerCase()),
       ),
-    [recipes, category, query],
+    [recipes, effectiveCategory, query],
   );
 
   // TSE signs a fixed VAT bucket per recipe: whatever's on `tax_rate`, or the
@@ -548,7 +577,7 @@ export default function Recipes() {
               onClick={() => setCategory(c)}
               className={cn(
                 "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all",
-                category === c
+                effectiveCategory === c
                   ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
                   : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
               )}
