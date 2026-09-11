@@ -166,13 +166,21 @@ function SettingsModal({
   const [clientSecret, setClientSecret] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [revealSecret, setRevealSecret] = useState(false);
+  // Uber issues separate app credentials (and domains) for its Test App vs
+  // Prod App — sending Test App creds to the production API 401s. Only Uber
+  // has this distinction wired up server-side (lib/channels/platform-api.ts).
+  const [environment, setEnvironment] = useState<"sandbox" | "production">("sandbox");
+  const hasEnvironment = channel?.provider === "ubereats";
 
   // SumUp is the till: a single API key, and nothing to accept, quote or mark up.
   const isPos = channel?.provider === "sumup";
   const newCredentials = isPos
     ? (apiKey.trim() ? { api_key: apiKey.trim() } : null)
     : (clientId.trim() && clientSecret.trim()
-        ? { client_id: clientId.trim(), client_secret: clientSecret.trim() }
+        ? {
+            client_id: clientId.trim(), client_secret: clientSecret.trim(),
+            ...(hasEnvironment ? { environment } : {}),
+          }
         : null);
   const halfCredentials = !isPos && !!(clientId.trim() || clientSecret.trim()) && !newCredentials;
 
@@ -296,6 +304,31 @@ function SettingsModal({
                 </Field>
                 {halfCredentials && (
                   <p className="text-xs text-amber-soft">Both fields are needed to save new credentials.</p>
+                )}
+                {hasEnvironment && (
+                  <Field label="Environment">
+                    <div className="flex gap-1.5">
+                      {(["sandbox", "production"] as const).map((env) => (
+                        <button
+                          key={env}
+                          type="button"
+                          onClick={() => setEnvironment(env)}
+                          className={cn(
+                            "flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium capitalize",
+                            environment === env
+                              ? "border-brand-400/60 bg-brand-400/10 text-white"
+                              : "border-line text-zinc-400 hover:border-zinc-500",
+                          )}
+                        >
+                          {env}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1.5 text-xs text-zinc-500">
+                      Match the Uber Developer Dashboard app type: Test App → Sandbox, Prod App → Production.
+                      Applies the next time Client ID/Secret are saved.
+                    </p>
+                  </Field>
                 )}
               </div>
             </>

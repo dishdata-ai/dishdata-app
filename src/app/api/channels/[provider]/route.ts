@@ -218,6 +218,7 @@ export async function POST(
         provider, externalId: parsed.externalId, token, accept: true,
         prepMinutes: full?.prep_minutes ?? undefined,
         reference: (accepted as { order_number?: string } | null)?.order_number,
+        environment: creds.environment,
       });
     } catch (e) {
       await admin.from("channels").update({

@@ -74,6 +74,7 @@ export async function POST(req: NextRequest) {
       accept: body.action === "accept",
       prepMinutes: body.prep_minutes ?? ch?.prep_minutes ?? undefined,
       reason: body.reason,
+      environment: creds.environment,
     });
     return NextResponse.json({ acked: true });
   } catch (e) {

@@ -21,24 +21,51 @@ export interface PlatformCredentials {
   /** Cached bearer token. */
   access_token?: string;
   token_expires_at?: string;
+  /**
+   * Uber issues separate app credentials (and separate domains) for its
+   * "Test App" vs "Prod App". Sending a Test App's client_id/secret to the
+   * production auth/API domains fails with a cryptic
+   * `unauthorized_client: ...environment is mismatched...`. Defaults to
+   * "sandbox" because every Uber integration starts as a Test App.
+   */
+  environment?: "sandbox" | "production";
 }
 
-const CONFIG: Record<WebhookProvider, { tokenUrl: string; scope?: string; apiBase: string }> = {
+interface ProviderEndpoints {
+  tokenUrl: string;
+  scope?: string;
+  apiBase: string;
+}
+
+const CONFIG: Record<WebhookProvider, { production: ProviderEndpoints; sandbox?: ProviderEndpoints }> = {
   ubereats: {
-    tokenUrl: "https://auth.uber.com/oauth/v2/token",
-    // eats.order = accept/deny + read v1; eats.store.orders.read = read v2.
-    scope: "eats.order eats.store.orders.read",
-    apiBase: "https://api.uber.com",
+    production: {
+      tokenUrl: "https://auth.uber.com/oauth/v2/token",
+      // eats.order = accept/deny + read v1; eats.store.orders.read = read v2.
+      scope: "eats.order eats.store.orders.read",
+      apiBase: "https://api.uber.com",
+    },
+    sandbox: {
+      tokenUrl: "https://sandbox-login.uber.com/oauth/v2/token",
+      scope: "eats.order eats.store.orders.read",
+      apiBase: "https://test-api.uber.com",
+    },
   },
   wolt: {
-    tokenUrl: "https://authentication.wolt.com/v1/wauth2/access_token",
-    apiBase: "https://pos-integration-service.wolt.com",
+    production: {
+      tokenUrl: "https://authentication.wolt.com/v1/wauth2/access_token",
+      apiBase: "https://pos-integration-service.wolt.com",
+    },
   },
   lieferando: {
-    tokenUrl: "",
-    apiBase: "",
+    production: { tokenUrl: "", apiBase: "" },
   },
 };
+
+function endpointsFor(provider: WebhookProvider, environment?: "sandbox" | "production"): ProviderEndpoints {
+  const cfg = CONFIG[provider];
+  return environment === "production" ? cfg.production : (cfg.sandbox ?? cfg.production);
+}
 
 /** Fetch (or reuse) an access token, caching it on the channel row. */
 export async function getToken(
@@ -53,7 +80,7 @@ export async function getToken(
     new Date(creds.token_expires_at).getTime() > Date.now() + 60 * 60 * 1000;
   if (fresh) return creds.access_token!;
 
-  const cfg = CONFIG[provider];
+  const cfg = endpointsFor(provider, creds.environment);
   if (!cfg.tokenUrl) throw new Error(`No token endpoint configured for ${provider}.`);
   if (!creds.client_id || !creds.client_secret) {
     throw new Error(`API credentials are not set for the ${provider} channel.`);
@@ -100,11 +127,12 @@ export interface AckInput {
   reason?: string;
   /** Our order number, echoed to the platform for cross-referencing. */
   reference?: string;
+  environment?: "sandbox" | "production";
 }
 
 /** Tell the platform the order was accepted or denied. */
 export async function ackOrder(input: AckInput): Promise<void> {
-  const { provider, externalId, token, accept } = input;
+  const { provider, externalId, token, accept, environment } = input;
   const id = encodeURIComponent(externalId);
 
   if (provider === "ubereats") {
@@ -118,7 +146,7 @@ export async function ackOrder(input: AckInput): Promise<void> {
         }
       : { reason: { explanation: input.reason ?? "Unable to fulfill", out_of_items: [] } };
 
-    const res = await fetch(`${CONFIG.ubereats.apiBase}/v1/eats/orders/${id}/${path}`, {
+    const res = await fetch(`${endpointsFor("ubereats", environment).apiBase}/v1/eats/orders/${id}/${path}`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -131,7 +159,7 @@ export async function ackOrder(input: AckInput): Promise<void> {
   if (provider === "wolt") {
     // Wolt uses PUT verbs on the order resource.
     const path = accept ? "accept" : "reject";
-    const res = await fetch(`${CONFIG.wolt.apiBase}/orders/${id}/${path}`, {
+    const res = await fetch(`${endpointsFor("wolt", environment).apiBase}/orders/${id}/${path}`, {
       method: "PUT",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(
@@ -148,9 +176,13 @@ export async function ackOrder(input: AckInput): Promise<void> {
 }
 
 /** Wolt-only: tell Wolt the food is ready so the courier is dispatched. */
-export async function markWoltReady(externalId: string, token: string): Promise<void> {
+export async function markWoltReady(
+  externalId: string,
+  token: string,
+  environment?: "sandbox" | "production",
+): Promise<void> {
   const res = await fetch(
-    `${CONFIG.wolt.apiBase}/orders/${encodeURIComponent(externalId)}/ready`,
+    `${endpointsFor("wolt", environment).apiBase}/orders/${encodeURIComponent(externalId)}/ready`,
     { method: "PUT", headers: { authorization: `Bearer ${token}` } },
   );
   if (!res.ok) throw new Error(`Wolt ready failed (${res.status}): ${await res.text()}`);
