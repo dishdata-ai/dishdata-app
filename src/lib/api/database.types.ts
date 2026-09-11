@@ -504,6 +504,23 @@ export interface TimeEntry {
   note: string | null;
 }
 
+/** 'partial' = only between from_time and to_time (which may wrap past midnight). */
+export type AvailabilityStatus = "available" | "partial" | "unavailable";
+
+/** One employee's availability for one day. No row = they haven't said yet. */
+export interface StaffAvailability {
+  id: string;
+  org_id: string;
+  employee_id: string;
+  /** YYYY-MM-DD */
+  day: string;
+  status: AvailabilityStatus;
+  from_time: string | null;
+  to_time: string | null;
+  note: string | null;
+  updated_at: string;
+}
+
 export interface ChecklistItem {
   id: string;
   text: string;

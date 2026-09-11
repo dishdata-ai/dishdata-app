@@ -14,6 +14,7 @@ import {
   PageSkeleton,
   chartTooltipStyle,
 } from "@/components/ui";
+import { AvailabilityBoard } from "@/components/Availability";
 import { useEmployees, useOrders, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -302,6 +303,8 @@ export default function Staff() {
           </Card>
         </div>
       )}
+
+      {employees.length > 0 && <AvailabilityBoard employees={employees} />}
 
       <StaffDiscountReport />
 

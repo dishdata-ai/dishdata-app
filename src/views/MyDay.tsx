@@ -14,16 +14,20 @@ import {
   UserCircle2,
   Wallet,
   Play,
+  CalendarCheck,
 } from "lucide-react";
 import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton } from "@/components/ui";
+import { AvailabilityPlanner } from "@/components/Availability";
 import {
   useEmployees,
   useTimeEntries,
   useTasks,
   useOrders,
   useReservations,
+  useAvailability,
   useInvalidate,
 } from "@/lib/hooks/data";
+import { dayKey, weekDays } from "@/lib/api/availability";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -51,7 +55,8 @@ function greeting(): string {
 }
 
 export function MyDayView() {
-  const { org, moduleIds } = useOrg();
+  // Hours and pay are hidden from staff for now — admins still see their own.
+  const { org, moduleIds, isAdmin } = useOrg();
   const { user } = useAuth();
   const fmt = useFmt();
   const invalidate = useInvalidate();
@@ -60,6 +65,7 @@ export function MyDayView() {
   const tasksQ = useTasks();
   const ordersQ = useOrders();
   const reservationsQ = useReservations();
+  const availabilityQ = useAvailability();
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -101,7 +107,13 @@ export function MyDayView() {
     [tasksQ.data, me, user],
   );
 
-  const kitchenOpen = (ordersQ.data ?? []).filter(
+  const nextWeekFilled = useMemo(() => {
+    if (!me) return 0;
+    const keys = new Set(weekDays(1).map(dayKey));
+    return (availabilityQ.data ?? []).filter((r) => r.employee_id === me.id && keys.has(r.day)).length;
+  }, [availabilityQ.data, me]);
+
+  const kitchenOpen =(ordersQ.data ?? []).filter(
     (o) => o.kitchen_status !== "served" && o.status !== "void" &&
       Date.now() - new Date(o.created_at).getTime() < 12 * 3600000,
   ).length;
@@ -262,22 +274,35 @@ export function MyDayView() {
       </Card>
 
       {/* My week + today glance */}
-      <div className="grid grid-cols-3 gap-3">
-        <Card className="p-4 text-center">
-          <Timer className="mx-auto h-4 w-4 text-brand-300" />
-          <p className="mt-1.5 font-display text-lg font-bold text-white">{myWeek.hours.toFixed(1)}h</p>
-          <p className="text-[11px] text-zinc-500">this week · {myWeek.shifts} shifts</p>
-        </Card>
-        <Card className="p-4 text-center">
-          <Wallet className="mx-auto h-4 w-4 text-accent-400" />
-          <p className="mt-1.5 font-display text-lg font-bold text-white">{fmt(myWeek.earnings)}</p>
-          <p className="text-[11px] text-zinc-500">earned this week</p>
-        </Card>
+      <div className={cn("grid gap-3", isAdmin ? "grid-cols-3" : "grid-cols-2")}>
+        {isAdmin && (
+          <>
+            <Card className="p-4 text-center">
+              <Timer className="mx-auto h-4 w-4 text-brand-300" />
+              <p className="mt-1.5 font-display text-lg font-bold text-white">{myWeek.hours.toFixed(1)}h</p>
+              <p className="text-[11px] text-zinc-500">this week · {myWeek.shifts} shifts</p>
+            </Card>
+            <Card className="p-4 text-center">
+              <Wallet className="mx-auto h-4 w-4 text-accent-400" />
+              <p className="mt-1.5 font-display text-lg font-bold text-white">{fmt(myWeek.earnings)}</p>
+              <p className="text-[11px] text-zinc-500">earned this week</p>
+            </Card>
+          </>
+        )}
         <Card className="p-4 text-center">
           <KanbanSquare className="mx-auto h-4 w-4 text-violet-soft" />
           <p className="mt-1.5 font-display text-lg font-bold text-white">{myTasks.length}</p>
           <p className="text-[11px] text-zinc-500">open tasks</p>
         </Card>
+        {!isAdmin && (
+          <a href="#availability">
+            <Card className="h-full p-4 text-center transition-all hover:border-brand-400/40">
+              <CalendarCheck className="mx-auto h-4 w-4 text-accent-400" />
+              <p className="mt-1.5 font-display text-lg font-bold text-white">{nextWeekFilled}/7</p>
+              <p className="text-[11px] text-zinc-500">next week's availability</p>
+            </Card>
+          </a>
+        )}
       </div>
 
       {/* My tasks */}
@@ -338,6 +363,10 @@ export function MyDayView() {
           </div>
         )}
       </Card>
+
+      <div id="availability" className="scroll-mt-4">
+        <AvailabilityPlanner employee={me} />
+      </div>
 
       {/* Today at the restaurant */}
       <div className="grid gap-3 sm:grid-cols-2">
