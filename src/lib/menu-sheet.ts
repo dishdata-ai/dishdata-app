@@ -91,6 +91,17 @@ const HEADER_CONT = 16; // slim running header on later pages
 const FOOTER_LAST = 24;
 const FOOTER_SLIM = 10;
 
+// Character-count line estimates are an average, not a measurement — a
+// column already packed near 100% full can tip over when the same content
+// prints in a language whose words happen to run longer (German routinely
+// does), crossing a line-wrap boundary the English text didn't. The page is
+// a fixed 297mm with overflow hidden, so going over isn't cosmetic — it's
+// content silently missing off the bottom. This trims usable capacity a
+// little so a column that's *just barely* full always keeps some slack,
+// rather than only being safe for whichever language it happened to be
+// calibrated against.
+const SAFETY_MARGIN = 6;
+
 export type SheetLang = "en" | "de";
 
 /**
@@ -144,7 +155,7 @@ export function buildSections(
 ): SheetSection[] {
   const order: string[] = []; // English category, for ordering
   const displayOf = new Map<string, string>(); // English category -> display label
-  const byCategory = new Map<string, SheetItem[]>(); // keyed by display label
+  const byCategory = new Map<string, SheetItem[]>(); // keyed by English category
 
   // German falls back to English field by field, so a half-translated menu
   // prints the translations that exist rather than gaps where they don't.
@@ -155,18 +166,25 @@ export function buildSections(
   for (const r of [...recipes].reverse()) {
     if (!isAvailableToday(r)) continue;
     const englishCategory = (r.category || "Weitere").trim();
+    if (!byCategory.has(englishCategory)) {
+      byCategory.set(englishCategory, []);
+      order.push(englishCategory);
+    }
+    // Group strictly by the English category (every recipe in "Beverages"
+    // lands together, however each one's category_de is set), but let the
+    // heading upgrade to a real translation the moment any recipe in the
+    // group supplies one — one untranslated stray item shouldn't fall the
+    // whole category back to English, and previously worse: keying the
+    // group itself by the first-seen display label silently orphaned every
+    // recipe whose category_de disagreed with that first one.
     const display = pick(r.category_de, englishCategory).trim();
-    if (!byCategory.has(display)) {
-      byCategory.set(display, []);
-      if (!displayOf.has(englishCategory)) {
-        displayOf.set(englishCategory, display);
-        order.push(englishCategory);
-      }
+    if (!displayOf.has(englishCategory) || (de && r.category_de && displayOf.get(englishCategory) === englishCategory)) {
+      displayOf.set(englishCategory, display);
     }
     const description = withDescriptions
       ? pick(r.description_de, r.description || "").trim() || null
       : null;
-    byCategory.get(display)!.push({
+    byCategory.get(englishCategory)!.push({
       name: pick(r.name_de, r.name).trim(),
       // A zero price means "ask us" rather than "free" — printing "0.00 €"
       // on a menu is worse than printing nothing at all.
@@ -177,7 +195,7 @@ export function buildSections(
 
   return orderCategories(order, categoryOrder).map((englishCategory) => {
     const display = displayOf.get(englishCategory)!;
-    return { category: display, items: byCategory.get(display)! };
+    return { category: display, items: byCategory.get(englishCategory)! };
   });
 }
 
@@ -198,7 +216,7 @@ const sectionHeight = (s: SheetSection) =>
 
 /** Usable column height for the nth page (0-based), given which footer it reserves. */
 function columnHeight(pageIndex: number, footer: number): number {
-  return PAGE_H - PAD_Y - (pageIndex === 0 ? HEADER_FIRST : HEADER_CONT) - footer;
+  return PAGE_H - PAD_Y - (pageIndex === 0 ? HEADER_FIRST : HEADER_CONT) - footer - SAFETY_MARGIN;
 }
 
 /**
@@ -260,7 +278,7 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // the heading plus one item — splitting there would strand a heading
     // alone at the bottom of a column with nothing under it, which reads
     // worse than the blank space it would save.
-    const worthSplittingHere = remaining >= HEADING_H + itemHeight(section.items[0]);
+    const worthSplittingHere = remaining >= HEADING_H + itemHeight(section.items[0]) + SECTION_GAP;
     if (used > 0 && !worthSplittingHere) {
       nextColumn();
       queue.unshift(section);
@@ -270,7 +288,13 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     const head: SheetItem[] = [];
     let h = HEADING_H;
     for (const item of section.items) {
-      if (h + itemHeight(item) > remaining) break;
+      // + SECTION_GAP: a split section still pays the same trailing gap a
+      // whole one does once it's actually placed (see the `used +=` below),
+      // so a candidate item only belongs in `head` if there's room for it
+      // *and* that gap — checking against `remaining` without the gap let
+      // this loop accept one item more than the column actually had space
+      // for, silently overflowing the page's fixed, overflow-hidden height.
+      if (h + itemHeight(item) + SECTION_GAP > remaining) break;
       head.push(item);
       h += itemHeight(item);
     }
@@ -286,7 +310,12 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // every last millimetre of what was available, and the old flat
     // `used = capacity` threw that leftover away too, on top of the gap
     // above. The next item in the queue gets a fair shot at whatever's left.
-    used += h;
+    // `+ SECTION_GAP` matters here: sectionHeight() always includes it, so
+    // omitting it made every split under-count its own footprint by 7mm —
+    // the tracker believed there was more room left than truly existed,
+    // letting later sections get packed into space that was already spoken
+    // for.
+    used += h + SECTION_GAP;
     crossedPage = false;
     if (tail.length) queue.unshift({ ...section, items: tail, continued: true });
   }
