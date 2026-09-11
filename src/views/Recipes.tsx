@@ -663,45 +663,50 @@ export default function Recipes() {
         </Card>
       )}
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
+      <div className="space-y-3">
+        {/* Its own row, full width — sharing a row with the category pills
+            squeezed it down to an icon with no visible room to read what was
+            typed, on any restaurant with enough categories to fill the row. */}
+        <div className="relative">
           <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <Input placeholder="Search recipes…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
         </div>
-        {hiddenCategoryCount > 0 && (
-          <button
-            onClick={() => setLiveOnly((v) => !v)}
-            title={
-              liveOnly
-                ? `Showing live categories only — ${hiddenCategoryCount} hidden category${hiddenCategoryCount === 1 ? "" : "ies"} not shown`
-                : "Showing every category, including ones with nothing currently live"
-            }
-            className={cn(
-              "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all",
-              liveOnly
-                ? "border-brand-400/40 bg-brand-400/10 text-brand-300"
-                : "border-line bg-white/[0.03] text-zinc-400 hover:text-white",
-            )}
-          >
-            {liveOnly ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-            {liveOnly ? "Live only" : `All (+${hiddenCategoryCount})`}
-          </button>
-        )}
-        <div className="flex gap-1.5 overflow-x-auto pb-1">
-          {categories.map((c) => (
+        <div className="flex items-center gap-1.5">
+          {hiddenCategoryCount > 0 && (
             <button
-              key={c}
-              onClick={() => setCategory(c)}
+              onClick={() => setLiveOnly((v) => !v)}
+              title={
+                liveOnly
+                  ? `Showing live categories only — ${hiddenCategoryCount} hidden category${hiddenCategoryCount === 1 ? "" : "ies"} not shown`
+                  : "Showing every category, including ones with nothing currently live"
+              }
               className={cn(
-                "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all",
-                effectiveCategory === c
-                  ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
-                  : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+                "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all",
+                liveOnly
+                  ? "border-brand-400/40 bg-brand-400/10 text-brand-300"
+                  : "border-line bg-white/[0.03] text-zinc-400 hover:text-white",
               )}
             >
-              {c}
+              {liveOnly ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {liveOnly ? "Live only" : `All (+${hiddenCategoryCount})`}
             </button>
-          ))}
+          )}
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {categories.map((c) => (
+              <button
+                key={c}
+                onClick={() => setCategory(c)}
+                className={cn(
+                  "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all",
+                  effectiveCategory === c
+                    ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
+                    : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+                )}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

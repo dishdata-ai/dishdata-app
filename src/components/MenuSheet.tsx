@@ -33,20 +33,20 @@ function money(value: number, currency: string): string {
 }
 
 function Section({
-  section, currency, ink, continuedLabel,
+  section, currency, ink,
 }: {
   section: SheetSection;
   currency: string;
   ink: string;
-  continuedLabel: string;
 }) {
   return (
     <div className="mb-[7mm]">
+      {/* No "(cont.)" marker on a carried-over section — the repeated heading
+          plus the unbroken price/description formatting already reads as
+          the same category continuing, and the label was one more thing on
+          the page competing for the diner's attention. */}
       <h3 className="text-[13pt] leading-none font-bold tracking-tight" style={{ color: ink }}>
         {section.category}
-        {section.continued && (
-          <span className="ml-1.5 text-[8.5pt] font-normal opacity-60">{continuedLabel}</span>
-        )}
       </h3>
       <div className="mt-[2mm] mb-[3mm] h-px w-full" style={{ background: ink, opacity: 0.35 }} />
       <ul>
@@ -137,7 +137,6 @@ function Page({
                 section={s}
                 currency={org.currency}
                 ink={ink}
-                continuedLabel={t.continued}
               />
             ))}
           </div>
@@ -148,7 +147,6 @@ function Page({
                 section={s}
                 currency={org.currency}
                 ink={ink}
-                continuedLabel={t.continued}
               />
             ))}
           </div>
