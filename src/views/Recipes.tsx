@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert, ArrowUpDown, ArrowUp, ArrowDown, GripVertical } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -328,6 +328,23 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
  * dependency-free control that works identically with mouse, touch, or a
  * screen reader.
  */
+/**
+ * Re-sequences the VISIBLE subset of `fullOrder` into `newVisibleOrder`
+ * while leaving every hidden category exactly where it already sat.
+ *
+ * Needed because "live only" hides categories from view without letting
+ * reordering forget them — a seasonal category toggled off-menu keeps its
+ * saved position for whenever it's back, instead of falling to the end.
+ */
+function applyVisibleReorder(
+  fullOrder: string[],
+  visible: ReadonlySet<string>,
+  newVisibleOrder: string[],
+): string[] {
+  const queue = [...newVisibleOrder];
+  return fullOrder.map((cat) => (visible.has(cat) ? queue.shift()! : cat));
+}
+
 function CategoryOrderModal({
   open, onClose, orgId, orgSettings, recipes, onSaved,
 }: {
@@ -338,29 +355,57 @@ function CategoryOrderModal({
   recipes: RecipeWithIngredients[];
   onSaved: () => void;
 }) {
-  const present = useMemo(
+  const presentAll = useMemo(
     () => [...new Set(recipes.map((r) => r.category).filter(Boolean))],
+    [recipes],
+  );
+  const presentLive = useMemo(
+    () => [...new Set(recipes.filter((r) => r.is_active).map((r) => r.category).filter(Boolean))],
     [recipes],
   );
   const currentOrder = (orgSettings as { categoryOrder?: string[] } | null)?.categoryOrder;
   const [order, setOrder] = useState<string[]>([]);
+  // Default to the live menu — with 20+ categories once test/retired ones
+  // pile up, reordering the whole lot to fix the five that matter is exactly
+  // the clutter this toggle exists to skip.
+  const [liveOnly, setLiveOnly] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
 
-  // Re-seed from the live category list each time the dialog opens, so a
-  // category added since the last visit shows up already placed sensibly.
+  // Re-seed from the full live category list each time the dialog opens, so
+  // a category added since the last visit shows up already placed sensibly —
+  // always against ALL categories, never just the live subset, so a hidden
+  // category never gets silently dropped from the saved order.
   useEffect(() => {
-    if (open) setOrder(orderCategories(present, currentOrder));
+    if (open) setOrder(orderCategories(presentAll, currentOrder));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  const visibleSet = useMemo(
+    () => new Set(liveOnly ? presentLive : presentAll),
+    [liveOnly, presentLive, presentAll],
+  );
+  const visibleOrder = useMemo(() => order.filter((c) => visibleSet.has(c)), [order, visibleSet]);
+  const hiddenCount = presentAll.length - presentLive.length;
+
+  const reorderVisible = (newVisibleOrder: string[]) =>
+    setOrder((prev) => applyVisibleReorder(prev, visibleSet, newVisibleOrder));
+
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
-    if (j < 0 || j >= order.length) return;
-    setOrder((prev) => {
-      const next = [...prev];
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
-    });
+    if (j < 0 || j >= visibleOrder.length) return;
+    const next = [...visibleOrder];
+    [next[i], next[j]] = [next[j], next[i]];
+    reorderVisible(next);
+  };
+
+  const drop = (dropIndex: number) => {
+    if (dragFrom === null || dragFrom === dropIndex) return;
+    const next = [...visibleOrder];
+    const [moved] = next.splice(dragFrom, 1);
+    next.splice(dropIndex, 0, moved);
+    reorderVisible(next);
+    setDragFrom(null);
   };
 
   const save = async () => {
@@ -381,13 +426,50 @@ function CategoryOrderModal({
     <Modal open={open} onClose={onClose} title="Category order">
       <div className="space-y-4">
         <p className="text-sm text-zinc-400">
-          Sets the order sections appear in on the ordering page and the printed menu. Categories
-          added later default to the end, ahead of Beverages.
+          Sets the order sections appear in on the ordering page and the printed menu. Drag to
+          reorder — categories added later default to the end, ahead of Beverages.
         </p>
+
+        {hiddenCount > 0 && (
+          <div className="flex gap-2">
+            {(
+              [
+                [true, `Live menu (${presentLive.length})`],
+                [false, `All categories (${presentAll.length})`],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={String(v)}
+                onClick={() => setLiveOnly(v)}
+                className={cn(
+                  "flex-1 cursor-pointer rounded-xl border px-3 py-2 text-xs font-semibold transition-all",
+                  liveOnly === v
+                    ? "border-brand-400/60 bg-brand-400/10 text-white"
+                    : "border-line bg-white/[0.02] text-zinc-400 hover:border-zinc-500",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="space-y-1.5">
-          {order.map((cat, i) => (
-            <div key={cat} className="flex items-center justify-between gap-3 rounded-xl border border-line bg-white/[0.02] px-3 py-2">
-              <span className="text-sm font-medium text-white">{cat}</span>
+          {visibleOrder.map((cat, i) => (
+            <div
+              key={cat}
+              draggable
+              onDragStart={() => setDragFrom(i)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => drop(i)}
+              onDragEnd={() => setDragFrom(null)}
+              className={cn(
+                "flex cursor-grab items-center gap-2 rounded-xl border border-line bg-white/[0.02] px-3 py-2 active:cursor-grabbing",
+                dragFrom === i && "opacity-40",
+              )}
+            >
+              <GripVertical className="h-4 w-4 shrink-0 text-zinc-600" />
+              <span className="flex-1 text-sm font-medium text-white">{cat}</span>
               <div className="flex gap-1">
                 <button
                   onClick={() => move(i, -1)}
@@ -398,7 +480,7 @@ function CategoryOrderModal({
                 </button>
                 <button
                   onClick={() => move(i, 1)}
-                  disabled={i === order.length - 1}
+                  disabled={i === visibleOrder.length - 1}
                   className="cursor-pointer rounded-lg p-1.5 text-zinc-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
                 >
                   <ArrowDown className="h-3.5 w-3.5" />
@@ -447,15 +529,18 @@ export default function Recipes() {
   // active filter — fall back so the grid never renders silently empty.
   const effectiveCategory = categories.includes(category) ? category : "All";
 
-  const filtered = useMemo(
-    () =>
-      recipes.filter(
-        (r) =>
-          (effectiveCategory === "All" || r.category === effectiveCategory) &&
-          r.name.toLowerCase().includes(query.toLowerCase()),
-      ),
-    [recipes, effectiveCategory, query],
-  );
+  const filtered = useMemo(() => {
+    // Matched name, name_de, category and description (both languages) —
+    // searching just r.name meant a search for a dish's German name, or by
+    // category, came back empty on a menu this bilingual, which reads as
+    // "search is broken" even though nothing crashed.
+    const q = query.trim().toLowerCase();
+    const hit = (r: RecipeWithIngredients) =>
+      !q ||
+      [r.name, r.name_de, r.category, r.category_de, r.description, r.description_de]
+        .some((f) => f?.toLowerCase().includes(q));
+    return recipes.filter((r) => (effectiveCategory === "All" || r.category === effectiveCategory) && hit(r));
+  }, [recipes, effectiveCategory, query]);
 
   // TSE signs a fixed VAT bucket per recipe: whatever's on `tax_rate`, or the
   // org default when it's unset. A drink with no explicit rate silently signs
