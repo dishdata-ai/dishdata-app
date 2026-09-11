@@ -39,16 +39,22 @@ function Section({
   currency: string;
   ink: string;
 }) {
+  // A continuation that landed on the same page as its head (next column,
+  // no page turn) skips the heading entirely — "Salads" directly under
+  // "Salads" with nothing between them reads as a duplicate, not a
+  // continuation. One that crossed an actual page boundary still gets it;
+  // that's the one case a reader needs it to know what they're looking at.
+  const showHeading = section.headingVisible !== false;
   return (
     <div className="mb-[7mm]">
-      {/* No "(cont.)" marker on a carried-over section — the repeated heading
-          plus the unbroken price/description formatting already reads as
-          the same category continuing, and the label was one more thing on
-          the page competing for the diner's attention. */}
-      <h3 className="text-[13pt] leading-none font-bold tracking-tight" style={{ color: ink }}>
-        {section.category}
-      </h3>
-      <div className="mt-[2mm] mb-[3mm] h-px w-full" style={{ background: ink, opacity: 0.35 }} />
+      {showHeading && (
+        <>
+          <h3 className="text-[13pt] leading-none font-bold tracking-tight" style={{ color: ink }}>
+            {section.category}
+          </h3>
+          <div className="mt-[2mm] mb-[3mm] h-px w-full" style={{ background: ink, opacity: 0.35 }} />
+        </>
+      )}
       <ul>
         {section.items.map((item, i) => (
           <li key={i} className={cn(item.description ? "mb-[2.4mm]" : "mb-[1.7mm]")}>

@@ -24,6 +24,15 @@ export interface SheetSection {
   items: SheetItem[];
   /** True when this is the tail of a section carried over from the previous column. */
   continued?: boolean;
+  /**
+   * False only for a continuation that landed on the SAME page as its head
+   * (same page, next column) — repeating "Salads" right below "Salads" with
+   * nothing between them reads as a duplicate, not a continuation. A
+   * continuation that crossed an actual page boundary keeps its heading;
+   * that's the one case a reader needs it to know what they're looking at.
+   * Undefined/true for every ordinary (non-continued) section.
+   */
+  headingVisible?: boolean;
 }
 
 /** One printed page: two columns of whole (or deliberately carried-over) sections. */
@@ -198,6 +207,11 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
   let page: SheetPage = [[], []];
   let col = 0;
   let used = 0;
+  // Set only when nextColumn() actually starts a new PAGE (col 0 -> 1 within
+  // a page doesn't count). Consulted the moment a continuation is placed,
+  // then cleared — a continued section's heading shows only if a real page
+  // boundary sits between it and its head.
+  let crossedPage = false;
 
   const nextColumn = () => {
     if (col === 0) {
@@ -206,6 +220,7 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
       pages.push(page);
       page = [[], []];
       col = 0;
+      crossedPage = true;
     }
     used = 0;
   };
@@ -217,8 +232,9 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
     const remaining = capacity - used;
 
     if (sectionHeight(section) <= remaining) {
-      page[col].push(section);
+      page[col].push(section.continued ? { ...section, headingVisible: crossedPage } : section);
       used += sectionHeight(section);
+      crossedPage = false;
       continue;
     }
 
@@ -252,12 +268,15 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
     if (!head.length) head.push(section.items[0]);
     const tail = section.items.slice(head.length);
 
-    page[col].push({ ...section, items: head });
+    page[col].push(
+      section.continued ? { ...section, items: head, headingVisible: crossedPage } : { ...section, items: head },
+    );
     // Actual height consumed, not the whole column — a split rarely uses
     // every last millimetre of what was available, and the old flat
     // `used = capacity` threw that leftover away too, on top of the gap
     // above. The next item in the queue gets a fair shot at whatever's left.
     used += h;
+    crossedPage = false;
     if (tail.length) queue.unshift({ ...section, items: tail, continued: true });
   }
 
