@@ -517,13 +517,26 @@ export default function Recipes() {
   // Filter pills from the categories actually in use, in the restaurant's
   // configured order — the same order the POS, the QR menu and the printed
   // sheet use, so this page isn't the odd one out with a stale hardcoded list.
+  //
+  // "Live only" narrows the PILL BAR to categories with at least one visible
+  // recipe — it doesn't hide anything from the grid itself (picking "All"
+  // still shows hidden recipes with their own badge, same as always). Default
+  // on: a restaurant that's accumulated retired/seasonal/test categories
+  // shouldn't have to scroll past all of them to find today's.
+  const [liveOnly, setLiveOnly] = useState(true);
   const categoryOrder = (org?.settings as { categoryOrder?: string[] } | null)?.categoryOrder;
+  const categorySource = liveOnly ? recipes.filter((r) => r.is_active) : recipes;
+  const hiddenCategoryCount = useMemo(() => {
+    const all = new Set(recipes.map((r) => r.category).filter(Boolean));
+    const live = new Set(recipes.filter((r) => r.is_active).map((r) => r.category).filter(Boolean));
+    return all.size - live.size;
+  }, [recipes]);
   const categories = useMemo(
     () => [
       "All",
-      ...orderCategories([...new Set(recipes.map((r) => r.category).filter(Boolean))], categoryOrder),
+      ...orderCategories([...new Set(categorySource.map((r) => r.category).filter(Boolean))], categoryOrder),
     ],
-    [recipes, categoryOrder],
+    [categorySource, categoryOrder],
   );
   // A category can vanish (last recipe in it retyped/deleted) while it's the
   // active filter — fall back so the grid never renders silently empty.
@@ -655,6 +668,25 @@ export default function Recipes() {
           <Search className="absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-zinc-500" />
           <Input placeholder="Search recipes…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-10" />
         </div>
+        {hiddenCategoryCount > 0 && (
+          <button
+            onClick={() => setLiveOnly((v) => !v)}
+            title={
+              liveOnly
+                ? `Showing live categories only — ${hiddenCategoryCount} hidden category${hiddenCategoryCount === 1 ? "" : "ies"} not shown`
+                : "Showing every category, including ones with nothing currently live"
+            }
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all",
+              liveOnly
+                ? "border-brand-400/40 bg-brand-400/10 text-brand-300"
+                : "border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+            )}
+          >
+            {liveOnly ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            {liveOnly ? "Live only" : `All (+${hiddenCategoryCount})`}
+          </button>
+        )}
         <div className="flex gap-1.5 overflow-x-auto pb-1">
           {categories.map((c) => (
             <button

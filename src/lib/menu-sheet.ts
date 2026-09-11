@@ -222,9 +222,19 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
       continue;
     }
 
-    // Doesn't fit here. Start a fresh column unless this one is already fresh —
-    // in which case the section is taller than a whole column and must be split.
-    if (used > 0) {
+    // Doesn't fit whole. A partially-used column with real space left should
+    // still take what fits rather than sit blank while the whole section
+    // waits for a fresh column — leaving exactly that space empty, every
+    // time a section's size didn't happen to align with what was left, is
+    // what made printed sheets look sparse (confirmed against a real print:
+    // roughly half of two separate pages sat blank below a short section).
+    //
+    // Skip straight to a fresh column only when there's not even room for
+    // the heading plus one item — splitting there would strand a heading
+    // alone at the bottom of a column with nothing under it, which reads
+    // worse than the blank space it would save.
+    const worthSplittingHere = remaining >= HEADING_H + itemHeight(section.items[0]);
+    if (used > 0 && !worthSplittingHere) {
       nextColumn();
       queue.unshift(section);
       continue;
@@ -233,7 +243,7 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
     const head: SheetItem[] = [];
     let h = HEADING_H;
     for (const item of section.items) {
-      if (h + itemHeight(item) > capacity) break;
+      if (h + itemHeight(item) > remaining) break;
       head.push(item);
       h += itemHeight(item);
     }
@@ -243,7 +253,11 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
     const tail = section.items.slice(head.length);
 
     page[col].push({ ...section, items: head });
-    used = capacity;
+    // Actual height consumed, not the whole column — a split rarely uses
+    // every last millimetre of what was available, and the old flat
+    // `used = capacity` threw that leftover away too, on top of the gap
+    // above. The next item in the queue gets a fair shot at whatever's left.
+    used += h;
     if (tail.length) queue.unshift({ ...section, items: tail, continued: true });
   }
 
