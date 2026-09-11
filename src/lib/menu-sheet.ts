@@ -82,7 +82,14 @@ const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
 const HEADER_FIRST = 50; // logo, date and the "Today's Menu" title block
 const HEADER_CONT = 16; // slim running header on later pages
-const FOOTER = 24; // reserved on every page, so the last one always has room
+
+// Only the LAST printed page carries the tagline/"available today"/allergen
+// footer (see MenuSheet.tsx) — every other page just prints a slim "n/total"
+// corner mark. Reserving the full footer on every page wasted real column
+// space on anything but the final page; FOOTER_SLIM is that page-number
+// line's own height (margin + one 8pt line).
+const FOOTER_LAST = 24;
+const FOOTER_SLIM = 10;
 
 export type SheetLang = "en" | "de";
 
@@ -189,20 +196,22 @@ function itemHeight(item: SheetItem): number {
 const sectionHeight = (s: SheetSection) =>
   HEADING_H + s.items.reduce((h, i) => h + itemHeight(i), 0) + SECTION_GAP;
 
-/** Usable column height for the nth page (0-based). */
-function columnHeight(pageIndex: number): number {
-  return PAGE_H - PAD_Y - (pageIndex === 0 ? HEADER_FIRST : HEADER_CONT) - FOOTER;
+/** Usable column height for the nth page (0-based), given which footer it reserves. */
+function columnHeight(pageIndex: number, footer: number): number {
+  return PAGE_H - PAD_Y - (pageIndex === 0 ? HEADER_FIRST : HEADER_CONT) - footer;
 }
 
 /**
- * Flow sections into two-column pages.
- *
- * Sections are kept whole wherever they fit — a category chopped in half reads
- * as two unrelated categories. One that genuinely cannot fit a single column is
- * carried over with its heading repeated, which is the normal typographic
- * convention and much better than letting it run off the page.
+ * Flow sections into two-column pages, reserving the full footer only from
+ * `fullFooterFrom` (a page index) onward — everything before it gets the slim
+ * page-number reserve instead. `paginate()` below calls this twice: once
+ * assuming no page is final (to find out how many pages the content actually
+ * needs), then again reserving the real footer on the page that turns out to
+ * be last. If that guess is ever off, the presumed-last page (and anything
+ * pushed past it) still gets the full, safe reserve — it can only end up with
+ * more pages than truly needed, never an overflowing one.
  */
-export function paginate(sections: SheetSection[]): SheetPage[] {
+function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPage[] {
   const pages: SheetPage[] = [];
   let page: SheetPage = [[], []];
   let col = 0;
@@ -228,7 +237,9 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
   const queue = [...sections];
   while (queue.length) {
     const section = queue.shift()!;
-    const capacity = columnHeight(pages.length);
+    const pageIndex = pages.length;
+    const footer = pageIndex >= fullFooterFrom ? FOOTER_LAST : FOOTER_SLIM;
+    const capacity = columnHeight(pageIndex, footer);
     const remaining = capacity - used;
 
     if (sectionHeight(section) <= remaining) {
@@ -282,6 +293,19 @@ export function paginate(sections: SheetSection[]): SheetPage[] {
 
   if (page[0].length || page[1].length) pages.push(page);
   return pages.length ? pages : [[[], []]];
+}
+
+/**
+ * Flow sections into two-column pages.
+ *
+ * Sections are kept whole wherever they fit — a category chopped in half reads
+ * as two unrelated categories. One that genuinely cannot fit a single column is
+ * carried over with its heading repeated, which is the normal typographic
+ * convention and much better than letting it run off the page.
+ */
+export function paginate(sections: SheetSection[]): SheetPage[] {
+  const optimistic = paginateOnce(sections, Infinity);
+  return paginateOnce(sections, optimistic.length - 1);
 }
 
 /** German-format date for the sheet header, pinned to Berlin like the receipts. */
