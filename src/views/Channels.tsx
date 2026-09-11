@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   Bike, Check, X, Link2, Copy, AlertTriangle, Settings2, Inbox, Unlink, Eye, EyeOff, KeyRound,
+  RefreshCw,
 } from "lucide-react";
 import {
   Card, SectionTitle, Button, Badge, Modal, Input, Field, EmptyState, PageSkeleton,
@@ -14,7 +15,7 @@ import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import {
   connectChannel, updateChannel, disconnectChannel,
-  acceptChannelOrder, rejectChannelOrder, ackChannelOrder, webhookUrl,
+  acceptChannelOrder, rejectChannelOrder, ackChannelOrder, webhookUrl, syncSumUp,
 } from "@/lib/api/channels";
 import { PROVIDERS, PROVIDER_LABEL, PROVIDER_STORE_LABEL } from "@/lib/channels/providers";
 import { toast } from "@/lib/toast";
@@ -25,7 +26,18 @@ const PROVIDER_TONE: Record<ChannelProvider, string> = {
   wolt: "#00c2e8",
   ubereats: "#06c167",
   lieferando: "#ff8000",
+  sumup: "#3063e9",
 };
+
+/** While this page is open, pull SumUp till sales this often. */
+const AUTO_SYNC_MS = 3 * 60 * 1000;
+
+/** Local midnight — a new SumUp connection imports today's sales, not years of history. */
+function startOfToday(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
 
 /**
  * Uber falls back to manual handling if a POS order is not accepted within
@@ -152,7 +164,17 @@ function SettingsModal({
   // already stored untouched rather than overwriting it with nothing.
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [revealSecret, setRevealSecret] = useState(false);
+
+  // SumUp is the till: a single API key, and nothing to accept, quote or mark up.
+  const isPos = channel?.provider === "sumup";
+  const newCredentials = isPos
+    ? (apiKey.trim() ? { api_key: apiKey.trim() } : null)
+    : (clientId.trim() && clientSecret.trim()
+        ? { client_id: clientId.trim(), client_secret: clientSecret.trim() }
+        : null);
+  const halfCredentials = !isPos && !!(clientId.trim() || clientSecret.trim()) && !newCredentials;
 
   const save = useMutation({
     mutationFn: () =>
@@ -163,16 +185,11 @@ function SettingsModal({
         price_markup_pct: form!.price_markup_pct,
         send_to_kitchen: form!.send_to_kitchen,
         external_store_id: form!.external_store_id,
-        ...(clientId.trim() && clientSecret.trim()
-          ? { credentials: { client_id: clientId.trim(), client_secret: clientSecret.trim() } }
-          : {}),
+        ...(newCredentials ? { credentials: newCredentials } : {}),
       }),
     onSuccess: () => {
       invalidate("channels");
-      toast.success(
-        "Channel updated",
-        clientId.trim() && clientSecret.trim() ? "API credentials saved" : undefined,
-      );
+      toast.success("Channel updated", newCredentials ? "API credentials saved" : undefined);
       onClose();
     },
     onError: (e) => toast.error("Could not save", e instanceof Error ? e.message : ""),
@@ -182,7 +199,7 @@ function SettingsModal({
   const set = <K extends keyof ChannelSafe>(k: K, v: ChannelSafe[K]) =>
     setForm((f) => (f ? { ...f, [k]: v } : f));
 
-  const toggles: { key: "auto_accept" | "send_to_kitchen"; label: string; hint: string }[] = [
+  const allToggles: { key: "auto_accept" | "send_to_kitchen"; label: string; hint: string }[] = [
     {
       key: "auto_accept",
       label: "Auto-accept orders",
@@ -191,9 +208,24 @@ function SettingsModal({
     {
       key: "send_to_kitchen",
       label: "Send to kitchen board",
-      hint: "Off marks the ticket served immediately — for pre-packed handover only.",
+      hint: isPos
+        ? "Put synced till sales on the kitchen board. Usually off — they were already served, and a sync can land minutes after the sale."
+        : "Off marks the ticket served immediately — for pre-packed handover only.",
     },
   ];
+  // A till sale already happened, so it is always booked — nothing to accept.
+  const toggles = isPos ? allToggles.filter((t) => t.key !== "auto_accept") : allToggles;
+
+  const revealToggle = (
+    <button
+      type="button"
+      onClick={() => setRevealSecret((v) => !v)}
+      className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-zinc-500 hover:text-zinc-300"
+      tabIndex={-1}
+    >
+      {revealSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+    </button>
+  );
 
   return (
     <Modal open={!!channel} onClose={onClose} title={`${PROVIDER_LABEL[channel.provider]} settings`} wide>
@@ -214,43 +246,60 @@ function SettingsModal({
               {channel.has_credentials ? "Configured" : "Not set"}
             </Badge>
           </div>
-          <p className="mb-3 text-xs text-zinc-500">
-            From the {PROVIDER_LABEL[channel.provider]} developer dashboard — write-only, never shown
-            again once saved. Leave both blank to keep what&rsquo;s already stored.
-          </p>
-          <div className="space-y-2.5">
-            <Field label="Client ID">
-              <Input
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                placeholder={channel.has_credentials ? "•••• (unchanged)" : "e.g. sOvnYKqBy1F5T_1RkbI5eYhK9EUCaggF"}
-                autoComplete="off"
-              />
-            </Field>
-            <Field label="Client Secret">
-              <div className="relative">
-                <Input
-                  type={revealSecret ? "text" : "password"}
-                  value={clientSecret}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder={channel.has_credentials ? "•••• (unchanged)" : "paste the client secret"}
-                  autoComplete="off"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setRevealSecret((v) => !v)}
-                  className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-zinc-500 hover:text-zinc-300"
-                  tabIndex={-1}
-                >
-                  {revealSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+          {isPos ? (
+            <>
+              <p className="mb-3 text-xs text-zinc-500">
+                A secret API key (sup_sk_…) from SumUp Dashboard → Developer settings → API keys.
+                Write-only, never shown again once saved. Leave blank to keep what&rsquo;s already stored.
+              </p>
+              <Field label="API key">
+                <div className="relative">
+                  <Input
+                    type={revealSecret ? "text" : "password"}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={channel.has_credentials ? "•••• (unchanged)" : "sup_sk_…"}
+                    autoComplete="off"
+                    className="pr-10"
+                  />
+                  {revealToggle}
+                </div>
+              </Field>
+            </>
+          ) : (
+            <>
+              <p className="mb-3 text-xs text-zinc-500">
+                From the {PROVIDER_LABEL[channel.provider]} developer dashboard — write-only, never shown
+                again once saved. Leave both blank to keep what&rsquo;s already stored.
+              </p>
+              <div className="space-y-2.5">
+                <Field label="Client ID">
+                  <Input
+                    value={clientId}
+                    onChange={(e) => setClientId(e.target.value)}
+                    placeholder={channel.has_credentials ? "•••• (unchanged)" : "e.g. sOvnYKqBy1F5T_1RkbI5eYhK9EUCaggF"}
+                    autoComplete="off"
+                  />
+                </Field>
+                <Field label="Client Secret">
+                  <div className="relative">
+                    <Input
+                      type={revealSecret ? "text" : "password"}
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder={channel.has_credentials ? "•••• (unchanged)" : "paste the client secret"}
+                      autoComplete="off"
+                      className="pr-10"
+                    />
+                    {revealToggle}
+                  </div>
+                </Field>
+                {halfCredentials && (
+                  <p className="text-xs text-amber-soft">Both fields are needed to save new credentials.</p>
+                )}
               </div>
-            </Field>
-            {(clientId.trim() || clientSecret.trim()) && !(clientId.trim() && clientSecret.trim()) && (
-              <p className="text-xs text-amber-soft">Both fields are needed to save new credentials.</p>
-            )}
-          </div>
+            </>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -281,6 +330,8 @@ function SettingsModal({
           ))}
         </div>
 
+        {!isPos && (
+        <>
         <div className="grid grid-cols-3 gap-3">
           <Field label="Prep time (min)">
             <Input
@@ -309,11 +360,13 @@ function SettingsModal({
           only when pushing your menu out to the platform; inbound totals are always what the guest
           actually paid.
         </p>
+        </>
+        )}
 
         <Button
           className="w-full"
           onClick={() => save.mutate()}
-          disabled={save.isPending || !!((clientId.trim() || clientSecret.trim()) && !(clientId.trim() && clientSecret.trim()))}
+          disabled={save.isPending || halfCredentials}
         >
           {save.isPending ? "Saving…" : "Save settings"}
         </Button>
@@ -333,6 +386,7 @@ export default function Channels() {
 
   const [connecting, setConnecting] = useState<ChannelProvider | null>(null);
   const [storeId, setStoreId] = useState("");
+  const [connectKey, setConnectKey] = useState("");
   const [settingsFor, setSettingsFor] = useState<ChannelSafe | null>(null);
 
   const channels = channelsQ.data ?? [];
@@ -345,12 +399,29 @@ export default function Channels() {
 
   const connect = useMutation({
     mutationFn: () =>
-      connectChannel(org!.id, { provider: connecting!, externalStoreId: storeId.trim() }),
+      connectChannel(
+        org!.id,
+        connecting === "sumup"
+          ? {
+              provider: "sumup",
+              externalStoreId: storeId.trim(),
+              credentials: { api_key: connectKey.trim() },
+              // A till sale already happened: always booked, not ticketed.
+              autoAccept: true,
+              sendToKitchen: false,
+              settings: { sync_from: startOfToday() },
+            }
+          : { provider: connecting!, externalStoreId: storeId.trim() },
+      ),
     onSuccess: () => {
       invalidate("channels");
-      toast.success(`${PROVIDER_LABEL[connecting!]} connected`, "Give them the webhook URL below");
+      toast.success(
+        `${PROVIDER_LABEL[connecting!]} connected`,
+        connecting === "sumup" ? "Importing today's sales…" : "Give them the webhook URL below",
+      );
       setConnecting(null);
       setStoreId("");
+      setConnectKey("");
     },
     onError: (e) => toast.error("Could not connect", e instanceof Error ? e.message : ""),
   });
@@ -388,6 +459,47 @@ export default function Channels() {
     onError: (e) => toast.error("Could not disconnect", e instanceof Error ? e.message : ""),
   });
 
+  const sumup = byProvider.get("sumup");
+  const sync = useMutation({
+    mutationFn: (_v: { silent: boolean }) => syncSumUp(org!.id),
+    onSuccess: (r, v) => {
+      if (r.imported) invalidate("channel_orders", "orders", "inventory", "inventory_tx", "payments");
+      invalidate("channels");
+      if (r.failed) {
+        toast.error(
+          `${r.failed} SumUp sale${r.failed === 1 ? "" : "s"} did not import`,
+          "Retried on the next sync — the SumUp card shows the reason.",
+        );
+      }
+      if (v.silent) return;
+      toast.success(
+        r.imported
+          ? `${r.imported} SumUp sale${r.imported === 1 ? "" : "s"} imported`
+          : "SumUp is up to date",
+        r.unmapped
+          ? `${r.unmapped} item line${r.unmapped === 1 ? "" : "s"} matched no recipe — no stock moved for ${r.unmapped === 1 ? "it" : "those"}`
+          : r.more
+            ? "More sales waiting — sync again"
+            : undefined,
+      );
+    },
+    onError: (e, v) => {
+      invalidate("channels");
+      if (!v.silent) toast.error("SumUp sync failed", e instanceof Error ? e.message : "");
+    },
+  });
+
+  // Keep stock current while this page is open. Imports are idempotent, so
+  // overlapping with Sync now or the cron is harmless.
+  const autoSync = !!(sumup?.is_active && sumup.has_credentials);
+  const { mutate: runSync } = sync;
+  useEffect(() => {
+    if (!autoSync) return;
+    runSync({ silent: true });
+    const t = setInterval(() => runSync({ silent: true }), AUTO_SYNC_MS);
+    return () => clearInterval(t);
+  }, [autoSync, runSync]);
+
   const copy = (text: string) => {
     navigator.clipboard?.writeText(text);
     toast.success("Copied");
@@ -398,8 +510,8 @@ export default function Channels() {
   return (
     <div className="space-y-6">
       <SectionTitle
-        title="Delivery Channels"
-        subtitle="Wolt, Uber Eats and Lieferando orders in one inbox — accept once, straight to the kitchen."
+        title="Sales Channels"
+        subtitle="Wolt, Uber Eats and Lieferando orders in one inbox, plus every SumUp till sale — all of it depletes stock."
       />
 
       {/* Inbox ------------------------------------------------------------ */}
@@ -446,7 +558,7 @@ export default function Channels() {
           <Link2 className="h-4 w-4 text-zinc-400" />
           <h2 className="text-sm font-semibold text-white">Connections</h2>
         </div>
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
           {PROVIDERS.map((p) => {
             const ch = byProvider.get(p);
             return (
@@ -473,8 +585,19 @@ export default function Channels() {
                     <p className="mt-2 text-xs text-zinc-500">
                       {PROVIDER_STORE_LABEL[p]}: <span className="text-zinc-300">{ch.external_store_id || "—"}</span>
                       <br />
-                      {ch.last_order_at ? `Last order ${timeAgo(ch.last_order_at)}` : "No orders yet"}
-                      {ch.auto_accept ? " · auto-accept on" : ""}
+                      {p === "sumup" ? (
+                        <>
+                          {typeof ch.settings.last_synced_at === "string"
+                            ? `Synced ${timeAgo(ch.settings.last_synced_at)}`
+                            : "Not synced yet"}
+                          {ch.last_order_at ? ` · last sale ${timeAgo(ch.last_order_at)}` : ""}
+                        </>
+                      ) : (
+                        <>
+                          {ch.last_order_at ? `Last order ${timeAgo(ch.last_order_at)}` : "No orders yet"}
+                          {ch.auto_accept ? " · auto-accept on" : ""}
+                        </>
+                      )}
                     </p>
 
                     {ch.last_error && (
@@ -484,6 +607,16 @@ export default function Channels() {
                       </p>
                     )}
 
+                    {p === "sumup" ? (
+                      <Button
+                        className="mt-3 w-full"
+                        onClick={() => sync.mutate({ silent: false })}
+                        disabled={sync.isPending || !ch.is_active || !ch.has_credentials}
+                      >
+                        <RefreshCw className={cn("h-4 w-4", sync.isPending && "animate-spin")} />
+                        {sync.isPending ? "Syncing…" : "Sync sales now"}
+                      </Button>
+                    ) : (
                     <div className="mt-3 space-y-1.5">
                       <p className="text-[10px] font-semibold tracking-wide text-zinc-500 uppercase">
                         Webhook URL — give this to {PROVIDER_LABEL[p]}
@@ -507,6 +640,7 @@ export default function Channels() {
                         <Copy className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
                       </button>
                     </div>
+                    )}
 
                     {isAdmin && (
                       <div className="mt-3 grid grid-cols-[1fr_auto_auto] gap-2">
@@ -530,8 +664,14 @@ export default function Channels() {
                 ) : (
                   <>
                     <p className="mt-2 text-xs text-zinc-500">
-                      Needs a partner agreement with {PROVIDER_LABEL[p]} — once approved, paste the{" "}
-                      {PROVIDER_STORE_LABEL[p].toLowerCase()} they give you.
+                      {p === "sumup" ? (
+                        "Your till. No partner agreement — just your merchant code and an API key from the SumUp dashboard. Every sale lands here and depletes stock."
+                      ) : (
+                        <>
+                          Needs a partner agreement with {PROVIDER_LABEL[p]} — once approved, paste the{" "}
+                          {PROVIDER_STORE_LABEL[p].toLowerCase()} they give you.
+                        </>
+                      )}
                     </p>
                     {isAdmin && (
                       <Button className="mt-3 w-full" onClick={() => setConnecting(p)}>
@@ -564,6 +704,11 @@ export default function Channels() {
                   </span>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
+                  {co.status === "accepted" && co.items.some((l) => !l.recipe_id) && (
+                    <Badge tone="amber">
+                      {co.items.filter((l) => !l.recipe_id).length} unmapped
+                    </Badge>
+                  )}
                   <span className="text-zinc-500">{fmt(co.gross, 2)}</span>
                   <Badge
                     tone={co.status === "accepted" ? "green" : co.status === "failed" ? "rose" : "neutral"}
@@ -585,23 +730,44 @@ export default function Channels() {
       >
         {connecting && (
           <div className="space-y-4">
-            <p className="text-sm text-zinc-400">
-              Enter the {PROVIDER_STORE_LABEL[connecting].toLowerCase()} from your{" "}
-              {PROVIDER_LABEL[connecting]} partner portal. We will generate a webhook URL and signing
-              secret for you to register with them.
-            </p>
+            {connecting === "sumup" ? (
+              <p className="text-sm text-zinc-400">
+                Your merchant code is shown in the SumUp Dashboard under your profile (it looks like
+                MH4H92C7). Create a secret API key under Developer settings → API keys. Sales from
+                today onward are imported, and item names are matched to your recipes to deplete stock.
+              </p>
+            ) : (
+              <p className="text-sm text-zinc-400">
+                Enter the {PROVIDER_STORE_LABEL[connecting].toLowerCase()} from your{" "}
+                {PROVIDER_LABEL[connecting]} partner portal. We will generate a webhook URL and signing
+                secret for you to register with them.
+              </p>
+            )}
             <Field label={PROVIDER_STORE_LABEL[connecting]}>
               <Input
                 value={storeId}
                 onChange={(e) => setStoreId(e.target.value)}
-                placeholder="e.g. 6512f0a1b2c3d4e5f6a7b8c9"
+                placeholder={connecting === "sumup" ? "e.g. MH4H92C7" : "e.g. 6512f0a1b2c3d4e5f6a7b8c9"}
                 autoFocus
               />
             </Field>
+            {connecting === "sumup" && (
+              <Field label="API key">
+                <Input
+                  type="password"
+                  value={connectKey}
+                  onChange={(e) => setConnectKey(e.target.value)}
+                  placeholder="sup_sk_…"
+                  autoComplete="off"
+                />
+              </Field>
+            )}
             <Button
               className="w-full"
               onClick={() => connect.mutate()}
-              disabled={!storeId.trim() || connect.isPending}
+              disabled={
+                !storeId.trim() || (connecting === "sumup" && !connectKey.trim()) || connect.isPending
+              }
             >
               {connect.isPending ? "Connecting…" : "Connect"}
             </Button>

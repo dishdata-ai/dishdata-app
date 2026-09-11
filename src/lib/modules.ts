@@ -60,7 +60,7 @@ export const MODULES: ModuleDef[] = [
   { id: "inventory", name: "Inventory", path: "/inventory", icon: Boxes, group: "Operate", blurb: "Stock, waste and par levels" },
   { id: "procurement", name: "Procurement", path: "/procurement", icon: Truck, group: "Operate", blurb: "Vendors and purchase orders" },
   { id: "delivery", name: "Delivery", path: "/delivery", icon: Bike, group: "Operate", blurb: "Courier assignment and tracking" },
-  { id: "channels", name: "Delivery Channels", path: "/channels", icon: Store, group: "Operate", blurb: "Wolt, Uber Eats & Lieferando orders in one inbox" },
+  { id: "channels", name: "Sales Channels", path: "/channels", icon: Store, group: "Operate", blurb: "Wolt, Uber Eats & Lieferando orders plus SumUp till sales" },
   { id: "sales", name: "Sales", path: "/sales", icon: TrendingUp, group: "Grow", blurb: "Revenue and top sellers" },
   { id: "insights", name: "AI Insights", path: "/insights", icon: Sparkles, group: "Grow", blurb: "Computed recommendations" },
   { id: "menu", name: "Menu Engineering", path: "/menu", icon: SquareMenu, group: "Grow", blurb: "Stars, plowhorses, puzzles, dogs" },

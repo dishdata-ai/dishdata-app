@@ -44,6 +44,9 @@ export interface ConnectChannelInput {
   externalStoreId: string;
   /** Platform API credentials — written, never read back. */
   credentials?: Record<string, unknown>;
+  autoAccept?: boolean;
+  sendToKitchen?: boolean;
+  settings?: Record<string, unknown>;
 }
 
 /** Create (or re-point) the org's channel for a provider. */
@@ -57,6 +60,9 @@ export async function connectChannel(orgId: string, input: ConnectChannelInput):
       dChannels.update(existing.id, {
         external_store_id: input.externalStoreId,
         credentials: input.credentials ?? existing.credentials,
+        auto_accept: input.autoAccept ?? existing.auto_accept,
+        send_to_kitchen: input.sendToKitchen ?? existing.send_to_kitchen,
+        settings: input.settings ?? existing.settings,
       });
       return existing.id;
     }
@@ -67,8 +73,9 @@ export async function connectChannel(orgId: string, input: ConnectChannelInput):
       is_active: true,
       credentials: input.credentials ?? {},
       webhook_secret: uid().replace(/-/g, "") + uid().replace(/-/g, ""),
-      auto_accept: false, prep_minutes: 20, commission_pct: 30,
-      price_markup_pct: 0, send_to_kitchen: true, settings: {},
+      auto_accept: input.autoAccept ?? false, prep_minutes: 20, commission_pct: 30,
+      price_markup_pct: 0, send_to_kitchen: input.sendToKitchen ?? true,
+      settings: input.settings ?? {},
       last_order_at: null, last_error: null, last_error_at: null,
       created_at: now, updated_at: now, created_by: null,
     };
@@ -84,6 +91,9 @@ export async function connectChannel(orgId: string, input: ConnectChannelInput):
         external_store_id: input.externalStoreId,
         is_active: true,
         ...(input.credentials ? { credentials: input.credentials } : {}),
+        ...(input.autoAccept !== undefined ? { auto_accept: input.autoAccept } : {}),
+        ...(input.sendToKitchen !== undefined ? { send_to_kitchen: input.sendToKitchen } : {}),
+        ...(input.settings ? { settings: input.settings } : {}),
       },
       { onConflict: "org_id,provider" },
     )
@@ -210,6 +220,41 @@ export async function rejectChannelOrder(
     _reason: reason,
   });
   if (error) throw error;
+}
+
+export interface SumUpSyncResult {
+  imported: number;
+  /** Lines that matched no recipe — rang up, but moved no stock. */
+  unmapped: number;
+  failed: number;
+  more: boolean;
+}
+
+/**
+ * Pull new SumUp till sales into DishData now. Throws with the server's
+ * message (bad API key, SumUp down, …) so the caller can show it.
+ */
+export async function syncSumUp(orgId: string): Promise<SumUpSyncResult> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    return { imported: 0, unmapped: 0, failed: 0, more: false };
+  }
+  const { data: session } = await getSupabase().auth.getSession();
+  const token = session.session?.access_token;
+  if (!token) throw new Error("Not signed in.");
+  const res = await fetch("/api/channels/sync", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ org_id: orgId }),
+  });
+  const body = (await res.json().catch(() => ({}))) as Partial<SumUpSyncResult> & { error?: string };
+  if (!res.ok || body.error) throw new Error(body.error ?? `Sync failed (${res.status}).`);
+  return {
+    imported: body.imported ?? 0,
+    unmapped: body.unmapped ?? 0,
+    failed: body.failed ?? 0,
+    more: !!body.more,
+  };
 }
 
 /** The URL the platform should POST orders to. */

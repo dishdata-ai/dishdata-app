@@ -6,9 +6,21 @@ type CookieToSet = { name: string; value: string; options: CookieOptions };
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+/**
+ * Machine-to-machine endpoints. Callers (Wolt/Uber, Stripe, schedulers) carry
+ * no session cookie, so redirecting them to /auth silently breaks them. Each
+ * route authenticates itself: platform signature, Stripe signature, a shared
+ * secret, CRON_SECRET, or a bearer token (channels/ack, channels/sync).
+ */
+const SELF_AUTHENTICATED_API = ["/api/channels/", "/api/payments/webhook", "/api/webhooks/", "/api/cron/"];
+
 /** Paths that never require auth. */
 function isPublic(pathname: string): boolean {
-  return pathname === "/auth" || pathname.startsWith("/r/");
+  return (
+    pathname === "/auth" ||
+    pathname.startsWith("/r/") ||
+    SELF_AUTHENTICATED_API.some((p) => pathname.startsWith(p))
+  );
 }
 
 export async function middleware(request: NextRequest) {

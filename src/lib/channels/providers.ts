@@ -4,13 +4,21 @@
 
 import type { ChannelProvider } from "@/lib/api/database.types";
 
-/** Listed in priority order: Wolt and Uber Eats first. */
-export const PROVIDERS: ChannelProvider[] = ["wolt", "ubereats", "lieferando"];
+/** Listed in priority order: Wolt and Uber Eats first, the till last. */
+export const PROVIDERS: ChannelProvider[] = ["wolt", "ubereats", "lieferando", "sumup"];
+
+/**
+ * Platforms that PUSH orders to /api/channels/<provider>. SumUp is the odd one
+ * out: it has no webhook for in-person sales, so its sales are pulled by
+ * /api/channels/sync instead (see lib/channels/sumup.ts).
+ */
+export type WebhookProvider = Exclude<ChannelProvider, "sumup">;
 
 export const PROVIDER_LABEL: Record<ChannelProvider, string> = {
   wolt: "Wolt",
   ubereats: "Uber Eats",
   lieferando: "Lieferando",
+  sumup: "SumUp",
 };
 
 /** What each platform calls the location id you paste into the connect form. */
@@ -18,8 +26,13 @@ export const PROVIDER_STORE_LABEL: Record<ChannelProvider, string> = {
   wolt: "Venue ID",
   ubereats: "Store ID",
   lieferando: "Restaurant ID",
+  sumup: "Merchant code",
 };
 
 export function isChannelProvider(v: string): v is ChannelProvider {
+  return v === "wolt" || v === "ubereats" || v === "lieferando" || v === "sumup";
+}
+
+export function isWebhookProvider(v: string): v is WebhookProvider {
   return v === "wolt" || v === "ubereats" || v === "lieferando";
 }

@@ -1,21 +1,24 @@
-import type { ChannelProvider } from "@/lib/api/database.types";
 import type { ChannelAdapter } from "@/lib/channels/types";
+import type { WebhookProvider } from "@/lib/channels/providers";
 import { wolt } from "@/lib/channels/wolt";
 import { ubereats } from "@/lib/channels/ubereats";
 import { lieferando } from "@/lib/channels/lieferando";
 
 // Re-exported so server code has one import site; client code must import
 // these from ./providers instead (this module loads node:crypto).
-export { PROVIDERS, PROVIDER_LABEL, PROVIDER_STORE_LABEL, isChannelProvider } from "@/lib/channels/providers";
+export {
+  PROVIDERS, PROVIDER_LABEL, PROVIDER_STORE_LABEL, isChannelProvider, isWebhookProvider,
+  type WebhookProvider,
+} from "@/lib/channels/providers";
 
-/** Registry, in the order the Channels page lists them. */
-export const ADAPTERS: Record<ChannelProvider, ChannelAdapter> = {
+/** Webhook adapters, in the order the Channels page lists them. SumUp is pulled — see ./sumup. */
+export const ADAPTERS: Record<WebhookProvider, ChannelAdapter> = {
   wolt,
   ubereats,
   lieferando,
 };
 
-export function adapterFor(provider: ChannelProvider): ChannelAdapter {
+export function adapterFor(provider: WebhookProvider): ChannelAdapter {
   return ADAPTERS[provider];
 }
 

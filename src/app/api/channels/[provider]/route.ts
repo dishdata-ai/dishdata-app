@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
-import { adapterFor, isChannelProvider, matchRecipeId } from "@/lib/channels";
+import { adapterFor, isWebhookProvider, matchRecipeId, type WebhookProvider } from "@/lib/channels";
 import { getToken, fetchOrder, ackOrder, type PlatformCredentials } from "@/lib/channels/platform-api";
-import type { ChannelOrderLine, ChannelProvider } from "@/lib/api/database.types";
+import type { ChannelOrderLine } from "@/lib/api/database.types";
 
 // Signatures are computed over the exact request bytes, so the body must be
 // read raw and never re-serialized.
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
  */
 async function resolveOrder(
   admin: SupabaseClient,
-  provider: ChannelProvider,
+  provider: WebhookProvider,
   channelId: string,
   url: string,
 ): Promise<unknown> {
@@ -47,7 +47,8 @@ export async function POST(
   ctx: { params: Promise<{ provider: string }> },
 ) {
   const { provider } = await ctx.params;
-  if (!isChannelProvider(provider)) {
+  // SumUp is pulled by /api/channels/sync, never pushed here.
+  if (!isWebhookProvider(provider)) {
     return NextResponse.json({ error: "Unknown channel provider." }, { status: 404 });
   }
   const adapter = adapterFor(provider);

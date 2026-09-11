@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ChannelProvider } from "@/lib/api/database.types";
+import type { WebhookProvider } from "@/lib/channels/providers";
 
 /**
  * Outbound calls to the delivery platforms: OAuth token, order fetch, and the
@@ -23,7 +23,7 @@ export interface PlatformCredentials {
   token_expires_at?: string;
 }
 
-const CONFIG: Record<ChannelProvider, { tokenUrl: string; scope?: string; apiBase: string }> = {
+const CONFIG: Record<WebhookProvider, { tokenUrl: string; scope?: string; apiBase: string }> = {
   ubereats: {
     tokenUrl: "https://auth.uber.com/oauth/v2/token",
     // eats.order = accept/deny + read v1; eats.store.orders.read = read v2.
@@ -43,7 +43,7 @@ const CONFIG: Record<ChannelProvider, { tokenUrl: string; scope?: string; apiBas
 /** Fetch (or reuse) an access token, caching it on the channel row. */
 export async function getToken(
   admin: SupabaseClient,
-  provider: ChannelProvider,
+  provider: WebhookProvider,
   channelId: string,
   creds: PlatformCredentials,
 ): Promise<string> {
@@ -91,7 +91,7 @@ export async function fetchOrder(url: string, token: string): Promise<unknown> {
 }
 
 export interface AckInput {
-  provider: ChannelProvider;
+  provider: WebhookProvider;
   externalId: string;
   token: string;
   accept: boolean;

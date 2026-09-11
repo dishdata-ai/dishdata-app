@@ -15,6 +15,7 @@ const SOURCE_LABEL: Record<string, string> = {
   wolt: "Wolt",
   ubereats: "Uber Eats",
   lieferando: "Lieferando",
+  sumup: "SumUp",
 };
 
 const columns: { status: KitchenStatus; title: string; tone: string; next: KitchenStatus | null; action: string }[] = [

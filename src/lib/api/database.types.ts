@@ -739,8 +739,9 @@ export interface EventMenuItem {
 }
 
 // --- Delivery channels (Uber Eats / Wolt / Lieferando) — see migration 0026 ---
+// --- plus SumUp till sales, pulled rather than pushed — see migration 0043 ---
 
-export type ChannelProvider = 'ubereats' | 'wolt' | 'lieferando';
+export type ChannelProvider = 'ubereats' | 'wolt' | 'lieferando' | 'sumup';
 export type ChannelOrderStatus = 'pending' | 'accepted' | 'rejected' | 'failed';
 
 export interface Channel {
@@ -788,6 +789,8 @@ export interface ChannelOrderLine {
   price: number;
   recipe_id: string | null;
   notes?: string | null;
+  /** VAT % the channel stated for this line (SumUp); null → recipe/org rate. */
+  tax_rate?: number | null;
 }
 
 export interface ChannelOrder {

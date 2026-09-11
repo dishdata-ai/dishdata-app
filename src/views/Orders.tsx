@@ -34,6 +34,7 @@ const SOURCE_LABEL: Record<string, string> = {
   wolt: "Wolt",
   ubereats: "Uber Eats",
   lieferando: "Lieferando",
+  sumup: "SumUp",
 };
 
 const STATUS_TONE: Record<OrderStatus, "green" | "amber" | "rose" | "neutral"> = {

@@ -20,6 +20,8 @@ export interface ParsedLine {
   /** Unit price the guest paid, in major units (EUR), VAT included. */
   price: number;
   notes?: string | null;
+  /** VAT % when the platform states it (SumUp does); else the recipe/org rate applies. */
+  taxRate?: number | null;
 }
 
 /** Platform payload normalized into the shape `channel_orders` stores. */

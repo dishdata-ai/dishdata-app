@@ -1283,7 +1283,7 @@ insert into public.modules (id, name, grouping, sort) values
   ('team','Team & Access','Admin',20),
   ('audit','Audit Log','Admin',21),
   ('settings','Settings','Admin',22),
-  ('channels','Delivery Channels','Operate',23)
+  ('channels','Sales Channels','Operate',23)
 on conflict (id) do update set name = excluded.name, grouping = excluded.grouping, sort = excluded.sort;
 
 -- ----------------------------------------------------------------------------
@@ -1454,10 +1454,12 @@ create policy task_comments_delete on public.task_comments for delete
 do $$ begin alter publication supabase_realtime add table public.task_comments; exception when duplicate_object then null; end $$;
 
 -- ----------------------------------------------------------------------------
--- 15. DELIVERY CHANNELS (Uber Eats / Wolt / Lieferando) — see 0026
+-- 15. SALES CHANNELS (Uber Eats / Wolt / Lieferando, SumUp till) — see 0026, 0043
 -- ----------------------------------------------------------------------------
-do $$ begin create type channel_provider as enum ('ubereats','wolt','lieferando');
+do $$ begin create type channel_provider as enum ('ubereats','wolt','lieferando','sumup');
 exception when duplicate_object then null; end $$;
+-- Databases created before 0043 lack 'sumup'.
+alter type channel_provider add value if not exists 'sumup';
 
 do $$ begin create type channel_order_status as enum ('pending','accepted','rejected','failed');
 exception when duplicate_object then null; end $$;
@@ -1553,13 +1555,16 @@ create index if not exists channel_orders_order_idx
 -- path exists because a webhook has no auth.uid(); it is not guessable across
 -- orgs, so it cannot be used to touch another org's data.
 -- ----------------------------------------------------------------------------
+-- Per-line VAT; SumUp till sales keep their own time, tip and tender — see 0043.
 create or replace function public.accept_channel_order(
   _channel_order uuid,
   _secret text default null
 ) returns jsonb language plpgsql security definer set search_path = public as $$
 declare
-  co record; ch record; it jsonb;
-  _gross numeric := 0; _tax numeric; _subtotal numeric; _rate numeric;
+  co record; ch record; grp record;
+  _rate numeric; _is_pos boolean; _at timestamptz; _method payment_method;
+  _lines numeric := 0; _gross numeric; _discount numeric := 0; _tip numeric := 0;
+  _tax numeric := 0; _subtotal numeric;
   _no int; _order_id uuid; _order_number text; _items jsonb;
 begin
   select * into co from channel_orders where id = _channel_order;
@@ -1578,47 +1583,81 @@ begin
 
   select tax_rate into _rate from orgs where id = co.org_id;
 
-  -- Trust the platform's line prices — that is what the guest actually paid.
-  for it in select * from jsonb_array_elements(co.items) loop
-    _gross := _gross + (it->>'price')::numeric * (it->>'qty')::numeric;
-  end loop;
-  -- Fall back to the payload's own total if the lines did not carry prices.
-  if _gross = 0 then _gross := co.gross; end if;
+  -- A till sale (SumUp) already happened at the counter, with its own time,
+  -- tip and tender. A platform order happens now and is paid out by the
+  -- platform (see 0026 on 'wallet').
+  _is_pos := co.provider::text = 'sumup';
+  _at := case when _is_pos then co.received_at else now() end;
+  if _is_pos then
+    _tip := greatest(coalesce((co.fulfillment->>'tip')::numeric, 0), 0);
+    _method := case when upper(coalesce(co.fulfillment->>'payment_type', '')) = 'CASH'
+                    then 'cash'::payment_method else 'card'::payment_method end;
+  else
+    _method := 'wallet'::payment_method;
+  end if;
 
-  -- VAT-included (gross) pricing, matching checkout_order (0017/0025).
-  _tax := round(_gross * _rate / (100 + _rate), 2);
+  -- Lines in the shape POS writes, snapshotting each line's VAT rate: the
+  -- channel's own, else the recipe override, else the org default.
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'recipe_id', it.value->>'recipe_id',
+           'name', it.value->>'name',
+           'qty', (it.value->>'qty')::numeric,
+           'price', (it.value->>'price')::numeric,
+           'tax_rate', coalesce((it.value->>'tax_rate')::numeric, r.tax_rate, _rate)
+         ) order by it.ord), '[]'::jsonb)
+    into _items
+    from jsonb_array_elements(co.items) with ordinality as it(value, ord)
+    left join recipes r on r.id = (it.value->>'recipe_id')::uuid and r.org_id = co.org_id;
+
+  select coalesce(sum((i.value->>'price')::numeric * (i.value->>'qty')::numeric), 0)
+    into _lines
+    from jsonb_array_elements(_items) i;
+
+  -- Platforms: trust the line prices (what the guest paid), else the payload
+  -- total. Till: what was charged is authoritative; lines above it were
+  -- discounted at the counter.
+  if _is_pos and co.gross > 0 then _gross := co.gross;
+  elsif _lines > 0 then _gross := _lines;
+  else _gross := co.gross;
+  end if;
+  _discount := round(greatest(_lines - _gross, 0), 2);
+
+  -- VAT-included pricing, extracted per rate group with any discount spread
+  -- proportionally — the same method as checkout_order (0032).
+  if _lines > 0 then
+    for grp in
+      select (i.value->>'tax_rate')::numeric as rate,
+             sum((i.value->>'price')::numeric * (i.value->>'qty')::numeric) as gross
+      from jsonb_array_elements(_items) i
+      group by 1
+    loop
+      _tax := _tax + round(
+        greatest(grp.gross - _discount * grp.gross / _lines, 0) * grp.rate / (100 + grp.rate), 2);
+    end loop;
+  else
+    _tax := round(_gross * _rate / (100 + _rate), 2);
+  end if;
   _subtotal := round(_gross - _tax, 2);
 
   update orgs set next_order_no = next_order_no + 1
     where id = co.org_id returning next_order_no - 1 into _no;
   _order_number := 'ORD-' || lpad(_no::text, 4, '0');
 
-  -- Strip our internal recipe_id resolution out of the stored line items so
-  -- `orders.items` keeps the same shape POS writes.
-  select coalesce(jsonb_agg(jsonb_build_object(
-           'recipe_id', it.value->>'recipe_id',
-           'name', it.value->>'name',
-           'qty', (it.value->>'qty')::numeric,
-           'price', (it.value->>'price')::numeric
-         )), '[]'::jsonb)
-    into _items
-    from jsonb_array_elements(co.items) it;
-
   insert into orders (
     org_id, order_number, order_type, customer_id, guest_name, items,
-    subtotal, tax, tip, total, discount, status, kitchen_status, kitchen_notes, source
+    subtotal, tax, tip, total, discount, status, kitchen_status, kitchen_notes, source, created_at
   ) values (
     co.org_id, _order_number, co.order_type, null,
     nullif(co.customer_name, ''), _items,
-    _subtotal, _tax, 0, round(_gross, 2), 0,
-    'paid',                                    -- the platform already collected
+    _subtotal, _tax, _tip, round(_gross + _tip, 2), _discount,
+    'paid',                                    -- the platform / till already collected
     case when ch.send_to_kitchen then 'new'::kitchen_status else 'served'::kitchen_status end,
-    co.notes, co.provider::text
+    co.notes, co.provider::text, _at
   ) returning id into _order_id;
 
-  -- Payout leg so takings/Z-report reconcile (see header note on 'wallet').
-  insert into payments (org_id, order_id, method, amount, tip_amount, split_label)
-  values (co.org_id, _order_id, 'wallet', round(_gross, 2), 0, co.provider::text);
+  -- Payment leg so takings/Z-report reconcile.
+  insert into payments (org_id, order_id, method, amount, tip_amount, split_label, created_at)
+  values (co.org_id, _order_id, _method, round(_gross, 2), _tip, co.provider::text, _at);
 
   -- Deplete stock for lines we could map to a recipe.
   update inventory_items inv
@@ -1652,11 +1691,13 @@ begin
   set status = 'accepted', order_id = _order_id, decided_at = now(), decided_by = auth.uid()
   where id = _channel_order;
 
-  update channels set last_order_at = now(), last_error = null where id = co.channel_id;
+  update channels
+  set last_order_at = greatest(coalesce(last_order_at, _at), _at), last_error = null
+  where id = co.channel_id;
 
   return jsonb_build_object(
     'order_id', _order_id, 'order_number', _order_number,
-    'total', round(_gross, 2), 'already_decided', false
+    'total', round(_gross + _tip, 2), 'already_decided', false
   );
 end $$;
 
@@ -1728,11 +1769,11 @@ end $$;
 --    0022 for why a lone row would otherwise hide every other module.
 -- ----------------------------------------------------------------------------
 insert into public.modules (id, name, grouping, sort)
-values ('channels', 'Delivery Channels', 'Operate', 12)
+values ('channels', 'Sales Channels', 'Operate', 12)
 on conflict (id) do update set name = excluded.name, grouping = excluded.grouping;
 
 insert into public.modules (id, name, grouping, sort)
-values ('channels', 'Delivery Channels', 'Operate', 23)
+values ('channels', 'Sales Channels', 'Operate', 23)
 on conflict (id) do update set name = excluded.name, grouping = excluded.grouping;
 
 do $$ begin alter publication supabase_realtime add table public.channel_orders; exception when duplicate_object then null; end $$;
