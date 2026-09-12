@@ -17,7 +17,13 @@ const SELF_AUTHENTICATED_API = ["/api/channels/", "/api/payments/webhook", "/api
 /** Paths that never require auth. */
 function isPublic(pathname: string): boolean {
   return (
+    // /auth/reset-password: the recovery link's token arrives as a URL hash
+    // fragment, which never reaches this server-side check — only the
+    // client-side Supabase SDK can turn it into a session, after the page
+    // has already loaded. Redirecting the initial (still-unauthenticated)
+    // request away would kill the reset link before that can happen.
     pathname === "/auth" ||
+    pathname === "/auth/reset-password" ||
     pathname.startsWith("/r/") ||
     SELF_AUTHENTICATED_API.some((p) => pathname.startsWith(p))
   );

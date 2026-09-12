@@ -22,6 +22,10 @@ interface AuthContextValue {
   /** Returns an error message or null on success. */
   signUp: (email: string, password: string, fullName: string) => Promise<string | null>;
   signOut: () => Promise<void>;
+  /** Emails a recovery link to sign back in and set a new password. Returns an error message or null on success. */
+  resetPassword: (email: string) => Promise<string | null>;
+  /** Sets a new password for the currently-signed-in session (the recovery link's session). Returns an error message or null on success. */
+  updatePassword: (newPassword: string) => Promise<string | null>;
 }
 
 const DEMO_USER: AuthUser = { id: "demo-user", email: "demo@dishdata.app", fullName: "Demo Owner" };
@@ -72,8 +76,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await getSupabase().auth.signOut();
   };
 
+  const resetPassword = async (email: string) => {
+    if (!isSupabaseConfigured) return null;
+    const { error } = await getSupabase().auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    });
+    return error ? error.message : null;
+  };
+
+  const updatePassword = async (newPassword: string) => {
+    if (!isSupabaseConfigured) return null;
+    const { error } = await getSupabase().auth.updateUser({ password: newPassword });
+    return error ? error.message : null;
+  };
+
   return (
-    <AuthContext.Provider value={{ user, loading, isDemo: !isSupabaseConfigured, signIn, signUp, signOut }}>
+    <AuthContext.Provider
+      value={{ user, loading, isDemo: !isSupabaseConfigured, signIn, signUp, signOut, resetPassword, updatePassword }}
+    >
       {children}
     </AuthContext.Provider>
   );

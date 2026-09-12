@@ -12,10 +12,12 @@ import { cn } from "@/lib/utils";
 type Mode = "signin" | "signup";
 
 export default function Auth() {
-  const { signIn, signUp, isDemo, user } = useAuth();
+  const { signIn, signUp, resetPassword, isDemo, user } = useAuth();
   const router = useRouter();
   const params = useSearchParams();
   const [mode, setMode] = useState<Mode>(params?.get("invite") ? "signup" : "signin");
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
@@ -53,6 +55,22 @@ export default function Auth() {
     }
   };
 
+  const sendReset = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const err = await resetPassword(email.trim());
+      if (err) {
+        setError(err);
+        return;
+      }
+      setForgotSent(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Demo mode: no real auth — offer direct entry
   if (isDemo && user) {
     return (
@@ -70,6 +88,57 @@ export default function Auth() {
             Enter Demo Workspace
           </Button>
         </div>
+      </AuthShell>
+    );
+  }
+
+  if (forgotOpen) {
+    return (
+      <AuthShell>
+        <button
+          onClick={() => {
+            setForgotOpen(false);
+            setForgotSent(false);
+            setError(null);
+          }}
+          className="mb-5 cursor-pointer text-xs font-semibold text-zinc-400 hover:text-white"
+        >
+          ← Back to sign in
+        </button>
+        <h2 className="mb-1 font-display text-xl font-bold text-white">Reset your password</h2>
+        {forgotSent ? (
+          <p className="mt-3 text-sm leading-relaxed text-zinc-400">
+            If an account exists for <span className="text-white">{email}</span>, a reset link is on its way —
+            check your email and click it to set a new password.
+          </p>
+        ) : (
+          <>
+            <p className="mb-5 text-sm text-zinc-400">
+              We&apos;ll email you a link to set a new one.
+            </p>
+            <form onSubmit={sendReset} className="space-y-4">
+              <Field label="Email">
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@restaurant.com"
+                  required
+                  autoComplete="email"
+                  autoFocus
+                />
+              </Field>
+              {error && (
+                <p className="rounded-xl border border-rose-soft/20 bg-rose-soft/5 p-3 text-xs leading-relaxed text-rose-soft">
+                  {error}
+                </p>
+              )}
+              <Button type="submit" disabled={busy} className="w-full py-3">
+                {busy ? "Sending…" : "Send reset link"}
+              </Button>
+            </form>
+          </>
+        )}
       </AuthShell>
     );
   }
@@ -107,6 +176,18 @@ export default function Auth() {
         </Field>
         <Field label="Password">
           <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} autoComplete={mode === "signin" ? "current-password" : "new-password"} />
+          {mode === "signin" && (
+            <button
+              type="button"
+              onClick={() => {
+                setForgotOpen(true);
+                setError(null);
+              }}
+              className="mt-1.5 cursor-pointer text-xs font-medium text-zinc-500 hover:text-white"
+            >
+              Forgot password?
+            </button>
+          )}
         </Field>
         <Field label="Invite code (optional)">
           <div className="relative">
@@ -135,7 +216,7 @@ export default function Auth() {
   );
 }
 
-function AuthShell({ children }: { children: React.ReactNode }) {
+export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen">
       {/* Brand panel */}
