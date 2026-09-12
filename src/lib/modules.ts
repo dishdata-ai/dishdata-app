@@ -108,7 +108,7 @@ export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   admin: "all",
   partner: "all",
   manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till"],
-  staff: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks", "till"],
+  staff: ["myday", "pos", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks"],
   accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "till", "insights"],
   viewer: ["dashboard", "sales", "insights"],
 };
