@@ -788,6 +788,13 @@ begin
 
   insert into orgs (name, slug, currency, tax_rate) values (_name, _slug, _currency, _tax_rate) returning id into _org;
   insert into org_members (org_id, user_id, role) values (_org, auth.uid(), 'owner');
+
+  -- Same auto-link as accept_invite() — a fresh org's owner shouldn't hit
+  -- their own "who are you?" picker on My Day either.
+  insert into employees (org_id, user_id, name, role_title)
+  select _org, auth.uid(), coalesce(nullif(trim(p.full_name), ''), split_part(p.email, '@', 1), 'Owner'), 'Owner'
+  from profiles p where p.id = auth.uid();
+
   update profiles set active_org_id = _org where id = auth.uid();
   return _org;
 end $$;
@@ -802,10 +809,38 @@ begin
 
   insert into org_members (org_id, user_id, role) values (_inv.org_id, auth.uid(), _inv.role)
   on conflict (org_id, user_id) do nothing;
+
+  -- Auto-create + link this member's employee record so My Day works the
+  -- moment they join — nothing used to connect an accepted invite to a
+  -- Staff-module employee row, so every new joiner landed on a "who are
+  -- you?" picker instead of their own page until someone clicked themselves
+  -- into existence by hand.
+  insert into employees (org_id, user_id, name, role_title)
+  select _inv.org_id, auth.uid(),
+    coalesce(nullif(trim(p.full_name), ''), split_part(p.email, '@', 1), 'New teammate'),
+    initcap(_inv.role::text)
+  from profiles p
+  where p.id = auth.uid()
+    and not exists (select 1 from employees e where e.org_id = _inv.org_id and e.user_id = auth.uid());
+
   update invites set accepted_at = now(), accepted_by = auth.uid() where id = _inv.id;
   update profiles set active_org_id = _inv.org_id where id = auth.uid() and active_org_id is null;
   return _inv.org_id;
 end $$;
+
+-- One-time backfill for the gap the fix above doesn't cover retroactively:
+-- every existing member who joined before this migration and still has no
+-- linked employee row (on a fresh database org_members is empty, so this is
+-- a no-op there).
+insert into public.employees (org_id, user_id, name, role_title)
+select om.org_id, om.user_id,
+  coalesce(nullif(trim(p.full_name), ''), split_part(p.email, '@', 1), 'Team member'),
+  initcap(om.role::text)
+from public.org_members om
+join public.profiles p on p.id = om.user_id
+where not exists (
+  select 1 from public.employees e where e.org_id = om.org_id and e.user_id = om.user_id
+);
 
 -- ----------------------------------------------------------------------------
 -- 9. CHECKOUT (the live-data engine) — atomic order + payments + depletion
