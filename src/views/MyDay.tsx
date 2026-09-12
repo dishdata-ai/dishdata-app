@@ -75,6 +75,11 @@ export function MyDayView() {
 
   const employees = (employeesQ.data ?? []).filter((e) => e.is_active);
   const me = employees.find((e) => e.user_id === user?.id) ?? null;
+  // Only employees nobody has claimed yet belong in the self-link picker
+  // below — showing every active employee let anyone without a link click a
+  // co-worker's already-claimed name and take over their profile (their
+  // hours, pay, shifts), silently unlinking that co-worker in the process.
+  const unclaimedEmployees = employees.filter((e) => !e.user_id);
 
   const myOpenEntry = useMemo(
     () => (me ? (entriesQ.data ?? []).find((e) => e.employee_id === me.id && !e.clock_out) : undefined),
@@ -149,11 +154,14 @@ export function MyDayView() {
             Pick your name once — your shifts, tasks and hours will show up here.
           </p>
         </div>
-        {employees.length === 0 ? (
-          <EmptyState title="No employees yet" hint="Ask a manager to add you in the Staff module first." />
+        {unclaimedEmployees.length === 0 ? (
+          <EmptyState
+            title="No unclaimed profiles"
+            hint="Every employee here is already linked to an account — ask a manager to check the Staff module."
+          />
         ) : (
           <div className="mx-auto grid max-w-lg gap-2 sm:grid-cols-2">
-            {employees.map((emp) => (
+            {unclaimedEmployees.map((emp) => (
               <button
                 key={emp.id}
                 onClick={async () => {

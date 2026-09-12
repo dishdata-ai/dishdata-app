@@ -17,10 +17,20 @@ export async function listEmployees(orgId: string): Promise<Employee[]> {
   return data ?? [];
 }
 
-/** Link the signed-in user to their employee record (self-service "this is me"). */
+/**
+ * Link the signed-in user to their employee record (self-service "this is
+ * me"). Guarded server-side, not just in the picker UI that calls this — the
+ * claim only goes through if the target employee is still unlinked, so
+ * calling this directly (or a race between two people clicking the same
+ * unclaimed name) can never steal a profile someone else already claimed.
+ */
 export async function linkEmployeeToUser(orgId: string, employeeId: string, userId: string): Promise<void> {
   if (!isSupabaseConfigured) {
     await demoDelay();
+    const target = dEmployees.list({ org_id: orgId } as Partial<Employee>).find((e) => e.id === employeeId);
+    if (target?.user_id && target.user_id !== userId) {
+      throw new Error("That profile is already linked to another account.");
+    }
     // Unlink any previous claim by this user, then claim
     for (const e of dEmployees.list({ org_id: orgId } as Partial<Employee>)) {
       if (e.user_id === userId) dEmployees.update(e.id, { user_id: null });
@@ -30,8 +40,15 @@ export async function linkEmployeeToUser(orgId: string, employeeId: string, user
   }
   const sb = getSupabase();
   await sb.from("employees").update({ user_id: null }).eq("org_id", orgId).eq("user_id", userId);
-  const { error } = await sb.from("employees").update({ user_id: userId }).eq("id", employeeId).eq("org_id", orgId);
+  const { data, error } = await sb
+    .from("employees")
+    .update({ user_id: userId })
+    .eq("id", employeeId)
+    .eq("org_id", orgId)
+    .is("user_id", null)
+    .select("id");
   if (error) throw error;
+  if (!data?.length) throw new Error("That profile is already linked to another account.");
 }
 
 export async function updateEmployee(orgId: string, id: string, patch: Partial<Employee>): Promise<void> {
