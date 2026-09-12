@@ -43,6 +43,22 @@ export default function Storefront({
     note: "",
   });
 
+  const [lang, setLang] = useState<"en" | "de">("en");
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("storefront-lang");
+      if (saved === "de" || saved === "en") setLang(saved);
+    } catch { /* private browsing, etc. — default stands */ }
+  }, []);
+  const changeLang = (next: "en" | "de") => {
+    setLang(next);
+    try { localStorage.setItem("storefront-lang", next); } catch { /* ignore */ }
+  };
+  // German falls back to English field by field, so a half-translated menu
+  // shows the translations that exist rather than gaps where they don't —
+  // same rule menu-sheet.ts uses for the printed sheet.
+  const pick = (de: string | null, en: string) => (lang === "de" && de ? de : en);
+
   const [zoomedItem, setZoomedItem] = useState<{ image_url: string; name: string } | null>(null);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
   const [loyaltyEmail, setLoyaltyEmail] = useState("");
@@ -63,6 +79,24 @@ export default function Storefront({
     const present = [...new Set(menu.recipes.map((r) => r.category))];
     return orderCategories(present, menu.org.category_order);
   }, [menu]);
+
+  // Grouping/filtering always keys off the English category (above) — never
+  // the translated label. Recipes in the same category can have inconsistent
+  // (or missing) category_de, and keying by the display label instead once
+  // silently dropped a whole category's items on the printed menu when they
+  // did (see menu-sheet.ts buildSections()). This only resolves what heading
+  // text to show; upgrades from the English fallback the moment any recipe
+  // in the category supplies a real translation.
+  const categoryDisplay = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!menu) return map;
+    for (const r of menu.recipes) {
+      if (!map.has(r.category) || (lang === "de" && r.category_de && map.get(r.category) === r.category)) {
+        map.set(r.category, pick(r.category_de, r.category));
+      }
+    }
+    return map;
+  }, [menu, lang]);
 
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const categoryId = (cat: string) => `cat-${cat.replace(/\s+/g, "-").toLowerCase()}`;
@@ -204,7 +238,27 @@ export default function Storefront({
   return (
     <div className="min-h-screen pb-28">
       {/* Hero */}
-      <header className="border-b border-line">
+      <header className="relative border-b border-line">
+        <div className="absolute top-3 right-3 flex items-center gap-0.5 rounded-full border border-line bg-white/[0.03] p-0.5">
+          <button
+            onClick={() => changeLang("en")}
+            className={cn(
+              "cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold transition-all",
+              lang === "en" ? "bg-white/10 text-white" : "text-zinc-500",
+            )}
+          >
+            EN
+          </button>
+          <button
+            onClick={() => changeLang("de")}
+            className={cn(
+              "cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold transition-all",
+              lang === "de" ? "bg-white/10 text-white" : "text-zinc-500",
+            )}
+          >
+            DE
+          </button>
+        </div>
         <div className="mx-auto flex max-w-3xl flex-col items-center gap-3 px-4 py-10 text-center">
           {menu.org.logo_url ? (
             <img src={menu.org.logo_url} alt={menu.org.name} className="h-20 w-20 rounded-2xl object-cover ring-1 ring-white/15" />
@@ -241,7 +295,7 @@ export default function Storefront({
                     : "border border-line bg-white/[0.03] text-zinc-400",
                 )}
               >
-                {cat}
+                {categoryDisplay.get(cat) ?? cat}
               </button>
             ))}
           </div>
@@ -252,13 +306,15 @@ export default function Storefront({
       <main className="mx-auto max-w-3xl space-y-8 px-4 py-8">
         {categories.map((cat) => (
           <section key={cat} id={categoryId(cat)} className="scroll-mt-16">
-            <h2 className="mb-3 font-display text-lg font-bold text-white">{cat}</h2>
+            <h2 className="mb-3 font-display text-lg font-bold text-white">{categoryDisplay.get(cat) ?? cat}</h2>
             <div className="space-y-2.5">
               {menu.recipes
                 .filter((r) => r.category === cat)
                 .map((r) => {
                   const qty = cart.get(r.id) ?? 0;
                   const soldOut = isSoldOut(r);
+                  const name = pick(r.name_de, r.name);
+                  const description = pick(r.description_de, r.description ?? "") || null;
                   return (
                     <Card
                       key={r.id}
@@ -266,10 +322,10 @@ export default function Storefront({
                     >
                       {r.image_url ? (
                         <button
-                          onClick={() => setZoomedItem({ image_url: r.image_url!, name: r.name })}
+                          onClick={() => setZoomedItem({ image_url: r.image_url!, name })}
                           className="h-14 w-14 shrink-0 cursor-zoom-in overflow-hidden rounded-xl"
                         >
-                          <img src={r.image_url} alt={r.name} className="h-full w-full object-cover" />
+                          <img src={r.image_url} alt={name} className="h-full w-full object-cover" />
                         </button>
                       ) : (
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white/[0.03] text-2xl">
@@ -277,8 +333,8 @@ export default function Storefront({
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-white">{r.name}</p>
-                        {r.description && <p className="mt-0.5 text-xs text-zinc-500">{r.description}</p>}
+                        <p className="font-semibold text-white">{name}</p>
+                        {description && <p className="mt-0.5 text-xs text-zinc-500">{description}</p>}
                         <p className="mt-0.5 text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>
                       {soldOut ? (
