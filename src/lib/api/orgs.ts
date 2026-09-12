@@ -62,6 +62,10 @@ export async function createOrganization(name: string, currency: string, taxRate
       target_food_cost_pct: 28,
       onboarding_completed: false,
       settings: {},
+      clockin_lat: null,
+      clockin_lng: null,
+      clockin_radius_m: null,
+      max_shift_hours: 14,
     };
     demoOrgs.insert(org);
     return org.id;

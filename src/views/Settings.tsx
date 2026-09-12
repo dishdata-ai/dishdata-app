@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from "react";
-import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer } from "lucide-react";
+import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer, MapPin, LocateFixed } from "lucide-react";
 import { Card, SectionTitle, Button, Badge, Input, Field, Select } from "@/components/ui";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -13,7 +13,8 @@ import { getPrinterConfig, type PrinterConfig } from "@/lib/printer";
 import { clearDemoData } from "@/lib/api/demoDb";
 import { MODULES, MODULE_GROUPS, ALWAYS_ENABLED_MODULES } from "@/lib/modules";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { getCurrentPosition, GeoError } from "@/lib/geo";
 import {
   listDeliveryZones,
   upsertDeliveryZone,
@@ -173,6 +174,134 @@ function ReceiptPrinterCard({ isAdmin }: { isAdmin: boolean }) {
             <span className="font-mono text-zinc-400">https://{cfg.host || "printer-ip"}</span> once
             on each till device and accept the warning. After that, printing is instant.
           </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Geofenced clock-in: pin the restaurant's location so My Day can check staff
+ * are actually there before clocking them in. Off (both lat/lng null) is the
+ * default for every org — nothing changes until someone sets a pin here.
+ * See [[geo]] and [[timeclock]] for how it's enforced.
+ */
+function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
+  const { org, refresh } = useOrg();
+  const [lat, setLat] = useState(org?.clockin_lat != null ? String(org.clockin_lat) : "");
+  const [lng, setLng] = useState(org?.clockin_lng != null ? String(org.clockin_lng) : "");
+  const [radius, setRadius] = useState(String(org?.clockin_radius_m ?? 150));
+  const [maxHours, setMaxHours] = useState(String(org?.max_shift_hours ?? 14));
+  const [locating, setLocating] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const enabled = lat.trim() !== "" && lng.trim() !== "";
+
+  const useCurrentLocation = async () => {
+    setLocating(true);
+    try {
+      const pos = await getCurrentPosition();
+      setLat(pos.lat.toFixed(6));
+      setLng(pos.lng.toFixed(6));
+      toast.success("Location captured", `Accurate to ~${Math.round(pos.accuracy)}m — stand at the restaurant when you do this.`);
+    } catch (e) {
+      toast.error("Couldn't get your location", e instanceof GeoError ? e.message : errorMessage(e));
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  const save = async () => {
+    if (!org) return;
+    setSaving(true);
+    try {
+      await updateOrg(org.id, {
+        clockin_lat: enabled ? +lat : null,
+        clockin_lng: enabled ? +lng : null,
+        clockin_radius_m: enabled ? Math.max(20, +radius || 150) : null,
+        max_shift_hours: Math.max(1, +maxHours || 14),
+      });
+      refresh();
+      toast.success("Clock-in settings saved");
+    } catch (e) {
+      toast.error("Could not save", errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clear = async () => {
+    setLat("");
+    setLng("");
+    if (!org) return;
+    setSaving(true);
+    try {
+      await updateOrg(org.id, { clockin_lat: null, clockin_lng: null, clockin_radius_m: null });
+      refresh();
+      toast.success("Location check turned off");
+    } catch (e) {
+      toast.error("Could not save", errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <MapPin className="h-4 w-4 text-accent-400" />
+        <h3 className="font-semibold text-white">Clock-in Location</h3>
+        <Badge tone={enabled ? "green" : "neutral"}>{enabled ? "On" : "Off"}</Badge>
+      </div>
+      <p className="mb-4 text-xs text-zinc-500">
+        When set, My Day checks staff are within range before clocking them in on their own phone — the
+        shared Time Clock tablet is never affected, since it's already at the restaurant.
+      </p>
+
+      <div className="space-y-3">
+        <Button variant="ghost" disabled={!isAdmin || locating} onClick={useCurrentLocation}>
+          <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} />
+          {locating ? "Locating…" : "Use my current location"}
+        </Button>
+
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Latitude">
+            <Input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="52.5200" disabled={!isAdmin} />
+          </Field>
+          <Field label="Longitude">
+            <Input value={lng} onChange={(e) => setLng(e.target.value)} placeholder="13.4050" disabled={!isAdmin} />
+          </Field>
+          <Field label="Radius (m)">
+            <Input
+              type="number" min="20" step="10"
+              value={radius} onChange={(e) => setRadius(e.target.value)}
+              disabled={!isAdmin || !enabled}
+            />
+          </Field>
+        </div>
+
+        <Field label="Auto clock-out safety net (max hours on shift)">
+          <Input
+            type="number" min="1" step="1"
+            value={maxHours} onChange={(e) => setMaxHours(e.target.value)}
+            disabled={!isAdmin} className="max-w-[10rem]"
+          />
+        </Field>
+        <p className="text-xs text-zinc-500">
+          If someone leaves the location while clocked in on My Day, they're clocked out automatically after about
+          10 minutes outside it — but only while that phone's browser tab stays open. This cap is the backstop for
+          when it doesn't: any shift still open past this many hours is force-closed, whether or not location is set up.
+        </p>
+
+        <div className="flex gap-2">
+          <Button onClick={save} disabled={!isAdmin || saving}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          {enabled && (
+            <Button variant="ghost" onClick={clear} disabled={!isAdmin || saving}>
+              Turn off location check
+            </Button>
+          )}
         </div>
       </div>
     </Card>
@@ -693,6 +822,7 @@ export default function Settings() {
         <PaymentsCard isAdmin={isAdmin} />
         <StaffDiscountCard isAdmin={isAdmin} form={form} setForm={setForm} />
         <ReceiptPrinterCard isAdmin={isAdmin} />
+        <ClockInLocationCard isAdmin={isAdmin} />
       </div>
 
       <Card className="p-5">

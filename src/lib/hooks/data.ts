@@ -15,6 +15,7 @@ import { listTables, listReservations, listDeliveries } from "@/lib/api/service"
 import { getOpenTill, listTillSessions } from "@/lib/api/till";
 import { listTimeEntries } from "@/lib/api/timeclock";
 import { listAvailability } from "@/lib/api/availability";
+import { listShifts } from "@/lib/api/shifts";
 import { listTasks } from "@/lib/api/tasks";
 import { listMembers } from "@/lib/api/team";
 import { listPartnerProfiles, listKudos } from "@/lib/api/partners";
@@ -55,6 +56,7 @@ export const useOpenTill = () => useOrgQuery("till_open", getOpenTill);
 export const useTillSessions = () => useOrgQuery("till_sessions", (id) => listTillSessions(id));
 export const useTimeEntries = () => useOrgQuery("time_entries", (id) => listTimeEntries(id));
 export const useAvailability = () => useOrgQuery("staff_availability", listAvailability);
+export const useShifts = () => useOrgQuery("shifts", listShifts);
 export const useTasks = () => useOrgQuery("tasks", listTasks);
 export const useMembers = () => useOrgQuery("members", listMembers);
 export const usePartnerProfiles = () => useOrgQuery("partner_profiles", listPartnerProfiles);

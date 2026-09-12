@@ -47,6 +47,12 @@ export interface Org {
   target_food_cost_pct: number;
   onboarding_completed: boolean;
   settings: Record<string, unknown>;
+  /** Geofence center for My Day clock-in. null = feature off (the default). */
+  clockin_lat: number | null;
+  clockin_lng: number | null;
+  clockin_radius_m: number | null;
+  /** Safety-net cap: the force-clockout cron closes any entry open longer than this. */
+  max_shift_hours: number;
 }
 
 export interface Profile {
@@ -502,6 +508,29 @@ export interface TimeEntry {
   break_seconds: number;
   break_started_at: string | null;
   note: string | null;
+  /** Set only when the org has geofenced clock-in configured; null otherwise. */
+  clock_in_lat: number | null;
+  clock_in_lng: number | null;
+  clock_in_distance_m: number | null;
+  clock_out_lat: number | null;
+  clock_out_lng: number | null;
+  /** True when the clock-out was automatic — left the geofence, or the max-shift-hours cron. */
+  auto_clock_out: boolean;
+}
+
+/** One assigned shift for one employee on one day — see [[availability]] for the day-off-work counterpart. */
+export interface Shift {
+  id: string;
+  org_id: string;
+  employee_id: string;
+  /** YYYY-MM-DD */
+  day: string;
+  /** "HH:MM:SS" (Postgres time). May be a later clock-string than end_time for an overnight shift. */
+  start_time: string;
+  end_time: string;
+  role_title: string | null;
+  note: string | null;
+  updated_at: string;
 }
 
 /** 'partial' = only between from_time and to_time (which may wrap past midnight). */

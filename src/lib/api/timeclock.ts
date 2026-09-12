@@ -24,7 +24,17 @@ export async function listTimeEntries(orgId: string, daysBack = 14): Promise<Tim
   return data ?? [];
 }
 
-export async function clockIn(orgId: string, employeeId: string): Promise<void> {
+/** Only populated when the org has a geofence configured — see [[geo]]. */
+export interface ClockInGeo {
+  lat: number;
+  lng: number;
+  distanceM: number;
+}
+
+export async function clockIn(orgId: string, employeeId: string, geo?: ClockInGeo): Promise<void> {
+  const geoCols = geo
+    ? { clock_in_lat: geo.lat, clock_in_lng: geo.lng, clock_in_distance_m: geo.distanceM }
+    : {};
   if (!isSupabaseConfigured) {
     await demoDelay();
     const open = dEntries
@@ -35,19 +45,29 @@ export async function clockIn(orgId: string, employeeId: string): Promise<void> 
       id: uid(), org_id: orgId, employee_id: employeeId,
       clock_in: new Date().toISOString(), clock_out: null,
       break_seconds: 0, break_started_at: null, note: null,
+      clock_in_lat: null, clock_in_lng: null, clock_in_distance_m: null,
+      clock_out_lat: null, clock_out_lng: null, auto_clock_out: false,
+      ...geoCols,
     });
     return;
   }
   const { error } = await getSupabase()
     .from("time_entries")
-    .insert({ org_id: orgId, employee_id: employeeId });
+    .insert({ org_id: orgId, employee_id: employeeId, ...geoCols });
   if (error) {
     if (error.message.includes("one_open_entry")) throw new Error("Already clocked in");
     throw error;
   }
 }
 
-export async function clockOut(orgId: string, entry: TimeEntry): Promise<void> {
+export interface ClockOutOpts {
+  lat?: number;
+  lng?: number;
+  /** True when this clock-out wasn't the employee tapping the button — left the geofence, or the max-hours cron. */
+  auto?: boolean;
+}
+
+export async function clockOut(orgId: string, entry: TimeEntry, opts?: ClockOutOpts): Promise<void> {
   // Close any running break first
   const extraBreak = entry.break_started_at
     ? Math.floor((Date.now() - new Date(entry.break_started_at).getTime()) / 1000)
@@ -56,6 +76,8 @@ export async function clockOut(orgId: string, entry: TimeEntry): Promise<void> {
     clock_out: new Date().toISOString(),
     break_seconds: entry.break_seconds + extraBreak,
     break_started_at: null,
+    ...(opts?.lat != null ? { clock_out_lat: opts.lat, clock_out_lng: opts.lng } : {}),
+    ...(opts?.auto ? { auto_clock_out: true } : {}),
   };
   if (!isSupabaseConfigured) {
     await demoDelay();

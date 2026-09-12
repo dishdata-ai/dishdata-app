@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Timer,
   Coffee,
   LogOut as ClockOutIcon,
   CalendarClock,
+  CalendarDays,
   Flame,
   KanbanSquare,
   ArrowRight,
@@ -15,6 +16,8 @@ import {
   Wallet,
   Play,
   CalendarCheck,
+  MapPin,
+  Loader2,
 } from "lucide-react";
 import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton } from "@/components/ui";
 import { AvailabilityPlanner } from "@/components/Availability";
@@ -25,9 +28,10 @@ import {
   useOrders,
   useReservations,
   useAvailability,
+  useShifts,
   useInvalidate,
 } from "@/lib/hooks/data";
-import { dayKey, weekDays } from "@/lib/api/availability";
+import { dayKey, weekDays, shortTime } from "@/lib/api/availability";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { useFmt } from "@/lib/hooks/useFmt";
@@ -35,8 +39,15 @@ import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclo
 import { linkEmployeeToUser } from "@/lib/api/people";
 import { updateTask } from "@/lib/api/tasks";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import { getCurrentPosition, distanceMeters, geofenceOf, GeoError } from "@/lib/geo";
 import type { Task } from "@/lib/api/database.types";
+
+// While clocked in and the org has a geofence, if a position fix lands
+// outside the radius continuously for this long, clock them out automatically.
+// Short enough to catch "walked home and forgot", long enough that one bad
+// GPS reading at the edge of the lot doesn't end their shift by itself.
+const AUTO_CLOCKOUT_GRACE_MS = 10 * 60 * 1000;
 
 function fmtDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -66,6 +77,8 @@ export function MyDayView() {
   const ordersQ = useOrders();
   const reservationsQ = useReservations();
   const availabilityQ = useAvailability();
+  const shiftsQ = useShifts();
+  const [clockingIn, setClockingIn] = useState(false);
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -117,6 +130,61 @@ export function MyDayView() {
     const keys = new Set(weekDays(1).map(dayKey));
     return (availabilityQ.data ?? []).filter((r) => r.employee_id === me.id && keys.has(r.day)).length;
   }, [availabilityQ.data, me]);
+
+  const myShifts = useMemo(() => {
+    if (!me) return [];
+    const today = dayKey(new Date());
+    return (shiftsQ.data ?? [])
+      .filter((s) => s.employee_id === me.id && s.day >= today)
+      .sort((a, b) => a.day.localeCompare(b.day))
+      .slice(0, 6);
+  }, [shiftsQ.data, me]);
+
+  const geofence = org ? geofenceOf(org) : null;
+
+  // Best-effort "forgot to clock out": while on shift and the org has a
+  // geofence, watch position and clock out if we're outside it for a while.
+  // This only runs while this tab stays open in the foreground — closing the
+  // browser or locking the phone stops it, same as any web page. The
+  // force-clockout cron is the backstop for that gap.
+  const outsideSinceRef = useRef<number | null>(null);
+  const autoClockedRef = useRef(false);
+  useEffect(() => {
+    if (!myOpenEntry || !geofence || !org || !me) return;
+    if (typeof navigator === "undefined" || !("geolocation" in navigator)) return;
+    outsideSinceRef.current = null;
+    autoClockedRef.current = false;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (autoClockedRef.current) return;
+        const d = distanceMeters({ lat: pos.coords.latitude, lng: pos.coords.longitude }, geofence);
+        if (d <= geofence.radiusM) {
+          outsideSinceRef.current = null;
+          return;
+        }
+        if (outsideSinceRef.current == null) {
+          outsideSinceRef.current = Date.now();
+          return;
+        }
+        if (Date.now() - outsideSinceRef.current >= AUTO_CLOCKOUT_GRACE_MS) {
+          autoClockedRef.current = true;
+          clockOut(org.id, myOpenEntry, { lat: pos.coords.latitude, lng: pos.coords.longitude, auto: true })
+            .then(() => {
+              invalidate("time_entries");
+              toast.error("Clocked out automatically", "You left the restaurant's location while on shift.");
+            })
+            .catch(() => {
+              autoClockedRef.current = false; // let it retry on the next fix
+            });
+        }
+      },
+      () => {}, // a transient GPS error just skips this fix; no need to surface it
+      { enableHighAccuracy: true, maximumAge: 60000, timeout: 20000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myOpenEntry?.id, geofence?.lat, geofence?.lng, geofence?.radiusM]);
 
   const kitchenOpen =(ordersQ.data ?? []).filter(
     (o) => o.kitchen_status !== "served" && o.status !== "void" &&
@@ -262,20 +330,52 @@ export function MyDayView() {
                 </div>
               </>
             ) : (
-              <Button
-                className="w-full py-3 sm:w-auto sm:px-8"
-                onClick={async () => {
-                  try {
-                    await clockIn(org!.id, me.id);
-                    invalidate("time_entries");
-                    toast.success("Clocked in", "Have a great shift!");
-                  } catch (e) {
-                    toast.error("Clock-in failed", e instanceof Error ? e.message : "");
-                  }
-                }}
-              >
-                <Timer className="h-5 w-5" /> Clock In
-              </Button>
+              <div className="w-full sm:w-auto">
+                <Button
+                  className="w-full py-3 sm:px-8"
+                  disabled={clockingIn}
+                  onClick={async () => {
+                    setClockingIn(true);
+                    try {
+                      if (geofence) {
+                        let pos;
+                        try {
+                          pos = await getCurrentPosition();
+                        } catch (e) {
+                          const reason = e instanceof GeoError ? e.message : "Couldn't check your location.";
+                          toast.error("Clock-in needs your location", `${reason} Ask a manager to clock you in on Time Clock.`);
+                          return;
+                        }
+                        const distanceM = distanceMeters(pos, geofence);
+                        if (distanceM > geofence.radiusM) {
+                          toast.error(
+                            "You're not at the restaurant",
+                            `${Math.round(distanceM)}m away — ask a manager to clock you in on Time Clock.`,
+                          );
+                          return;
+                        }
+                        await clockIn(org!.id, me.id, { lat: pos.lat, lng: pos.lng, distanceM });
+                      } else {
+                        await clockIn(org!.id, me.id);
+                      }
+                      invalidate("time_entries");
+                      toast.success("Clocked in", "Have a great shift!");
+                    } catch (e) {
+                      toast.error("Clock-in failed", errorMessage(e));
+                    } finally {
+                      setClockingIn(false);
+                    }
+                  }}
+                >
+                  {clockingIn ? <Loader2 className="h-5 w-5 animate-spin" /> : <Timer className="h-5 w-5" />}
+                  {clockingIn ? "Checking location…" : "Clock In"}
+                </Button>
+                {geofence && (
+                  <p className="mt-1.5 flex items-center justify-center gap-1 text-xs text-zinc-500 sm:justify-start">
+                    <MapPin className="h-3 w-3" /> Checks you're at the restaurant
+                  </p>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -312,6 +412,51 @@ export function MyDayView() {
           </a>
         )}
       </div>
+
+      {/* My upcoming shifts */}
+      <Card>
+        <div className="flex items-center justify-between border-b border-line p-4">
+          <div>
+            <h3 className="font-semibold text-white">My Shifts</h3>
+            <p className="text-xs text-zinc-500">What your manager has scheduled you for</p>
+          </div>
+        </div>
+        {myShifts.length === 0 ? (
+          <EmptyState
+            icon={CalendarDays}
+            title="Nothing scheduled yet"
+            hint="Shifts your manager assigns show up here."
+            className="py-6"
+          />
+        ) : (
+          <div className="divide-y divide-line/60">
+            {myShifts.map((s) => {
+              const d = new Date(`${s.day}T00:00:00`);
+              const isToday = s.day === dayKey(new Date());
+              return (
+                <div key={s.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="w-16 shrink-0">
+                    <p className={cn("text-sm font-semibold", isToday ? "text-brand-300" : "text-white")}>
+                      {isToday ? "Today" : d.toLocaleDateString(undefined, { weekday: "short" })}
+                    </p>
+                    <p className="text-xs text-zinc-500">{d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}</p>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-white">
+                      {shortTime(s.start_time)}–{shortTime(s.end_time)}
+                    </p>
+                    {(s.role_title || s.note) && (
+                      <p className="truncate text-xs text-zinc-500">
+                        {[s.role_title, s.note].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
 
       {/* My tasks */}
       <Card>
