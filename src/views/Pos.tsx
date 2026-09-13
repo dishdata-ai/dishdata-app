@@ -367,7 +367,7 @@ function ProductCard({ r, onAdd, fmt }: { r: Recipe; onAdd: () => void; fmt: (n:
 }
 
 export default function Pos() {
-  const { org } = useOrg();
+  const { org, isManager } = useOrg();
   const { user } = useAuth();
   const fmt = useFmt();
   const recipesQ = useRecipes();
@@ -1032,6 +1032,12 @@ export default function Pos() {
                                 setStaffMode(m);
                                 setApprovalPin("");
                                 setMealPin("");
+                                // A plain staff account can't have picked someone
+                                // else here (the picker doesn't show for them),
+                                // but re-assert it — switching from "Give a
+                                // discount" (open to anyone) must not leave a
+                                // stale other-employee id behind for the claim.
+                                if (m === "meal" && !isManager) setStaffEmployeeId(myEmployee?.id ?? "");
                               }}
                               className={cn(
                                 "flex-1 cursor-pointer rounded-lg border py-1.5 text-xs font-semibold transition-all",
@@ -1052,47 +1058,65 @@ export default function Pos() {
                             Free up to today&rsquo;s allowance — enter your own PIN to confirm it&rsquo;s you. Ordering
                             more just charges the rest at the staff rate; nothing is blocked.
                           </p>
-                          <Select
-                            value={staffEmployeeId}
-                            onChange={(e) => {
-                              setStaffEmployeeId(e.target.value);
-                              setMealPin("");
-                            }}
-                            className="text-xs"
-                          >
-                            <option value="">Who&rsquo;s this for?</option>
-                            {staffEmployees.map((e) => (
-                              <option key={e.id} value={e.id}>
-                                {e.id === myEmployee?.id ? `${e.name} (you)` : e.name}
-                              </option>
-                            ))}
-                          </Select>
-
-                          {staffEmployeeId && mealUsage && (
-                            <p className="text-xs text-zinc-500">
-                              <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
-                                {fmt(mealUsage.remaining, 2)}
-                              </strong>{" "}
-                              left today
-                              {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
-                              {mealResidual > 0 && (
-                                <>
-                                  {" "}
-                                  · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
-                                </>
-                              )}
+                          {/* Self-serve means self — a plain staff account can only
+                              claim their own meal, no picker at all. A manager can
+                              still act on someone's behalf (e.g. they're mid-task
+                              and asked for help), which the PIN check still gates. */}
+                          {isManager ? (
+                            <Select
+                              value={staffEmployeeId}
+                              onChange={(e) => {
+                                setStaffEmployeeId(e.target.value);
+                                setMealPin("");
+                              }}
+                              className="text-xs"
+                            >
+                              <option value="">Who&rsquo;s this for?</option>
+                              {staffEmployees.map((e) => (
+                                <option key={e.id} value={e.id}>
+                                  {e.id === myEmployee?.id ? `${e.name} (you)` : e.name}
+                                </option>
+                              ))}
+                            </Select>
+                          ) : myEmployee ? (
+                            <p className="rounded-lg bg-white/[0.03] px-2.5 py-1.5 text-xs text-zinc-300">
+                              Claiming for <strong className="text-white">{myEmployee.name}</strong>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-amber-300">
+                              Link your account on My Day first — ask a manager if you're not sure how.
                             </p>
                           )}
 
-                          {staffEmployeeId && (
-                            <Input
-                              type="password"
-                              inputMode="numeric"
-                              placeholder="Your PIN"
-                              value={mealPin}
-                              onChange={(e) => setMealPin(e.target.value)}
-                              className="text-xs"
-                            />
+                          {/* A non-manager's id is forced to their own above — this
+                              is the "actually got a valid target" check, not just
+                              "something is selected." */}
+                          {(isManager ? !!staffEmployeeId : staffEmployeeId === myEmployee?.id && !!myEmployee) && (
+                            <>
+                              {mealUsage && (
+                                <p className="text-xs text-zinc-500">
+                                  <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
+                                    {fmt(mealUsage.remaining, 2)}
+                                  </strong>{" "}
+                                  left today
+                                  {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
+                                  {mealResidual > 0 && (
+                                    <>
+                                      {" "}
+                                      · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
+                                    </>
+                                  )}
+                                </p>
+                              )}
+                              <Input
+                                type="password"
+                                inputMode="numeric"
+                                placeholder="Your PIN"
+                                value={mealPin}
+                                onChange={(e) => setMealPin(e.target.value)}
+                                className="text-xs"
+                              />
+                            </>
                           )}
                         </>
                       ) : (
