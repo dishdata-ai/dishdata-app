@@ -9,7 +9,7 @@ export type PaymentMethod = "card" | "cash" | "wallet" | "stripe";
 export type TillStatus = "open" | "closed";
 export type CashDirection = "in" | "out";
 export type PoStatus = "draft" | "sent" | "confirmed" | "delivered" | "reconciled";
-export type InvReason = "sale" | "purchase" | "waste" | "adjustment" | "count";
+export type InvReason = "sale" | "purchase" | "waste" | "adjustment" | "count" | "staff_meal";
 export type WasteReason = "spoiled" | "burnt" | "returned" | "overprep" | "other";
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
@@ -53,6 +53,8 @@ export interface Org {
   clockin_radius_m: number | null;
   /** Safety-net cap: the force-clockout cron closes any entry open longer than this. */
   max_shift_hours: number;
+  /** € comped per employee per calendar day for staff meals/drinks. null/0 = feature off. */
+  staff_meal_daily_limit: number | null;
 }
 
 export interface Profile {
@@ -326,6 +328,8 @@ export interface Order {
   staff_discount_employee_id?: string | null;
   /** The staff-discount portion of `discount` — excludes any loyalty voucher on the same order. */
   staff_discount_amount?: number;
+  /** The free-daily-allowance portion of `discount` — separate budget from staff_discount_amount, see 0048. */
+  staff_meal_amount?: number;
 
   // --- TSE (KassenSichV §146a AO), migration 0035 ---------------------------
   /** 'not_required' on pre-TSE orders and at restaurants with no TSE configured. */

@@ -51,13 +51,17 @@ export async function clockIn(orgId: string, employeeId: string, geo?: ClockInGe
     });
     return;
   }
-  const { error } = await getSupabase()
-    .from("time_entries")
-    .insert({ org_id: orgId, employee_id: employeeId, ...geoCols });
-  if (error) {
-    if (error.message.includes("one_open_entry")) throw new Error("Already clocked in");
-    throw error;
-  }
+  // Writes go through record_clock_in rather than a bare insert — see 0047:
+  // any invariant an insert would need to respect (one open entry, no
+  // fabricated timestamps) lives in that function, not in this client.
+  const { error } = await getSupabase().rpc("record_clock_in", {
+    _org: orgId,
+    _employee: employeeId,
+    _lat: geo?.lat ?? null,
+    _lng: geo?.lng ?? null,
+    _distance_m: geo?.distanceM ?? null,
+  });
+  if (error) throw error;
 }
 
 export interface ClockOutOpts {
@@ -84,11 +88,13 @@ export async function clockOut(orgId: string, entry: TimeEntry, opts?: ClockOutO
     dEntries.update(entry.id, patch);
     return;
   }
-  const { error } = await getSupabase()
-    .from("time_entries")
-    .update(patch)
-    .eq("id", entry.id)
-    .eq("org_id", orgId);
+  const { error } = await getSupabase().rpc("record_clock_out", {
+    _org: orgId,
+    _entry: entry.id,
+    _lat: opts?.lat ?? null,
+    _lng: opts?.lng ?? null,
+    _auto: opts?.auto ?? false,
+  });
   if (error) throw error;
 }
 
@@ -105,11 +111,7 @@ export async function toggleBreak(orgId: string, entry: TimeEntry): Promise<void
     dEntries.update(entry.id, patch);
     return;
   }
-  const { error } = await getSupabase()
-    .from("time_entries")
-    .update(patch)
-    .eq("id", entry.id)
-    .eq("org_id", orgId);
+  const { error } = await getSupabase().rpc("record_toggle_break", { _org: orgId, _entry: entry.id });
   if (error) throw error;
 }
 

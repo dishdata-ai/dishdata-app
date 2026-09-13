@@ -7,6 +7,7 @@ import { useEmployees, useInvalidate } from "@/lib/hooks/data";
 import { updateEmployee } from "@/lib/api/people";
 import type { Employee } from "@/lib/api/database.types";
 import { useAuth } from "@/lib/hooks/useAuth";
+import { useFmt } from "@/lib/hooks/useFmt";
 import { updateOrg, uploadOrgAsset } from "@/lib/api/orgs";
 import { printViaEpos } from "@/lib/escpos";
 import { getPrinterConfig, type PrinterConfig } from "@/lib/printer";
@@ -379,7 +380,7 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
 
 type SettingsForm = {
   name: string; currency: string; tax: string; target: string;
-  staffMaxPct: string; staffCap: string; staffPinAt: string;
+  staffMaxPct: string; staffCap: string; staffPinAt: string; staffMealLimit: string;
 };
 
 /**
@@ -398,6 +399,7 @@ function StaffDiscountCard({
   setForm: React.Dispatch<React.SetStateAction<SettingsForm>>;
 }) {
   const { org } = useOrg();
+  const fmt = useFmt();
   const employeesQ = useEmployees();
   const invalidate = useInvalidate();
   const enabled = +form.staffMaxPct > 0;
@@ -498,6 +500,37 @@ function StaffDiscountCard({
           )}
         </div>
       )}
+
+      <div className="mt-4 border-t border-line pt-4">
+        <div className="mb-2 flex items-center gap-2">
+          <p className="text-xs font-medium text-zinc-400">Staff meals &amp; drinks</p>
+          <Badge tone={+form.staffMealLimit > 0 ? "green" : "neutral"}>
+            {+form.staffMealLimit > 0 ? "On" : "Off"}
+          </Badge>
+        </div>
+        <Field label="€ free per person, per day">
+          <Input
+            type="number" min="0" step="1"
+            value={form.staffMealLimit}
+            onChange={(e) => setForm((f) => ({ ...f, staffMealLimit: e.target.value }))}
+            disabled={!isAdmin}
+            placeholder="0"
+            className="max-w-[10rem]"
+          />
+        </Field>
+        <p className="mt-2 text-xs text-zinc-500">
+          {+form.staffMealLimit > 0 ? (
+            <>
+              Each active employee gets <strong className="text-zinc-300">{fmt(+form.staffMealLimit, 2)}</strong> free
+              per day, self-served at the till with their own PIN. Ordering more, or taking a parcel home, isn&rsquo;t
+              blocked — the rest is just charged at the staff discount rate above ({form.staffMaxPct || 0}%) instead
+              of full price.
+            </>
+          ) : (
+            <>Set an amount above 0 to let staff self-serve a free meal/drink each day at the till.</>
+          )}
+        </p>
+      </div>
     </Card>
   );
 }
@@ -677,6 +710,7 @@ export default function Settings() {
     staffMaxPct: String(org?.staff_discount_max_pct ?? 0),
     staffCap: org?.staff_discount_monthly_cap == null ? "" : String(org.staff_discount_monthly_cap),
     staffPinAt: org?.staff_discount_pin_threshold == null ? "" : String(org.staff_discount_pin_threshold),
+    staffMealLimit: org?.staff_meal_daily_limit == null ? "" : String(org.staff_meal_daily_limit),
   });
   const [accent, setAccent] = useState<string | null>(org?.accent_color ?? null);
   const [enabled, setEnabled] = useState<Set<string>>(() => {
@@ -705,6 +739,8 @@ export default function Settings() {
         // Blank means "no limit", which is a real setting — not the same as 0.
         staff_discount_monthly_cap: form.staffCap.trim() === "" ? null : +form.staffCap,
         staff_discount_pin_threshold: form.staffPinAt.trim() === "" ? null : +form.staffPinAt,
+        // Blank/0 turns the whole feature off — see 0048.
+        staff_meal_daily_limit: form.staffMealLimit.trim() === "" ? null : Math.max(+form.staffMealLimit || 0, 0),
         accent_color: accent,
         settings: { ...org.settings, enabled_modules: [...enabled] },
       });

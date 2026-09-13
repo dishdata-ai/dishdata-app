@@ -41,6 +41,7 @@ import {
   markOrderPaid,
   setKitchenStatus,
   getStaffDiscountUsage,
+  getStaffMealUsage,
   type CheckoutResult,
 } from "@/lib/api/orders";
 import { toast } from "@/lib/toast";
@@ -385,10 +386,11 @@ export default function Pos() {
   const [customerId, setCustomerId] = useState<string>("");
   const [kitchenNotes, setKitchenNotes] = useState("");
   const [tipPct, setTipPct] = useState<number>(0);
-  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff">("none");
+  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff" | "meal">("none");
   const [discountValue, setDiscountValue] = useState<string>("");
   const [staffEmployeeId, setStaffEmployeeId] = useState<string>("");
   const [approvalPin, setApprovalPin] = useState<string>("");
+  const [mealPin, setMealPin] = useState<string>("");
   const [address, setAddress] = useState("");
   const [tableId, setTableId] = useState("");
   const [payOpen, setPayOpen] = useState(false);
@@ -508,7 +510,9 @@ export default function Pos() {
   // ceiling. The server clamps it too — this just stops the till showing a
   // total the checkout would refuse.
   const isStaffDiscount = discountType === "staff";
+  const isMealClaim = discountType === "meal";
   const staffMaxPct = org?.staff_discount_max_pct ?? 0;
+  const staffMealLimit = org?.staff_meal_daily_limit ?? 0;
   const discountPct =
     discountType === "percent"
       ? Math.min(discountNum, 100)
@@ -516,7 +520,38 @@ export default function Pos() {
         ? Math.min(discountNum, staffMaxPct)
         : 0;
   const discountAmountInput = discountType === "amount" ? discountNum : 0;
-  const discount = Math.min(discountAmountInput + gross * (discountPct / 100), gross);
+
+  const staffEmployees = useMemo(
+    () => (employeesQ.data ?? []).filter((e) => e.is_active),
+    [employeesQ.data],
+  );
+
+  // How much of this month's allowance the chosen employee has left. Refetched
+  // per employee; the server checks it again at checkout, so a stale figure
+  // here can only ever under-promise, never let an over-limit sale through.
+  const staffUsageQ = useQuery({
+    queryKey: ["staffDiscountUsage", org?.id, staffEmployeeId],
+    queryFn: () => getStaffDiscountUsage(org!.id, staffEmployeeId),
+    enabled: !!org?.id && !!staffEmployeeId && isStaffDiscount,
+  });
+  const staffUsage = staffUsageQ.data;
+
+  // Same idea for the meal allowance, but per-day rather than per-month —
+  // see 0048. The free portion here is a preview only; the server recomputes
+  // it against the real usage at checkout, same as the discount cap above.
+  const mealUsageQ = useQuery({
+    queryKey: ["staffMealUsage", org?.id, staffEmployeeId],
+    queryFn: () => getStaffMealUsage(org!.id, staffEmployeeId),
+    enabled: !!org?.id && !!staffEmployeeId && isMealClaim,
+  });
+  const mealUsage = mealUsageQ.data;
+  const mealFreeAmount = isMealClaim && mealUsage ? Math.min(gross, mealUsage.remaining) : 0;
+  const mealResidual = isMealClaim ? gross - mealFreeAmount : 0;
+  const mealDiscount = isMealClaim ? +(mealFreeAmount + (mealResidual * staffMaxPct) / 100).toFixed(2) : 0;
+
+  const discount = isMealClaim
+    ? mealDiscount
+    : Math.min(discountAmountInput + gross * (discountPct / 100), gross);
   const discountedGross = +(gross - discount).toFixed(2);
   const taxGroups = computeTaxGroups(billLines, taxRate, discount);
   const tax = sumTax(taxGroups);
@@ -525,27 +560,16 @@ export default function Pos() {
   const total = +(discountedGross + tip).toFixed(2);
   const cartCount = lines.reduce((s, l) => s + l.qty, 0);
 
-  // How much of this month's allowance the chosen employee has left. Refetched
-  // per employee; the server checks it again at checkout, so a stale figure
-  // here can only ever under-promise, never let an over-limit sale through.
-  const staffUsageQ = useQuery({
-    queryKey: ["staffDiscountUsage", org?.id, staffEmployeeId],
-    queryFn: () => getStaffDiscountUsage(org!.id, staffEmployeeId),
-    enabled: !!org?.id && !!staffEmployeeId,
-  });
-  const staffUsage = staffUsageQ.data;
-  const staffEmployees = useMemo(
-    () => (employeesQ.data ?? []).filter((e) => e.is_active),
-    [employeesQ.data],
-  );
   const needsPin =
     isStaffDiscount &&
     staffUsage?.pin_threshold != null &&
     discount > staffUsage.pin_threshold;
-  // Don't let the sale start until the staff discount is actually chargeable —
-  // the server would reject it anyway, this just fails earlier and clearer.
+  // Don't let the sale start until the staff discount/meal is actually
+  // chargeable — the server would reject it anyway, this just fails earlier
+  // and clearer.
   const staffDiscountIncomplete =
-    isStaffDiscount && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()));
+    (isStaffDiscount && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()))) ||
+    (isMealClaim && (!staffEmployeeId || !mealPin.trim() || gross <= 0));
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
 
@@ -567,6 +591,7 @@ export default function Pos() {
     setDiscountValue("");
     setStaffEmployeeId("");
     setApprovalPin("");
+    setMealPin("");
     setCustomerId("");
     setAddress("");
     setTableId("");
@@ -589,10 +614,11 @@ export default function Pos() {
         kitchenNotes: kitchenNotes || null,
         tip: vars.tip,
         address: orderType === "delivery" ? address : null,
-        discountAmount: discountAmountInput,
-        discountPct,
-        staffDiscountEmployeeId: isStaffDiscount ? staffEmployeeId : null,
+        discountAmount: isMealClaim ? 0 : discountAmountInput,
+        discountPct: isMealClaim ? 0 : discountPct,
+        staffDiscountEmployeeId: isStaffDiscount || isMealClaim ? staffEmployeeId : null,
         approvalPin: isStaffDiscount ? approvalPin || null : null,
+        mealPin: isMealClaim ? mealPin || null : null,
         org,
         payments: vars.payments,
       }).then(async (result) => {
@@ -618,8 +644,9 @@ export default function Pos() {
         "customers", "deliveries", "restaurant_tables",
       );
       // The allowance just moved — drop the cached figure so the next staff
-      // discount reads the real remaining balance, not the pre-sale one.
+      // discount/meal reads the real remaining balance, not the pre-sale one.
       staffUsageQ.refetch();
+      mealUsageQ.refetch();
       if (paid) {
         const method = vars.payments.length > 1 ? "split" : vars.payments[0].method;
         setReceipt({ ...result, lines: snapshot, tax: +tax.toFixed(2), tip: vars.tip, method });
@@ -929,7 +956,8 @@ export default function Pos() {
                         ["percent", "%"],
                         ["amount", "Amount"],
                         ...(staffMaxPct > 0 ? ([["staff", "Staff"]] as ["staff", string][]) : []),
-                      ] as ["none" | "percent" | "amount" | "staff", string][]
+                        ...(staffMealLimit > 0 ? ([["meal", "Staff Meal"]] as ["meal", string][]) : []),
+                      ] as ["none" | "percent" | "amount" | "staff" | "meal", string][]
                     ).map(([t, label]) => (
                       <button
                         key={t}
@@ -944,7 +972,7 @@ export default function Pos() {
                         {label}
                       </button>
                     ))}
-                    {discountType !== "none" && (
+                    {discountType !== "none" && !isMealClaim && (
                       <Input
                         type="number"
                         min="0"
@@ -958,6 +986,57 @@ export default function Pos() {
                       />
                     )}
                   </div>
+
+                  {isMealClaim && (
+                    <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
+                      <p className="text-xs text-zinc-500">
+                        Free up to today&rsquo;s allowance, self-serve — enter your own PIN to confirm it&rsquo;s you.
+                        Ordering more just charges the rest at the staff rate; nothing is blocked.
+                      </p>
+                      <Select
+                        value={staffEmployeeId}
+                        onChange={(e) => {
+                          setStaffEmployeeId(e.target.value);
+                          setMealPin("");
+                        }}
+                        className="text-xs"
+                      >
+                        <option value="">Who&rsquo;s this for?</option>
+                        {staffEmployees.map((e) => (
+                          <option key={e.id} value={e.id}>
+                            {e.name}
+                          </option>
+                        ))}
+                      </Select>
+
+                      {staffEmployeeId && mealUsage && (
+                        <p className="text-xs text-zinc-500">
+                          <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
+                            {fmt(mealUsage.remaining, 2)}
+                          </strong>{" "}
+                          left today
+                          {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
+                          {mealResidual > 0 && (
+                            <>
+                              {" "}
+                              · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
+                            </>
+                          )}
+                        </p>
+                      )}
+
+                      {staffEmployeeId && (
+                        <Input
+                          type="password"
+                          inputMode="numeric"
+                          placeholder="Your PIN"
+                          value={mealPin}
+                          onChange={(e) => setMealPin(e.target.value)}
+                          className="text-xs"
+                        />
+                      )}
+                    </div>
+                  )}
 
                   {isStaffDiscount && (
                     <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
@@ -1022,8 +1101,8 @@ export default function Pos() {
                   {discount > 0 && (
                     <div className="flex justify-between text-brand-300">
                       <span>
-                        {isStaffDiscount ? "Staff discount" : "Discount"}
-                        {discountType !== "amount" ? ` (${discountPct}%)` : ""}
+                        {isMealClaim ? "Staff meal" : isStaffDiscount ? "Staff discount" : "Discount"}
+                        {discountType !== "amount" && !isMealClaim ? ` (${discountPct}%)` : ""}
                       </span>
                       <span>−{fmt(discount, 2)}</span>
                     </div>

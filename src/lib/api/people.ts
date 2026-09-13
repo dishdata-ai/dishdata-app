@@ -38,17 +38,12 @@ export async function linkEmployeeToUser(orgId: string, employeeId: string, user
     dEmployees.update(employeeId, { user_id: userId });
     return;
   }
-  const sb = getSupabase();
-  await sb.from("employees").update({ user_id: null }).eq("org_id", orgId).eq("user_id", userId);
-  const { data, error } = await sb
-    .from("employees")
-    .update({ user_id: userId })
-    .eq("id", employeeId)
-    .eq("org_id", orgId)
-    .is("user_id", null)
-    .select("id");
+  // Goes through claim_employee (0047) rather than direct table updates —
+  // plain members no longer have an update grant on employees at all, so
+  // this is now the only way self-linking can work, and the unlink-then-
+  // claim race guard lives server-side where it can't be bypassed.
+  const { error } = await getSupabase().rpc("claim_employee", { _org: orgId, _employee: employeeId });
   if (error) throw error;
-  if (!data?.length) throw new Error("That profile is already linked to another account.");
 }
 
 export async function updateEmployee(orgId: string, id: string, patch: Partial<Employee>): Promise<void> {

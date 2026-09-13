@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     employeeId?: string | null;
     staffDiscountEmployeeId?: string | null;
     approvalPin?: string | null;
+    mealPin?: string | null;
     payments: { method: string; amount: number; tip_amount?: number; split_label?: string }[];
   };
 
@@ -75,6 +76,7 @@ export async function POST(req: NextRequest) {
     _employee_id: p.employeeId ?? null,
     _staff_employee_id: p.staffDiscountEmployeeId ?? null,
     _approval_pin: p.approvalPin ?? null,
+    _meal_pin: p.mealPin ?? null,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 

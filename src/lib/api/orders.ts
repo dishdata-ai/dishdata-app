@@ -91,6 +91,15 @@ export interface CheckoutPayload {
   /** Approver's PIN, when the discount is over the org's threshold. */
   approvalPin?: string | null;
   /**
+   * The employee's OWN pin, confirming it's really them — set alongside
+   * staffDiscountEmployeeId to claim a staff meal/drink instead of giving a
+   * regular staff discount. See 0048: the daily allowance covers up to the
+   * org's limit, anything beyond that is charged at the staff-discount rate
+   * automatically (not blocked) — so ordering extra, or a parcel to take
+   * home, is always allowed, just no longer free past the daily limit.
+   */
+  mealPin?: string | null;
+  /**
    * The caller's org, used only to decide whether checkout routes through the
    * signing endpoint. The server re-reads its own config before signing, so
    * this never determines whether a sale is actually signed.
@@ -117,6 +126,24 @@ export interface StaffDiscountReportRow {
   discount_given: number;
   revenue: number;
   guests: number;
+}
+
+/** Today's staff-meal allowance for one employee. */
+export interface StaffMealUsage {
+  used: number;
+  orders: number;
+  limit: number | null;
+  remaining: number;
+}
+
+export interface StaffMealReportRow {
+  employee_id: string;
+  employee_name: string;
+  role_title: string;
+  orders: number;
+  meal_amount: number;
+  discounted_amount: number;
+  revenue: number;
 }
 
 export interface CheckoutResult {
@@ -151,6 +178,84 @@ function demoStaffUsage(orgId: string, employeeId: string): StaffDiscountUsage {
     max_pct: org?.staff_discount_max_pct ?? 0,
     pin_threshold: org?.staff_discount_pin_threshold ?? null,
   };
+}
+
+/** Demo-mode mirror of staff_meal_usage (0048) — today's allowance, not this month's. */
+function demoMealUsage(orgId: string, employeeId: string): StaffMealUsage {
+  const org = dOrgs.get(orgId);
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const mine = dOrders
+    .list({ org_id: orgId } as Partial<Order>)
+    .filter(
+      (o) =>
+        o.staff_discount_employee_id === employeeId &&
+        (o.staff_meal_amount ?? 0) > 0 &&
+        o.status !== "void" &&
+        o.status !== "refunded" &&
+        new Date(o.created_at) >= dayStart,
+    );
+  const used = +mine.reduce((s, o) => s + (o.staff_meal_amount ?? 0), 0).toFixed(2);
+  const limit = org?.staff_meal_daily_limit ?? null;
+  return {
+    used,
+    orders: mine.length,
+    limit,
+    remaining: limit == null || limit <= 0 ? 0 : Math.max(limit - used, 0),
+  };
+}
+
+/** Today's remaining staff-meal allowance for one employee. */
+export async function getStaffMealUsage(orgId: string, employeeId: string): Promise<StaffMealUsage> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    return demoMealUsage(orgId, employeeId);
+  }
+  const { data, error } = await getSupabase().rpc("staff_meal_usage", { _org: orgId, _employee: employeeId });
+  if (error) throw error;
+  return data as StaffMealUsage;
+}
+
+/** Per-employee staff-meal totals over a date range (null bounds = all time). */
+export async function getStaffMealReport(
+  orgId: string,
+  from?: string | null,
+  to?: string | null,
+): Promise<StaffMealReportRow[]> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    const employees = demoTable<Employee>("employees");
+    const byEmployee = new Map<string, StaffMealReportRow>();
+    for (const o of dOrders.list({ org_id: orgId } as Partial<Order>)) {
+      const id = o.staff_discount_employee_id;
+      const mealAmount = o.staff_meal_amount ?? 0;
+      if (!id || mealAmount <= 0 || o.status === "void" || o.status === "refunded") continue;
+      if (from && o.created_at < from) continue;
+      if (to && o.created_at >= to) continue;
+      const e = employees.get(id);
+      const row =
+        byEmployee.get(id) ??
+        {
+          employee_id: id,
+          employee_name: e?.name ?? "Unknown",
+          role_title: e?.role_title ?? "",
+          orders: 0, meal_amount: 0, discounted_amount: 0, revenue: 0,
+        };
+      row.orders += 1;
+      row.meal_amount = +(row.meal_amount + mealAmount).toFixed(2);
+      row.discounted_amount = +(row.discounted_amount + (o.staff_discount_amount ?? 0)).toFixed(2);
+      row.revenue = +(row.revenue + o.total).toFixed(2);
+      byEmployee.set(id, row);
+    }
+    return [...byEmployee.values()].sort((a, b) => b.meal_amount - a.meal_amount);
+  }
+  const { data, error } = await getSupabase().rpc("staff_meal_report", {
+    _org: orgId,
+    _from: from ?? null,
+    _to: to ?? null,
+  });
+  if (error) throw error;
+  return (data as StaffMealReportRow[]) ?? [];
 }
 
 /** Throws with the same messages the RPC raises, so the POS shows one wording in both modes. */
@@ -271,21 +376,39 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     // VAT-included (gross) pricing: menu prices already include VAT. Break it out
     // of the price rather than adding on top; store subtotal NET (see 0017 migration).
     const gross = items.reduce((s, l) => s + l.price * l.qty, 0);
-    const discount = Math.min(
+    let discount = Math.min(
       Math.max(payload.discountAmount ?? 0, 0) + gross * (Math.max(payload.discountPct ?? 0, 0) / 100),
       gross,
     );
+    // Same allowance checks the RPC runs — the demo has no server to enforce
+    // them, so it has to reject the same things or the two modes disagree.
+    const staffId = payload.staffDiscountEmployeeId ?? null;
+    let mealAmount = 0;
+    if (staffId) {
+      if (payload.mealPin) {
+        // Staff meal/drink claim (0048): own-PIN identity check, then free up
+        // to the remaining daily allowance and the staff-discount rate on
+        // whatever's left — overrides any manual discountAmount/Pct sent.
+        const employee = demoTable<Employee>("employees").get(staffId);
+        if (!employee || employee.pin == null || employee.pin !== payload.mealPin) {
+          throw new Error("PIN doesn't match — enter your own PIN to confirm it's you");
+        }
+        const dailyLimit = org?.staff_meal_daily_limit ?? 0;
+        if (dailyLimit <= 0) throw new Error("staff meals are not enabled for this restaurant");
+        const used = demoMealUsage(orgId, staffId).used;
+        mealAmount = +Math.min(gross, Math.max(dailyLimit - used, 0)).toFixed(2);
+        const residual = gross - mealAmount;
+        const maxPct = org?.staff_discount_max_pct ?? 0;
+        discount = +(mealAmount + (residual * maxPct) / 100).toFixed(2);
+      } else {
+        assertStaffDiscountAllowed(orgId, staffId, discount, gross, payload.approvalPin ?? null);
+      }
+    }
     const discountedGross = +(gross - discount).toFixed(2);
     const tax = sumTax(computeTaxGroups(items, taxRate, discount));
     const tip = payload.tip ?? 0;
     const total = +(discountedGross + tip).toFixed(2);
     const subtotal = +(discountedGross - tax).toFixed(2);
-    // Same allowance checks the RPC runs — the demo has no server to enforce
-    // them, so it has to reject the same things or the two modes disagree.
-    const staffId = payload.staffDiscountEmployeeId ?? null;
-    if (staffId) {
-      assertStaffDiscountAllowed(orgId, staffId, discount, gross, payload.approvalPin ?? null);
-    }
     const orderNumber = `ORD-${String(dOrders.list({ org_id: orgId } as Partial<Order>).length + 1).padStart(4, "0")}`;
     const now = new Date().toISOString();
     const order: Order = {
@@ -296,7 +419,8 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       kitchen_status: "new", kitchen_notes: payload.kitchenNotes ?? null, source: "pos", created_at: now,
       employee_id: payload.employeeId ?? null,
       staff_discount_employee_id: staffId,
-      staff_discount_amount: staffId ? +discount.toFixed(2) : 0,
+      staff_discount_amount: staffId ? +(discount - mealAmount).toFixed(2) : 0,
+      staff_meal_amount: +mealAmount.toFixed(2),
     };
     dOrders.insert(order);
     for (const p of payload.payments) {
@@ -322,7 +446,7 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       dItems.update(itemId, { stock: newStock });
       dTx.insert({
         id: uid(), org_id: orgId, item_id: itemId, item_name: item.name, delta: -u.used,
-        reason: "sale", waste_reason: null, ref_order_id: order.id, note: null, created_at: now,
+        reason: mealAmount > 0 ? "staff_meal" : "sale", waste_reason: null, ref_order_id: order.id, note: null, created_at: now,
       });
       if (newStock < item.par_level * 0.5 && item.stock >= item.par_level * 0.5) {
         pushDemoNotification(
@@ -392,6 +516,7 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     _employee_id: payload.employeeId ?? null,
     _staff_employee_id: payload.staffDiscountEmployeeId ?? null,
     _approval_pin: payload.approvalPin ?? null,
+    _meal_pin: payload.mealPin ?? null,
   });
   if (error) throw error;
   return data as CheckoutResult;
