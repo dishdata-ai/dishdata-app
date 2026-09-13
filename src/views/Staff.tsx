@@ -520,10 +520,46 @@ export default function Staff() {
       {employees.length > 0 && <AvailabilityBoard employees={employees} />}
 
       <StaffDiscountReport />
+      <StaffMealReport />
+
+      {inactiveEmployees.length > 0 && (
+        <Card className="p-5">
+          <button
+            onClick={() => setShowInactive((v) => !v)}
+            className="flex w-full cursor-pointer items-center gap-2 text-left"
+          >
+            <UserX className="h-4 w-4 text-zinc-500" />
+            <h3 className="font-semibold text-white">Inactive</h3>
+            <Badge tone="neutral">{inactiveEmployees.length}</Badge>
+            <span className="ml-auto text-xs text-zinc-500">{showInactive ? "Hide" : "Show"}</span>
+          </button>
+          {showInactive && (
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              {inactiveEmployees.map((m) => (
+                <div key={m.id} className="flex items-center gap-3 rounded-lg border border-line bg-white/[0.02] p-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-zinc-300">{m.name}</p>
+                    <p className="text-xs text-zinc-500">{m.role_title}</p>
+                  </div>
+                  <Button variant="ghost" className="shrink-0 px-2.5 py-1.5 text-xs" onClick={() => reactivate(m)}>
+                    <RotateCcw className="h-3.5 w-3.5" /> Reactivate
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
 
       <Modal open={adding} onClose={() => setAdding(false)} title="Add Employee">
         <AddEmployeeForm onDone={() => setAdding(false)} />
       </Modal>
+
+      {editing && (
+        <Modal open onClose={() => setEditing(null)} title="Edit Employee">
+          <EditEmployeeForm employee={editing} onDone={() => setEditing(null)} />
+        </Modal>
+      )}
     </div>
   );
 }

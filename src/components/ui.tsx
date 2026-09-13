@@ -46,8 +46,12 @@ export function PageSkeleton() {
   );
 }
 
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cn("glass rounded-2xl", className)}>{children}</div>;
+export function Card({ className, children, onClick }: { className?: string; children: ReactNode; onClick?: () => void }) {
+  return (
+    <div className={cn("glass rounded-2xl", className)} onClick={onClick}>
+      {children}
+    </div>
+  );
 }
 
 export function SectionTitle({
