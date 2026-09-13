@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users } from "lucide-react";
+import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff } from "lucide-react";
 import { Card, SectionTitle, StatCard, Badge, Button, EmptyState, PageSkeleton, Table } from "@/components/ui";
 import { useEmployees, useTimeEntries, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclock";
+import { geofenceOf } from "@/lib/geo";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
@@ -34,21 +35,28 @@ export default function TimeClock() {
   const openEntries = entries.filter((e) => !e.clock_out);
   const openByEmployee = new Map(openEntries.map((e) => [e.employee_id, e]));
 
+  // Distance is checked against the org's CURRENT radius — geofence settings
+  // rarely change, and re-deriving it per entry isn't worth storing the
+  // radius on every row just to handle the rare case where it did.
+  const geofence = org ? geofenceOf(org) : null;
+
   const weekStats = useMemo(() => {
     const weekAgo = Date.now() - 7 * 86400000;
-    const map = new Map<string, { seconds: number; cost: number }>();
+    const map = new Map<string, { seconds: number; cost: number; offSite: number; autoOut: number }>();
     for (const e of entries) {
       if (new Date(e.clock_in).getTime() < weekAgo) continue;
       const emp = employees.find((x) => x.id === e.employee_id);
       if (!emp) continue;
       const secs = workedSeconds(e, now);
-      const prev = map.get(emp.id) ?? { seconds: 0, cost: 0 };
+      const prev = map.get(emp.id) ?? { seconds: 0, cost: 0, offSite: 0, autoOut: 0 };
       prev.seconds += secs;
       prev.cost += (secs / 3600) * emp.hourly_rate;
+      if (geofence && e.clock_in_distance_m != null && e.clock_in_distance_m > geofence.radiusM) prev.offSite += 1;
+      if (e.auto_clock_out) prev.autoOut += 1;
       map.set(emp.id, prev);
     }
     return map;
-  }, [entries, employees, now]);
+  }, [entries, employees, now, geofence]);
 
   const totalWeekCost = [...weekStats.values()].reduce((s, v) => s + v.cost, 0);
   const totalWeekHours = [...weekStats.values()].reduce((s, v) => s + v.seconds, 0) / 3600;
@@ -121,6 +129,13 @@ export default function TimeClock() {
                         since {new Date(open.clock_in).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
                         {open.break_seconds > 0 || onBreak ? ` · breaks ${fmtDuration(open.break_seconds)}` : ""}
                       </p>
+                      {/* Only surfaced when there's something to flag — an ordinary
+                          on-site clock-in (or no geofence configured) stays quiet. */}
+                      {geofence && open.clock_in_distance_m != null && open.clock_in_distance_m > geofence.radiusM && (
+                        <p className="mt-1 flex items-center justify-center gap-1 text-xs text-amber-300">
+                          <MapPinOff className="h-3 w-3" /> {Math.round(open.clock_in_distance_m)}m away at clock-in
+                        </p>
+                      )}
                     </div>
                     <div className="mt-4 grid grid-cols-2 gap-2">
                       <Button
@@ -165,7 +180,13 @@ export default function TimeClock() {
         {weekStats.size === 0 ? (
           <EmptyState icon={Timer} title="No hours tracked yet" hint="Clock someone in to start the timesheet." />
         ) : (
-          <Table headers={canSeeWages ? ["Employee", "Hours", "Rate", "Labor Cost", "Shifts"] : ["Employee", "Hours", "Shifts"]}>
+          <Table
+            headers={[
+              "Employee", "Hours",
+              ...(canSeeWages ? ["Rate", "Labor Cost"] : []),
+              "Shifts", "Flags",
+            ]}
+          >
             {employees
               .filter((e) => weekStats.has(e.id))
               .map((emp) => {
@@ -184,6 +205,24 @@ export default function TimeClock() {
                       </>
                     )}
                     <td className="px-4 py-3 text-zinc-400">{shifts}</td>
+                    <td className="px-4 py-3">
+                      {stat.offSite === 0 && stat.autoOut === 0 ? (
+                        <span className="text-zinc-600">—</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-2 text-xs text-amber-300">
+                          {stat.offSite > 0 && (
+                            <span className="inline-flex items-center gap-1">
+                              <MapPinOff className="h-3 w-3" /> {stat.offSite} off-site
+                            </span>
+                          )}
+                          {stat.autoOut > 0 && (
+                            <span className="inline-flex items-center gap-1">
+                              <MapPin className="h-3 w-3" /> {stat.autoOut} auto clock-out
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
