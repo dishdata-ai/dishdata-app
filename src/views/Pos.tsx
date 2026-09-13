@@ -33,6 +33,7 @@ import { useRecipes, useEventMenus, useCustomers, useTables, useOrders, useEmplo
 import { ReceiptButton, PrintReceiptButton } from "@/components/ReceiptButton";
 import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
+import { useAuth } from "@/lib/hooks/useAuth";
 import { orderCategories } from "@/lib/category-order";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
@@ -367,6 +368,7 @@ function ProductCard({ r, onAdd, fmt }: { r: Recipe; onAdd: () => void; fmt: (n:
 
 export default function Pos() {
   const { org } = useOrg();
+  const { user } = useAuth();
   const fmt = useFmt();
   const recipesQ = useRecipes();
   const eventMenusQ = useEventMenus();
@@ -386,7 +388,11 @@ export default function Pos() {
   const [customerId, setCustomerId] = useState<string>("");
   const [kitchenNotes, setKitchenNotes] = useState("");
   const [tipPct, setTipPct] = useState<number>(0);
-  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff" | "meal">("none");
+  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff">("none");
+  // Two different staff actions sharing one segmented-control slot rather
+  // than two ("Staff" and "Staff Meal" side by side read as unrelated
+  // buttons and crowded the row) — see the panel below.
+  const [staffMode, setStaffMode] = useState<"discount" | "meal">("discount");
   const [discountValue, setDiscountValue] = useState<string>("");
   const [staffEmployeeId, setStaffEmployeeId] = useState<string>("");
   const [approvalPin, setApprovalPin] = useState<string>("");
@@ -510,21 +516,36 @@ export default function Pos() {
   // ceiling. The server clamps it too — this just stops the till showing a
   // total the checkout would refuse.
   const isStaffDiscount = discountType === "staff";
-  const isMealClaim = discountType === "meal";
   const staffMaxPct = org?.staff_discount_max_pct ?? 0;
   const staffMealLimit = org?.staff_meal_daily_limit ?? 0;
+  // Both staff actions are enabled, so ask which one; only one is configured,
+  // so there's nothing to ask — skip straight to whichever it is.
+  const canGiveDiscount = staffMaxPct > 0;
+  const canClaimMeal = staffMealLimit > 0;
+  const isMealClaim = isStaffDiscount && (staffMode === "meal" || (!canGiveDiscount && canClaimMeal));
   const discountPct =
     discountType === "percent"
       ? Math.min(discountNum, 100)
-      : isStaffDiscount
+      : isStaffDiscount && !isMealClaim
         ? Math.min(discountNum, staffMaxPct)
         : 0;
   const discountAmountInput = discountType === "amount" ? discountNum : 0;
 
-  const staffEmployees = useMemo(
-    () => (employeesQ.data ?? []).filter((e) => e.is_active),
-    [employeesQ.data],
+  const myEmployee = useMemo(
+    () => (employeesQ.data ?? []).find((e) => e.user_id === user?.id) ?? null,
+    [employeesQ.data, user?.id],
   );
+  // Your own name first (labeled), everyone else after — so claiming your
+  // own meal or discount never means searching a long, alphabetical list
+  // for yourself first.
+  const staffEmployees = useMemo(() => {
+    const active = (employeesQ.data ?? []).filter((e) => e.is_active);
+    return active.sort((a, b) => {
+      if (a.id === myEmployee?.id) return -1;
+      if (b.id === myEmployee?.id) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [employeesQ.data, myEmployee]);
 
   // How much of this month's allowance the chosen employee has left. Refetched
   // per employee; the server checks it again at checkout, so a stale figure
@@ -532,7 +553,7 @@ export default function Pos() {
   const staffUsageQ = useQuery({
     queryKey: ["staffDiscountUsage", org?.id, staffEmployeeId],
     queryFn: () => getStaffDiscountUsage(org!.id, staffEmployeeId),
-    enabled: !!org?.id && !!staffEmployeeId && isStaffDiscount,
+    enabled: !!org?.id && !!staffEmployeeId && isStaffDiscount && !isMealClaim,
   });
   const staffUsage = staffUsageQ.data;
 
@@ -562,13 +583,14 @@ export default function Pos() {
 
   const needsPin =
     isStaffDiscount &&
+    !isMealClaim &&
     staffUsage?.pin_threshold != null &&
     discount > staffUsage.pin_threshold;
   // Don't let the sale start until the staff discount/meal is actually
   // chargeable — the server would reject it anyway, this just fails earlier
   // and clearer.
   const staffDiscountIncomplete =
-    (isStaffDiscount && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()))) ||
+    (isStaffDiscount && !isMealClaim && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()))) ||
     (isMealClaim && (!staffEmployeeId || !mealPin.trim() || gross <= 0));
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
@@ -588,6 +610,7 @@ export default function Pos() {
     setKitchenNotes("");
     setTipPct(0);
     setDiscountType("none");
+    setStaffMode("discount");
     setDiscountValue("");
     setStaffEmployeeId("");
     setApprovalPin("");
@@ -616,8 +639,8 @@ export default function Pos() {
         address: orderType === "delivery" ? address : null,
         discountAmount: isMealClaim ? 0 : discountAmountInput,
         discountPct: isMealClaim ? 0 : discountPct,
-        staffDiscountEmployeeId: isStaffDiscount || isMealClaim ? staffEmployeeId : null,
-        approvalPin: isStaffDiscount ? approvalPin || null : null,
+        staffDiscountEmployeeId: isStaffDiscount ? staffEmployeeId : null,
+        approvalPin: isStaffDiscount && !isMealClaim ? approvalPin || null : null,
         mealPin: isMealClaim ? mealPin || null : null,
         org,
         payments: vars.payments,
@@ -955,13 +978,17 @@ export default function Pos() {
                         ["none", "None"],
                         ["percent", "%"],
                         ["amount", "Amount"],
-                        ...(staffMaxPct > 0 ? ([["staff", "Staff"]] as ["staff", string][]) : []),
-                        ...(staffMealLimit > 0 ? ([["meal", "Staff Meal"]] as ["meal", string][]) : []),
-                      ] as ["none" | "percent" | "amount" | "staff" | "meal", string][]
+                        ...(canGiveDiscount || canClaimMeal ? ([["staff", "Staff"]] as ["staff", string][]) : []),
+                      ] as ["none" | "percent" | "amount" | "staff", string][]
                     ).map(([t, label]) => (
                       <button
                         key={t}
-                        onClick={() => setDiscountType(t)}
+                        onClick={() => {
+                          setDiscountType(t);
+                          // Whoever's at the till is the most likely person the
+                          // action is for — pre-select them, still changeable.
+                          if (t === "staff" && myEmployee) setStaffEmployeeId(myEmployee.id);
+                        }}
                         className={cn(
                           "flex-1 cursor-pointer rounded-lg border py-1.5 text-xs font-semibold transition-all",
                           discountType === t
@@ -987,105 +1014,137 @@ export default function Pos() {
                     )}
                   </div>
 
-                  {isMealClaim && (
-                    <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
-                      <p className="text-xs text-zinc-500">
-                        Free up to today&rsquo;s allowance, self-serve — enter your own PIN to confirm it&rsquo;s you.
-                        Ordering more just charges the rest at the staff rate; nothing is blocked.
-                      </p>
-                      <Select
-                        value={staffEmployeeId}
-                        onChange={(e) => {
-                          setStaffEmployeeId(e.target.value);
-                          setMealPin("");
-                        }}
-                        className="text-xs"
-                      >
-                        <option value="">Who&rsquo;s this for?</option>
-                        {staffEmployees.map((e) => (
-                          <option key={e.id} value={e.id}>
-                            {e.name}
-                          </option>
-                        ))}
-                      </Select>
-
-                      {staffEmployeeId && mealUsage && (
-                        <p className="text-xs text-zinc-500">
-                          <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
-                            {fmt(mealUsage.remaining, 2)}
-                          </strong>{" "}
-                          left today
-                          {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
-                          {mealResidual > 0 && (
-                            <>
-                              {" "}
-                              · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
-                            </>
-                          )}
-                        </p>
-                      )}
-
-                      {staffEmployeeId && (
-                        <Input
-                          type="password"
-                          inputMode="numeric"
-                          placeholder="Your PIN"
-                          value={mealPin}
-                          onChange={(e) => setMealPin(e.target.value)}
-                          className="text-xs"
-                        />
-                      )}
-                    </div>
-                  )}
-
                   {isStaffDiscount && (
                     <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
-                      <Select
-                        value={staffEmployeeId}
-                        onChange={(e) => {
-                          setStaffEmployeeId(e.target.value);
-                          setApprovalPin("");
-                        }}
-                        className="text-xs"
-                      >
-                        <option value="">Whose discount is this?</option>
-                        {staffEmployees.map((e) => (
-                          <option key={e.id} value={e.id}>
-                            {e.name}
-                          </option>
-                        ))}
-                      </Select>
-
-                      {staffEmployeeId && staffUsage && (
-                        <p className="text-xs text-zinc-500">
-                          Up to {staffUsage.max_pct}% ·{" "}
-                          {staffUsage.cap == null ? (
-                            <>no monthly limit</>
-                          ) : (
-                            <>
-                              <strong
-                                className={cn(
-                                  (staffUsage.remaining ?? 0) < discount ? "text-rose-300" : "text-zinc-300",
-                                )}
-                              >
-                                {fmt(staffUsage.remaining ?? 0, 2)}
-                              </strong>{" "}
-                              left of {fmt(staffUsage.cap, 2)} this month
-                            </>
-                          )}
-                          {staffUsage.orders > 0 && <> · {staffUsage.orders} so far</>}
-                        </p>
+                      {/* Two different actions sharing the "Staff" slot — only
+                          worth asking when both are actually configured. */}
+                      {canGiveDiscount && canClaimMeal && (
+                        <div className="flex gap-1.5">
+                          {(
+                            [
+                              ["discount", "Give a discount"],
+                              ["meal", "My meal"],
+                            ] as ["discount" | "meal", string][]
+                          ).map(([m, label]) => (
+                            <button
+                              key={m}
+                              onClick={() => {
+                                setStaffMode(m);
+                                setApprovalPin("");
+                                setMealPin("");
+                              }}
+                              className={cn(
+                                "flex-1 cursor-pointer rounded-lg border py-1.5 text-xs font-semibold transition-all",
+                                staffMode === m
+                                  ? "border-brand-400/50 bg-brand-400/10 text-brand-300"
+                                  : "border-line bg-white/[0.02] text-zinc-400 hover:text-white",
+                              )}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
                       )}
 
-                      {needsPin && (
-                        <Input
-                          type="password"
-                          inputMode="numeric"
-                          placeholder={`Manager PIN (over ${fmt(staffUsage!.pin_threshold!, 2)})`}
-                          value={approvalPin}
-                          onChange={(e) => setApprovalPin(e.target.value)}
-                          className="text-xs"
-                        />
+                      {isMealClaim ? (
+                        <>
+                          <p className="text-xs text-zinc-500">
+                            Free up to today&rsquo;s allowance — enter your own PIN to confirm it&rsquo;s you. Ordering
+                            more just charges the rest at the staff rate; nothing is blocked.
+                          </p>
+                          <Select
+                            value={staffEmployeeId}
+                            onChange={(e) => {
+                              setStaffEmployeeId(e.target.value);
+                              setMealPin("");
+                            }}
+                            className="text-xs"
+                          >
+                            <option value="">Who&rsquo;s this for?</option>
+                            {staffEmployees.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.id === myEmployee?.id ? `${e.name} (you)` : e.name}
+                              </option>
+                            ))}
+                          </Select>
+
+                          {staffEmployeeId && mealUsage && (
+                            <p className="text-xs text-zinc-500">
+                              <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
+                                {fmt(mealUsage.remaining, 2)}
+                              </strong>{" "}
+                              left today
+                              {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
+                              {mealResidual > 0 && (
+                                <>
+                                  {" "}
+                                  · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
+                                </>
+                              )}
+                            </p>
+                          )}
+
+                          {staffEmployeeId && (
+                            <Input
+                              type="password"
+                              inputMode="numeric"
+                              placeholder="Your PIN"
+                              value={mealPin}
+                              onChange={(e) => setMealPin(e.target.value)}
+                              className="text-xs"
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <Select
+                            value={staffEmployeeId}
+                            onChange={(e) => {
+                              setStaffEmployeeId(e.target.value);
+                              setApprovalPin("");
+                            }}
+                            className="text-xs"
+                          >
+                            <option value="">Whose discount is this?</option>
+                            {staffEmployees.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.id === myEmployee?.id ? `${e.name} (you)` : e.name}
+                              </option>
+                            ))}
+                          </Select>
+
+                          {staffEmployeeId && staffUsage && (
+                            <p className="text-xs text-zinc-500">
+                              Up to {staffUsage.max_pct}% ·{" "}
+                              {staffUsage.cap == null ? (
+                                <>no monthly limit</>
+                              ) : (
+                                <>
+                                  <strong
+                                    className={cn(
+                                      (staffUsage.remaining ?? 0) < discount ? "text-rose-300" : "text-zinc-300",
+                                    )}
+                                  >
+                                    {fmt(staffUsage.remaining ?? 0, 2)}
+                                  </strong>{" "}
+                                  left of {fmt(staffUsage.cap, 2)} this month
+                                </>
+                              )}
+                              {staffUsage.orders > 0 && <> · {staffUsage.orders} so far</>}
+                            </p>
+                          )}
+
+                          {needsPin && (
+                            <Input
+                              type="password"
+                              inputMode="numeric"
+                              placeholder={`Manager PIN (over ${fmt(staffUsage!.pin_threshold!, 2)})`}
+                              value={approvalPin}
+                              onChange={(e) => setApprovalPin(e.target.value)}
+                              className="text-xs"
+                            />
+                          )}
+                        </>
                       )}
                     </div>
                   )}
