@@ -18,8 +18,11 @@ import {
   CalendarCheck,
   MapPin,
   Loader2,
+  KeyRound,
+  UtensilsCrossed,
 } from "lucide-react";
-import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton } from "@/components/ui";
+import { useQuery } from "@tanstack/react-query";
+import { Card, SectionTitle, Badge, Button, Input, EmptyState, PageSkeleton } from "@/components/ui";
 import { AvailabilityPlanner } from "@/components/Availability";
 import {
   useEmployees,
@@ -36,7 +39,8 @@ import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclock";
-import { linkEmployeeToUser } from "@/lib/api/people";
+import { linkEmployeeToUser, setMyPin } from "@/lib/api/people";
+import { getStaffMealUsage } from "@/lib/api/orders";
 import { updateTask } from "@/lib/api/tasks";
 import { toast } from "@/lib/toast";
 import { cn, errorMessage } from "@/lib/utils";
@@ -63,6 +67,78 @@ function greeting(): string {
   if (h < 12) return "Good morning";
   if (h < 17) return "Good afternoon";
   return "Good evening";
+}
+
+/**
+ * Self-serve PIN, set by the employee — not a manager. A PIN someone picks
+ * themselves gets remembered; one assigned once during onboarding and never
+ * mentioned again doesn't, which just means the features that need it
+ * (staff meal self-serve, approving a staff discount) quietly stop getting
+ * used. Only ever touches this employee's own row, via set_my_pin (0049).
+ */
+function MyPinCard({ orgId, employeeId, hasPin }: { orgId: string; employeeId: string; hasPin: boolean }) {
+  const invalidate = useInvalidate();
+  const [editing, setEditing] = useState(false);
+  const [pin, setPin] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (pin.trim().length < 4) {
+      toast.error("PIN needs to be at least 4 digits");
+      return;
+    }
+    setSaving(true);
+    try {
+      await setMyPin(orgId, employeeId, pin);
+      invalidate("employees");
+      toast.success("PIN saved");
+      setEditing(false);
+      setPin("");
+    } catch (e) {
+      toast.error("Could not save PIN", errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-3">
+        <div className="rounded-xl bg-white/[0.03] p-2">
+          <KeyRound className="h-4 w-4 text-accent-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-white">My PIN</p>
+          <p className="text-xs text-zinc-500">Used to claim a staff meal or approve a discount at the till.</p>
+        </div>
+        <Badge tone={hasPin ? "green" : "amber"}>{hasPin ? "Set" : "Not set"}</Badge>
+      </div>
+      {editing ? (
+        <div className="mt-3 flex gap-2">
+          <Input
+            type="password"
+            inputMode="numeric"
+            placeholder="New PIN"
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+            maxLength={8}
+            className="flex-1"
+            autoFocus
+          />
+          <Button disabled={saving} onClick={save}>
+            Save
+          </Button>
+          <Button variant="ghost" disabled={saving} onClick={() => { setEditing(false); setPin(""); }}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <Button variant="ghost" className="mt-3 w-full text-xs" onClick={() => setEditing(true)}>
+          {hasPin ? "Change PIN" : "Set a PIN"}
+        </Button>
+      )}
+    </Card>
+  );
 }
 
 export function MyDayView() {
@@ -141,6 +217,13 @@ export function MyDayView() {
   }, [shiftsQ.data, me]);
 
   const geofence = org ? geofenceOf(org) : null;
+
+  const mealEnabled = (org?.staff_meal_daily_limit ?? 0) > 0;
+  const mealUsageQ = useQuery({
+    queryKey: ["staffMealUsage", org?.id, me?.id],
+    queryFn: () => getStaffMealUsage(org!.id, me!.id),
+    enabled: !!org?.id && !!me?.id && mealEnabled,
+  });
 
   // Best-effort "forgot to clock out": while on shift and the org has a
   // geofence, watch position and clock out if we're outside it for a while.
@@ -382,7 +465,7 @@ export function MyDayView() {
       </Card>
 
       {/* My week + today glance */}
-      <div className={cn("grid gap-3", isAdmin ? "grid-cols-3" : "grid-cols-2")}>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {isAdmin && (
           <>
             <Card className="p-4 text-center">
@@ -410,6 +493,18 @@ export function MyDayView() {
               <p className="text-[11px] text-zinc-500">next week's availability</p>
             </Card>
           </a>
+        )}
+        {/* Balance only, no claim action here — actually claiming a meal happens
+            at POS, the only screen with a cart, kitchen ticket and inventory
+            linkage. This just tells you where you stand before you get there. */}
+        {mealEnabled && (
+          <Card className="p-4 text-center">
+            <UtensilsCrossed className="mx-auto h-4 w-4 text-brand-300" />
+            <p className="mt-1.5 font-display text-lg font-bold text-white">
+              {mealUsageQ.data ? fmt(mealUsageQ.data.remaining) : "—"}
+            </p>
+            <p className="text-[11px] text-zinc-500">meal allowance left today</p>
+          </Card>
         )}
       </div>
 
@@ -457,6 +552,8 @@ export function MyDayView() {
           </div>
         )}
       </Card>
+
+      <MyPinCard orgId={org!.id} employeeId={me.id} hasPin={!!me.pin} />
 
       {/* My tasks */}
       <Card>

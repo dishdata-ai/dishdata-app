@@ -46,6 +46,23 @@ export async function linkEmployeeToUser(orgId: string, employeeId: string, user
   if (error) throw error;
 }
 
+/**
+ * Set or change your OWN pin (used for the discount-approval PIN and the
+ * self-serve staff meal claim, 0048). Goes through set_my_pin (0049) rather
+ * than updateEmployee — the update policy on employees is manager+ only
+ * (0047), so this is the only column of your own row you can touch.
+ */
+export async function setMyPin(orgId: string, employeeId: string, pin: string): Promise<void> {
+  const cleaned = pin.trim() || null;
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    dEmployees.update(employeeId, { pin: cleaned });
+    return;
+  }
+  const { error } = await getSupabase().rpc("set_my_pin", { _org: orgId, _pin: cleaned });
+  if (error) throw error;
+}
+
 export async function updateEmployee(orgId: string, id: string, patch: Partial<Employee>): Promise<void> {
   if (!isSupabaseConfigured) {
     await demoDelay();
