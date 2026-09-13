@@ -188,14 +188,47 @@ function ReceiptPrinterCard({ isAdmin }: { isAdmin: boolean }) {
  */
 function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
   const { org, refresh } = useOrg();
+  const [address, setAddress] = useState("");
   const [lat, setLat] = useState(org?.clockin_lat != null ? String(org.clockin_lat) : "");
   const [lng, setLng] = useState(org?.clockin_lng != null ? String(org.clockin_lng) : "");
   const [radius, setRadius] = useState(String(org?.clockin_radius_m ?? 150));
   const [maxHours, setMaxHours] = useState(String(org?.max_shift_hours ?? 14));
+  const [resolvedAs, setResolvedAs] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
+  const [lookingUp, setLookingUp] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const enabled = lat.trim() !== "" && lng.trim() !== "";
+  // Typed text ("52.52", but also stray whitespace or a pasted address) is
+  // not yet a coordinate — validate before trusting it as one, otherwise a
+  // bad value silently turns into `null` on the wire (Number.isFinite guards
+  // exactly that: +"" is 0, +"some address" is NaN, and JSON can't carry NaN
+  // at all — it serializes to null, which looks like "saved" but geofencing
+  // never actually turns on).
+  const latNum = +lat;
+  const lngNum = +lng;
+  const hasValidCoords =
+    lat.trim() !== "" && lng.trim() !== "" &&
+    Number.isFinite(latNum) && Number.isFinite(lngNum) &&
+    Math.abs(latNum) <= 90 && Math.abs(lngNum) <= 180;
+  const enabled = org?.clockin_lat != null && org?.clockin_lng != null;
+
+  const lookUpAddress = async () => {
+    if (!address.trim()) return;
+    setLookingUp(true);
+    setResolvedAs(null);
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(address.trim())}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "Address lookup failed.");
+      setLat(String(body.lat));
+      setLng(String(body.lng));
+      setResolvedAs(body.displayName);
+    } catch (e) {
+      toast.error("Couldn't find that address", errorMessage(e));
+    } finally {
+      setLookingUp(false);
+    }
+  };
 
   const useCurrentLocation = async () => {
     setLocating(true);
@@ -203,6 +236,7 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
       const pos = await getCurrentPosition();
       setLat(pos.lat.toFixed(6));
       setLng(pos.lng.toFixed(6));
+      setResolvedAs(null);
       toast.success("Location captured", `Accurate to ~${Math.round(pos.accuracy)}m — stand at the restaurant when you do this.`);
     } catch (e) {
       toast.error("Couldn't get your location", e instanceof GeoError ? e.message : errorMessage(e));
@@ -213,12 +247,16 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
 
   const save = async () => {
     if (!org) return;
+    if (!hasValidCoords) {
+      toast.error("Latitude and longitude need to be numbers", "Use \"Look up address\" or \"Use my current location\" instead of typing them by hand.");
+      return;
+    }
     setSaving(true);
     try {
       await updateOrg(org.id, {
-        clockin_lat: enabled ? +lat : null,
-        clockin_lng: enabled ? +lng : null,
-        clockin_radius_m: enabled ? Math.max(20, +radius || 150) : null,
+        clockin_lat: latNum,
+        clockin_lng: lngNum,
+        clockin_radius_m: Math.max(20, +radius || 150),
         max_shift_hours: Math.max(1, +maxHours || 14),
       });
       refresh();
@@ -233,6 +271,8 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
   const clear = async () => {
     setLat("");
     setLng("");
+    setAddress("");
+    setResolvedAs(null);
     if (!org) return;
     setSaving(true);
     try {
@@ -259,10 +299,39 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
       </p>
 
       <div className="space-y-3">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), lookUpAddress())}
+            placeholder="Street, number, postcode, city — e.g. Petersburger Str. 39, 10249 Berlin"
+            disabled={!isAdmin}
+            className="flex-1"
+          />
+          <Button variant="ghost" disabled={!isAdmin || lookingUp || !address.trim()} onClick={lookUpAddress}>
+            {lookingUp ? "Looking up…" : "Look up address"}
+          </Button>
+        </div>
+        <p className="-mt-1 text-xs text-zinc-500">
+          Works from anywhere — no need to be at the restaurant. Or, if you're standing there right now:
+        </p>
         <Button variant="ghost" disabled={!isAdmin || locating} onClick={useCurrentLocation}>
           <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} />
           {locating ? "Locating…" : "Use my current location"}
         </Button>
+
+        {hasValidCoords && (
+          <div className="rounded-lg bg-white/[0.03] px-3 py-2 text-xs">
+            {resolvedAs ? (
+              <p className="text-zinc-300">
+                <span className="font-semibold text-brand-300">Matched:</span> {resolvedAs}
+              </p>
+            ) : (
+              <p className="text-zinc-400">Pin set — save to apply it.</p>
+            )}
+            <p className="mt-0.5 font-mono text-zinc-500">{latNum.toFixed(6)}, {lngNum.toFixed(6)}</p>
+          </div>
+        )}
 
         <div className="grid grid-cols-3 gap-3">
           <Field label="Latitude">
@@ -275,7 +344,7 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
             <Input
               type="number" min="20" step="10"
               value={radius} onChange={(e) => setRadius(e.target.value)}
-              disabled={!isAdmin || !enabled}
+              disabled={!isAdmin || !hasValidCoords}
             />
           </Field>
         </div>
