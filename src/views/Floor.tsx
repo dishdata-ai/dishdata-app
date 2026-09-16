@@ -14,7 +14,7 @@ import {
   PageSkeleton,
 } from "@/components/ui";
 import { QrCode as QrCodeImage } from "@/components/QrCode";
-import { QrSheetModal } from "@/components/QrSheet";
+import { QrSheetModal, TableQrSheetModal } from "@/components/QrSheet";
 import { useTables, useReservations, useInvalidate } from "@/lib/hooks/data";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -130,6 +130,7 @@ export default function Floor() {
   const [addingTable, setAddingTable] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [printingTakeawaySheet, setPrintingTakeawaySheet] = useState(false);
+  const [printingTableSheet, setPrintingTableSheet] = useState(false);
   const [tableForm, setTableForm] = useState({ name: "", seats: "4", zone: "Main" });
 
   const tables = tablesQ.data ?? [];
@@ -339,6 +340,11 @@ export default function Floor() {
           <Button variant="ghost" className="w-full" onClick={() => window.print()}>
             <Printer className="h-4 w-4" /> Print QR sheet
           </Button>
+          {tables.length > 0 && (
+            <Button variant="ghost" className="w-full" onClick={() => setPrintingTableSheet(true)}>
+              <Printer className="h-4 w-4" /> Print one of each table (1 sheet)
+            </Button>
+          )}
         </div>
       </Modal>
 
@@ -347,6 +353,16 @@ export default function Floor() {
         onClose={() => setPrintingTakeawaySheet(false)}
         value={`${typeof window !== "undefined" ? window.location.origin : ""}/r/${org?.slug}?order=takeaway`}
         title="Scan to order"
+      />
+
+      <TableQrSheetModal
+        open={printingTableSheet}
+        onClose={() => setPrintingTableSheet(false)}
+        tables={tables.map((t) => ({
+          id: t.id,
+          name: t.name,
+          url: `${typeof window !== "undefined" ? window.location.origin : ""}/r/${org?.slug}?table=${encodeURIComponent(t.name)}`,
+        }))}
       />
 
       <Modal open={booking} onClose={() => setBooking(false)} title="New Reservation" wide>
