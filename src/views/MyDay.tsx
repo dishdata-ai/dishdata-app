@@ -216,6 +216,26 @@ export function MyDayView() {
       .slice(0, 6);
   }, [shiftsQ.data, me]);
 
+  // The scheduled end of whichever shift covers right now, if any — wraps to
+  // the next day when end_time <= start_time (an overnight shift, e.g.
+  // 17:00–01:00), same rule the force-clockout cron uses server-side.
+  const activeShiftEnd = useMemo(() => {
+    if (!me) return null;
+    const shift = (shiftsQ.data ?? []).find((s) => s.employee_id === me.id && s.day === dayKey(new Date()));
+    if (!shift) return null;
+    const start = new Date(`${shift.day}T${shift.start_time}`).getTime();
+    let end = new Date(`${shift.day}T${shift.end_time}`).getTime();
+    if (end <= start) end += 86400000;
+    return end;
+  }, [shiftsQ.data, me]);
+
+  // Best-effort, in-app only — nothing pings their phone if this tab isn't
+  // open. Re-asks an hour after "I'm staying" rather than nagging every tick;
+  // the 30-min-grace cron (0052) is the real backstop either way.
+  const [staySnoozedUntil, setStaySnoozedUntil] = useState(0);
+  const shiftJustEnded =
+    !!myOpenEntry && activeShiftEnd != null && now >= activeShiftEnd && now >= staySnoozedUntil;
+
   const geofence = org ? geofenceOf(org) : null;
 
   const mealEnabled = (org?.staff_meal_daily_limit ?? 0) > 0;
@@ -463,6 +483,39 @@ export function MyDayView() {
           </div>
         </div>
       </Card>
+
+      {shiftJustEnded && myOpenEntry && (
+        <Card className="border-amber-soft/30 bg-amber-soft/5 p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold text-white">
+                Your shift ended at{" "}
+                {new Date(activeShiftEnd!).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} —
+                still working?
+              </p>
+              <p className="text-xs text-zinc-400">
+                If you don't clock out yourself, this closes on its own about 30 minutes after your shift was due to end.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Button variant="ghost" onClick={() => setStaySnoozedUntil(Date.now() + 60 * 60 * 1000)}>
+                I&rsquo;m staying
+              </Button>
+              <Button
+                variant="danger"
+                onClick={async () => {
+                  const worked = fmtDuration(workedSeconds(myOpenEntry, now));
+                  await clockOut(org!.id, myOpenEntry);
+                  invalidate("time_entries");
+                  toast.success("Clocked out", `${worked} worked — see you next shift!`);
+                }}
+              >
+                <ClockOutIcon className="h-4 w-4" /> Clock out now
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* My week + today glance */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
