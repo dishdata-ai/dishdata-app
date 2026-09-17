@@ -275,17 +275,30 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // roughly half of two separate pages sat blank below a short section).
     //
     // Skip straight to a fresh column only when there's not even room for
-    // the heading plus one item — splitting there would strand a heading
-    // alone at the bottom of a column with nothing under it, which reads
-    // worse than the blank space it would save.
-    const worthSplittingHere = remaining >= HEADING_H + itemHeight(section.items[0]) + SECTION_GAP;
+    // the heading plus the smallest item here — splitting there would strand
+    // a heading alone at the bottom of a column with nothing under it, which
+    // reads worse than the blank space it would save. Checked against the
+    // smallest item, not just the first: a long name sitting first in the
+    // list (e.g. one long drink name before nine short ones) doesn't mean
+    // nothing in the section fits — see the loop below, which is the part
+    // that actually decides what does.
+    const smallestItemHeight = Math.min(...section.items.map(itemHeight));
+    const worthSplittingHere = remaining >= HEADING_H + smallestItemHeight + SECTION_GAP;
     if (used > 0 && !worthSplittingHere) {
       nextColumn();
       queue.unshift(section);
       continue;
     }
 
+    // Collect whichever items fit, in their original order — not just a
+    // prefix. A section is a fixed list (Beverages, say), and printing it
+    // out of order would read as a mistake, so the tail below still prints
+    // every deferred item in exactly the relative order it had here. But
+    // stopping at the *first* item that doesn't fit wasted real room: one
+    // long name blocked nine short ones behind it from ever being tried,
+    // even though several would have fit in the space that name couldn't.
     const head: SheetItem[] = [];
+    const tail: SheetItem[] = [];
     let h = HEADING_H;
     for (const item of section.items) {
       // + SECTION_GAP: a split section still pays the same trailing gap a
@@ -294,14 +307,21 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
       // *and* that gap — checking against `remaining` without the gap let
       // this loop accept one item more than the column actually had space
       // for, silently overflowing the page's fixed, overflow-hidden height.
-      if (h + itemHeight(item) + SECTION_GAP > remaining) break;
-      head.push(item);
-      h += itemHeight(item);
+      if (h + itemHeight(item) + SECTION_GAP <= remaining) {
+        head.push(item);
+        h += itemHeight(item);
+      } else {
+        tail.push(item);
+      }
     }
     // Guard against a pathological capacity leaving no room at all: always
-    // place at least one item so the loop cannot spin forever.
-    if (!head.length) head.push(section.items[0]);
-    const tail = section.items.slice(head.length);
+    // place at least one item (the smallest, to minimize how far this
+    // overflows) so the loop cannot spin forever.
+    if (!head.length) {
+      const smallest = section.items.reduce((a, b) => (itemHeight(b) < itemHeight(a) ? b : a));
+      head.push(smallest);
+      tail.splice(tail.indexOf(smallest), 1);
+    }
 
     page[col].push(
       section.continued ? { ...section, items: head, headingVisible: crossedPage } : { ...section, items: head },
