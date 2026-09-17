@@ -80,7 +80,16 @@ const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
-const HEADER_FIRST = 50; // logo, date and the "Today's Menu" title block
+// Measured against the real rendered header (both org logo present and the
+// text-fallback path): the logo is capped at a fixed h-[30mm], and the
+// date+title+underline block on the right — the side that actually decides
+// this row's height once a logo caps the left side — measures ~28mm
+// regardless of org name or date, since both are fixed-shape content (a
+// two-line "Today's Menu"/"Tageskarte" title, not variable text). The
+// previous 50mm was never measured against real output; the ~20mm gap
+// between it and reality was quietly costing every page-1 column that much
+// less content than it could actually hold.
+const HEADER_FIRST = 33;
 const HEADER_CONT = 16; // slim running header on later pages
 
 // Only the LAST printed page carries the tagline/"available today"/allergen
