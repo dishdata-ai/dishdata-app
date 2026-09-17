@@ -1,13 +1,103 @@
 import { useEffect, useMemo, useState } from "react";
-import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff } from "lucide-react";
-import { Card, SectionTitle, StatCard, Badge, Button, EmptyState, PageSkeleton, Table } from "@/components/ui";
+import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff, Pencil } from "lucide-react";
+import { Card, SectionTitle, StatCard, Badge, Button, Input, Field, Modal, EmptyState, PageSkeleton, Table } from "@/components/ui";
 import { useEmployees, useTimeEntries, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
-import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclock";
+import { clockIn, clockOut, toggleBreak, workedSeconds, editTimeEntry } from "@/lib/api/timeclock";
 import { geofenceOf } from "@/lib/geo";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
+import type { TimeEntry } from "@/lib/api/database.types";
+
+/** <input type="datetime-local"> wants "YYYY-MM-DDTHH:mm" in LOCAL time, not the UTC ISO string we store. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * Manager+ correction for one entry — a stuck-open shift (clock_out never
+ * set, sometimes for days once the auto-clockout cron wasn't wired up yet),
+ * or an honestly wrong time. See edit_time_entry (0050): this is the only
+ * write path into time_entries besides the self-service clock RPCs.
+ */
+function EditEntryModal({
+  orgId,
+  entry,
+  employeeName,
+  onClose,
+  onSaved,
+}: {
+  orgId: string;
+  entry: TimeEntry;
+  employeeName: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [clockInAt, setClockInAt] = useState(toLocalInput(entry.clock_in));
+  const [clockOutAt, setClockOutAt] = useState(entry.clock_out ? toLocalInput(entry.clock_out) : "");
+  const [breakMin, setBreakMin] = useState(String(Math.round(entry.break_seconds / 60)));
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!clockInAt) {
+      toast.error("Clock-in time is required");
+      return;
+    }
+    const clockInIso = new Date(clockInAt).toISOString();
+    const clockOutIso = clockOutAt ? new Date(clockOutAt).toISOString() : null;
+    if (clockOutIso && clockOutIso <= clockInIso) {
+      toast.error("Clock-out must be after clock-in");
+      return;
+    }
+    setSaving(true);
+    try {
+      await editTimeEntry(orgId, entry.id, {
+        clockIn: clockInIso,
+        clockOut: clockOutIso,
+        breakSeconds: (+breakMin || 0) * 60,
+      });
+      onSaved();
+      toast.success("Time entry updated");
+      onClose();
+    } catch (e) {
+      toast.error("Could not update", errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={`Edit shift · ${employeeName}`}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Clock in">
+            <Input type="datetime-local" value={clockInAt} onChange={(e) => setClockInAt(e.target.value)} />
+          </Field>
+          <Field label="Clock out">
+            <Input
+              type="datetime-local"
+              value={clockOutAt}
+              onChange={(e) => setClockOutAt(e.target.value)}
+              placeholder="Still open"
+            />
+          </Field>
+        </div>
+        <Field label="Break (minutes)">
+          <Input type="number" min="0" step="5" value={breakMin} onChange={(e) => setBreakMin(e.target.value)} />
+        </Field>
+        {!clockOutAt && (
+          <p className="text-xs text-amber-300">Leaving clock-out empty keeps this shift open.</p>
+        )}
+        <Button className="w-full" disabled={saving} onClick={save}>
+          Save changes
+        </Button>
+      </div>
+    </Modal>
+  );
+}
 
 function fmtDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -16,13 +106,14 @@ function fmtDuration(seconds: number): string {
 }
 
 export default function TimeClock() {
-  const { org, role } = useOrg();
+  const { org, role, isManager } = useOrg();
   const fmt = useFmt();
   const employeesQ = useEmployees();
   const entriesQ = useTimeEntries();
   const invalidate = useInvalidate();
   // Wages and labor cost are manager+ only — staff shouldn't see coworkers' pay.
   const canSeeWages = role !== "staff";
+  const [editing, setEditing] = useState<{ entry: TimeEntry; employeeName: string } | null>(null);
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -160,6 +251,14 @@ export default function TimeClock() {
                         <ClockOutIcon className="h-3.5 w-3.5" /> Clock out
                       </Button>
                     </div>
+                    {isManager && (
+                      <button
+                        onClick={() => setEditing({ entry: open, employeeName: emp.name })}
+                        className="mt-2 flex w-full cursor-pointer items-center justify-center gap-1 py-1 text-xs text-zinc-500 hover:text-white"
+                      >
+                        <Pencil className="h-3 w-3" /> Fix the times
+                      </button>
+                    )}
                   </>
                 ) : (
                   <Button className="mt-4 w-full py-2" onClick={() => doClockIn(emp.id)}>
@@ -185,15 +284,20 @@ export default function TimeClock() {
               "Employee", "Hours",
               ...(canSeeWages ? ["Rate", "Labor Cost"] : []),
               "Shifts", "Flags",
+              ...(isManager ? [""] : []),
             ]}
           >
             {employees
               .filter((e) => weekStats.has(e.id))
               .map((emp) => {
                 const stat = weekStats.get(emp.id)!;
-                const shifts = entries.filter(
+                const weekEntries = entries.filter(
                   (e) => e.employee_id === emp.id && new Date(e.clock_in).getTime() > Date.now() - 7 * 86400000,
-                ).length;
+                );
+                const shifts = weekEntries.length;
+                // Most recent first — the one someone's most likely to need
+                // corrected right after noticing something's off.
+                const latestEntry = [...weekEntries].sort((a, b) => b.clock_in.localeCompare(a.clock_in))[0];
                 return (
                   <tr key={emp.id} className="hover:bg-white/[0.02]">
                     <td className="px-4 py-3 font-medium text-white">{emp.name}</td>
@@ -223,12 +327,35 @@ export default function TimeClock() {
                         </span>
                       )}
                     </td>
+                    {isManager && (
+                      <td className="px-4 py-3 text-right">
+                        {latestEntry && (
+                          <button
+                            onClick={() => setEditing({ entry: latestEntry, employeeName: emp.name })}
+                            className="cursor-pointer text-zinc-500 hover:text-white"
+                            title="Fix their most recent shift"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
           </Table>
         )}
       </Card>
+
+      {editing && (
+        <EditEntryModal
+          orgId={org!.id}
+          entry={editing.entry}
+          employeeName={editing.employeeName}
+          onClose={() => setEditing(null)}
+          onSaved={() => invalidate("time_entries")}
+        />
+      )}
     </div>
   );
 }

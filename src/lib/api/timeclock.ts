@@ -115,6 +115,43 @@ export async function toggleBreak(orgId: string, entry: TimeEntry): Promise<void
   if (error) throw error;
 }
 
+export interface EditTimeEntryInput {
+  clockIn: string; // ISO
+  clockOut: string | null; // ISO, or null to leave the shift open
+  breakSeconds: number;
+  note?: string | null;
+}
+
+/**
+ * Manager+ correction — fixing a stuck-open shift (clock_out stuck at null),
+ * or an honest mistake in the times. Goes through edit_time_entry (0050),
+ * the only write path into time_entries besides the three self-service RPCs
+ * above; there's no plain update() left on this table (see 0047).
+ */
+export async function editTimeEntry(orgId: string, entryId: string, input: EditTimeEntryInput): Promise<void> {
+  const patch = {
+    clock_in: input.clockIn,
+    clock_out: input.clockOut,
+    break_seconds: Math.max(0, Math.round(input.breakSeconds)),
+    break_started_at: null,
+    ...(input.note !== undefined ? { note: input.note } : {}),
+  };
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    dEntries.update(entryId, patch);
+    return;
+  }
+  const { error } = await getSupabase().rpc("edit_time_entry", {
+    _org: orgId,
+    _entry: entryId,
+    _clock_in: input.clockIn,
+    _clock_out: input.clockOut,
+    _break_seconds: Math.max(0, Math.round(input.breakSeconds)),
+    _note: input.note ?? null,
+  });
+  if (error) throw error;
+}
+
 /** Worked seconds for an entry (live for open entries, net of breaks). */
 export function workedSeconds(entry: TimeEntry, now = Date.now()): number {
   const end = entry.clock_out ? new Date(entry.clock_out).getTime() : now;
