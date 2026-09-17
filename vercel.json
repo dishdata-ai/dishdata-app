@@ -1,0 +1,6 @@
+{
+  "crons": [
+    { "path": "/api/cron/force-clockout", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/sumup-sync", "schedule": "15 3 * * *" }
+  ]
+}
