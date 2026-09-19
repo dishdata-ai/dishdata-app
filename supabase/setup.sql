@@ -2996,7 +2996,6 @@ begin
 end $$;
 
 grant execute on function public.edit_time_entry(uuid, uuid, timestamptz, timestamptz, integer, text) to authenticated;
-<<<<<<< HEAD
 
 -- ============================================================================
 -- 0054 · Let a manager/partner save the menu category order
@@ -3027,5 +3026,3 @@ begin
 end $$;
 
 grant execute on function public.set_category_order(uuid, jsonb) to authenticated;
-=======
->>>>>>> origin/main

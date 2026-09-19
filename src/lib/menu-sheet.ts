@@ -18,7 +18,6 @@ export interface SheetItem {
   price: number | null;
   description: string | null;
   /**
-<<<<<<< HEAD
    * null = no dietary symbol shown. For a consolidated combo row, the
    * curry's own tag — bases share one curry, so it's one tag for the whole
    * row: the first non-null tag found among its base recipes wins, rather
@@ -27,8 +26,6 @@ export interface SheetItem {
    */
   diet: "veg" | "vegan" | null;
   /**
-=======
->>>>>>> origin/main
    * Present only for a consolidated combo row (see `consolidateCombos()`):
    * one entry per base this curry is offered with, in the source
    * categories' own encounter order. `price` above is always null when this
@@ -38,16 +35,12 @@ export interface SheetItem {
    * columnHeight() and every non-combo render path stay entirely unaware
    * this field exists.
    */
-<<<<<<< HEAD
   bases?: {
     base: string;
     price: number | null;
     /** Pre-formatted "N pcs"/"N Stk." when the base has a known fixed serving count; kept separate from `base` so grouping/`comboBasesNote` lookups stay keyed on the plain base name. */
     serving?: string;
   }[];
-=======
-  bases?: { base: string; price: number | null }[];
->>>>>>> origin/main
 }
 
 export interface SheetSection {
@@ -111,7 +104,6 @@ const DESC_SAFETY = 2; // mm, covers a description landing right at a wrap bound
 const ITEM_MARGIN_WITH_DESC = 2.4; // mm, li's mb-[2.4mm]
 const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
-<<<<<<< HEAD
 // A consolidated combo row (see consolidateComboItems()) is the curry name
 // plus one short, fixed-shape "base — price" line per base ("Porotta
 // 14,90 €") — not wrapped prose, so this is a flat per-line height like
@@ -132,16 +124,6 @@ const NOTE_CHARS_PER_LINE = 57;
 const NOTE_LINE_H = 3.9;
 const NOTE_BASE = 3.9; // mm, note's own top margin under the heading
 const NOTE_SAFETY = 2; // mm, covers a note landing right at a wrap boundary
-=======
-// A consolidated combo row (see consolidateCombos()) is the curry name plus
-// one short, fixed-shape "base — price" line per base ("Porotta 14,90 €") —
-// not wrapped prose, so this is a flat per-line height like NAME_LINE_H, not
-// a char-count wrap model like DESC_LINE_H/DESC_CHARS_PER_LINE. Placeholder
-// until measured against real rendered DOM (see this file's git history for
-// how HEADER_FIRST and the item constants above were corrected the same way).
-const COMBO_BASE_ROW_H = 4.2; // mm, one base+price line
-const COMBO_BASE_ROW_MARGIN = 2; // mm, row's own top/bottom breathing room
->>>>>>> origin/main
 
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
@@ -198,22 +180,14 @@ export const SHEET_STRINGS: Record<SheetLang, {
     stocks: "Available today while stocks last",
     footnote: "Please ask our team about allergens and dietary requirements.",
     continued: "(cont.)",
-<<<<<<< HEAD
     combos: "Curry Combo",
-=======
-    combos: "Combos",
->>>>>>> origin/main
   },
   de: {
     title: "Tageskarte",
     stocks: "Heute verfügbar, solange der Vorrat reicht",
     footnote: "Bitte sprechen Sie unser Team auf Allergene und Ernährungswünsche an.",
     continued: "(Fortsetzung)",
-<<<<<<< HEAD
     combos: "Curry-Kombi",
-=======
-    combos: "Kombis",
->>>>>>> origin/main
   },
 };
 
@@ -324,13 +298,8 @@ const COMBO_NAME_PATTERN = /^(\S+)\s+(?:with|mit)\s+(.+)$/i;
  * here: staying visibly un-consolidated on the printed preview is a more
  * honest nudge to go fix the source recipe name than papering over it.
  */
-<<<<<<< HEAD
 function consolidateComboItems(comboItems: SheetItem[], lang: SheetLang): SheetItem[] {
   const groups = new Map<string, { curry: string; bases: NonNullable<SheetItem["bases"]>; diet: SheetItem["diet"] }>();
-=======
-function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
-  const groups = new Map<string, { curry: string; bases: { base: string; price: number | null }[] }>();
->>>>>>> origin/main
   const standalone: SheetItem[] = [];
 
   for (const item of comboItems) {
@@ -341,7 +310,6 @@ function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
     }
     const [, base, curry] = match;
     const key = curry.toLowerCase().trim();
-<<<<<<< HEAD
     if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [], diet: item.diet });
     else if (!groups.get(key)!.diet && item.diet) groups.get(key)!.diet = item.diet;
     const count = BASE_SERVING_COUNT[base.toLowerCase()];
@@ -354,16 +322,6 @@ function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
     price: null,
     description: null,
     diet,
-=======
-    if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [] });
-    groups.get(key)!.bases.push({ base, price: item.price });
-  }
-
-  const consolidated: SheetItem[] = [...groups.values()].map(({ curry, bases }) => ({
-    name: curry,
-    price: null,
-    description: null,
->>>>>>> origin/main
     bases,
   }));
 
@@ -423,10 +381,7 @@ export function buildSections(
       // on a menu is worse than printing nothing at all.
       price: r.price > 0 ? r.price : null,
       description,
-<<<<<<< HEAD
       diet: r.diet ?? null,
-=======
->>>>>>> origin/main
     };
 
     if (consolidateCombos && isComboCategory(englishCategory)) {
@@ -461,11 +416,7 @@ export function buildSections(
   }
 
   if (comboItems.length) {
-<<<<<<< HEAD
     byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems, lang));
-=======
-    byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems));
->>>>>>> origin/main
   }
 
   return orderCategories(order, categoryOrder).map((englishCategory) => {

@@ -11,13 +11,10 @@ import { orderCategories } from "@/lib/category-order";
 import { cn, errorMessage, fmtNumber } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getRememberedEmail, rememberEmail } from "@/lib/storefront-identity";
-<<<<<<< HEAD
 
 // Same symbols as the recipe editor's dietary toggle (src/views/Recipes.tsx)
 // and the printed menu sheet — one consistent icon for a tagged dish everywhere.
 const DIET_SYMBOL: Record<"veg" | "vegan", string> = { veg: "🟢", vegan: "🌱" };
-=======
->>>>>>> origin/main
 
 export default function Storefront({
   slug,
