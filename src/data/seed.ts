@@ -83,7 +83,7 @@ export function buildSeed(orgId: string): SeedBundle {
     par_level: par, unit_cost: cost, expires_at: null, vendor_id: null,
     location_id: lid(locationName), sku,
     serial_number: null, purchase_date: null, purchase_cost: null,
-    depreciation_months: null, asset_status: null,
+    depreciation_months: null, asset_status: null, grams_per_unit: null,
   });
 
   const inv = (name: string, category: string, stock: number, unit: string, par: number, cost: number, expDays: number, vendor: string, sku?: string | null, loc?: string): InventoryItem => {
@@ -180,6 +180,9 @@ export function buildSeed(orgId: string): SeedBundle {
       recipe_ingredients.push({
         id: uid(), org_id: orgId, recipe_id: id, name: iname, qty_display: qd,
         qty_numeric: qn, cost, inventory_item_id: invName ? iid(invName) : null,
+        // Demo ingredients pre-date units/yield — null unit = qty_numeric is
+        // already in the linked stock item's own unit, same as it always was.
+        unit: null, yield_pct: 100, cost_override: null,
       });
     }
   };

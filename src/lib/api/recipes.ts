@@ -2,29 +2,68 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoAudit } from "@/lib/api/notifications";
-import type { Recipe, RecipeIngredient } from "@/lib/api/database.types";
+import type { Recipe, RecipeIngredient, InventoryItem } from "@/lib/api/database.types";
 import type { RecipeWithIngredients } from "@/lib/calc";
+import { computeIngredientCost } from "@/lib/units";
 
 const dRecipes = demoTable<Recipe>("recipes");
 const dIngredients = demoTable<RecipeIngredient>("recipe_ingredients");
+const dInventory = demoTable<InventoryItem>("inventory_items");
+
+/**
+ * A linked ingredient's cost is computed live from the stock item's current
+ * price — the "derived costing" wire (inventory rebuild Phase 1). An
+ * unlinked line, or one whose units can't be reconciled, falls back to
+ * cost_override / the stored cost, unchanged from before this existed.
+ */
+function liveIngredientCost(
+  ing: RecipeIngredient,
+  stock: Pick<InventoryItem, "unit" | "unit_cost" | "grams_per_unit"> | null | undefined,
+): number {
+  if (!stock) return ing.cost_override ?? ing.cost;
+  const live = computeIngredientCost({
+    qtyNumeric: ing.qty_numeric,
+    ingredientUnit: ing.unit,
+    yieldPct: ing.yield_pct,
+    stockUnit: stock.unit,
+    stockUnitCost: stock.unit_cost,
+    gramsPerUnit: stock.grams_per_unit,
+  });
+  return live ?? ing.cost_override ?? ing.cost;
+}
 
 export async function listRecipes(orgId: string): Promise<RecipeWithIngredients[]> {
   if (!isSupabaseConfigured) {
     await demoDelay();
     const ings = dIngredients.list({ org_id: orgId } as Partial<RecipeIngredient>);
+    const items = dInventory.list({ org_id: orgId } as Partial<InventoryItem>);
+    const byId = new Map(items.map((i) => [i.id, i]));
     return dRecipes
       .list({ org_id: orgId } as Partial<Recipe>)
-      .map((r) => ({ ...r, ingredients: ings.filter((i) => i.recipe_id === r.id) }));
+      .map((r) => ({
+        ...r,
+        ingredients: ings
+          .filter((i) => i.recipe_id === r.id)
+          .map((i) => ({ ...i, cost: liveIngredientCost(i, i.inventory_item_id ? byId.get(i.inventory_item_id) : null) })),
+      }));
   }
   const { data, error } = await getSupabase()
     .from("recipes")
-    .select("*, recipe_ingredients(*)")
+    .select("*, recipe_ingredients(*, inventory_items(unit, unit_cost, grams_per_unit))")
     .eq("org_id", orgId)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []).map((r) => {
-    const { recipe_ingredients, ...rest } = r as Recipe & { recipe_ingredients: RecipeIngredient[] };
-    return { ...rest, ingredients: recipe_ingredients ?? [] };
+    const { recipe_ingredients, ...rest } = r as Recipe & {
+      recipe_ingredients: (RecipeIngredient & {
+        inventory_items: Pick<InventoryItem, "unit" | "unit_cost" | "grams_per_unit"> | null;
+      })[];
+    };
+    const ingredients = (recipe_ingredients ?? []).map((ri) => {
+      const { inventory_items: stock, ...ing } = ri;
+      return { ...ing, cost: liveIngredientCost(ing, stock) };
+    });
+    return { ...rest, ingredients };
   });
 }
 
@@ -44,9 +83,18 @@ export interface NewRecipeInput {
     name: string;
     qty_display: string;
     qty_numeric: number;
+    /** Only meaningful for a line with no inventory_item_id — a linked line's cost is always computed. */
     cost: number;
     inventory_item_id: string | null;
+    /** Null = same unit as the linked stock item. */
+    unit?: string | null;
+    yield_pct?: number;
   }[];
+}
+
+/** demoTable has no DB column defaults — fill the ones a real insert gets for free. */
+function toDemoIngredient(ing: NewRecipeInput["ingredients"][number]): Omit<RecipeIngredient, "id" | "org_id" | "recipe_id"> {
+  return { ...ing, unit: ing.unit ?? null, yield_pct: ing.yield_pct ?? 100, cost_override: null };
 }
 
 export async function createRecipe(orgId: string, input: NewRecipeInput): Promise<string> {
@@ -62,7 +110,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
     };
     dRecipes.insert(recipe);
     for (const ing of input.ingredients) {
-      dIngredients.insert({ id: uid(), org_id: orgId, recipe_id: recipe.id, ...ing });
+      dIngredients.insert({ id: uid(), org_id: orgId, recipe_id: recipe.id, ...toDemoIngredient(ing) });
     }
     pushDemoAudit(orgId, "recipes", "INSERT", recipe.id, { name: recipe.name });
     return recipe.id;
@@ -112,7 +160,7 @@ export async function replaceRecipeIngredients(
       dIngredients.remove(ing.id);
     }
     for (const ing of ingredients) {
-      dIngredients.insert({ id: uid(), org_id: orgId, recipe_id: recipeId, ...ing });
+      dIngredients.insert({ id: uid(), org_id: orgId, recipe_id: recipeId, ...toDemoIngredient(ing) });
     }
     return;
   }

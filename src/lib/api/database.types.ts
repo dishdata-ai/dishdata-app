@@ -129,6 +129,8 @@ export interface InventoryItem {
   purchase_cost: number | null;
   depreciation_months: number | null;
   asset_status: AssetStatus | null;
+  /** Bridges a recipe line counted in pieces against stock counted in grams/kg, e.g. 1 lemon ≈ 90. Null where that conversion makes no sense. */
+  grams_per_unit: number | null;
 }
 
 export interface StorageLocation {
@@ -195,7 +197,14 @@ export interface RecipeIngredient {
   name: string;
   qty_display: string;
   qty_numeric: number;
+  /** Effective cost: computed live from the linked stock item's price when there's a link, else cost_override (or this stored value as a last resort). Never write to this directly for a linked line. */
   cost: number;
+  /** Unit qty_numeric is expressed in. Null = same unit as the linked stock item (unconverted — today's behavior). */
+  unit: string | null;
+  /** Usable share after trimming/peeling, 1-100. A 40g line at 85% costs as if 40/0.85g were bought. */
+  yield_pct: number;
+  /** Manually typed cost — only meaningful (and only ever used) for a line with no inventory_item_id. */
+  cost_override: number | null;
 }
 
 export interface PurchaseOrder {

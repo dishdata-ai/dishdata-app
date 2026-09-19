@@ -17,7 +17,8 @@ import { listCustomers } from "@/lib/api/customers";
 import { listTables } from "@/lib/api/tables";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
 import { listMyDeliveries, listOrgDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
-import type { TaskStatus, KitchenStatus, TimeEntry } from "@/lib/types";
+import { listTiers, listEarnRules, listRewards, awardPoints, redeemReward } from "@/lib/api/loyalty";
+import type { TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType } from "@/lib/types";
 
 function useIds() {
   const { ctx } = useOrg();
@@ -95,6 +96,41 @@ export function useTables() {
     queryKey: ["tables", orgId],
     queryFn: () => listTables(orgId),
     enabled,
+  });
+}
+
+export function useLoyaltyTiers() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["loyalty_tiers", orgId], queryFn: () => listTiers(orgId), enabled });
+}
+
+export function useLoyaltyEarnRules() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["loyalty_earn_rules", orgId], queryFn: () => listEarnRules(orgId), enabled });
+}
+
+export function useLoyaltyRewards() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["loyalty_rewards", orgId], queryFn: () => listRewards(orgId), enabled });
+}
+
+export function useAwardPoints() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ customerId, action }: { customerId: string; action: LoyaltyActionType }) =>
+      awardPoints(orgId, customerId, action),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["customers", orgId] }),
+  });
+}
+
+export function useRedeemReward() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ customerId, rewardId }: { customerId: string; rewardId: string }) =>
+      redeemReward(orgId, customerId, rewardId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["customers", orgId] }),
   });
 }
 

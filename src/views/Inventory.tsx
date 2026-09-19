@@ -159,6 +159,7 @@ function AddItemForm({ defaultType, onDone }: { defaultType: ItemType; onDone: (
         purchase_cost: equip ? +form.purchaseCost || null : null,
         depreciation_months: equip ? +form.depMonths || null : null,
         asset_status: equip ? form.assetStatus : null,
+        grams_per_unit: null,
       }),
     onSuccess: () => {
       invalidate("inventory");

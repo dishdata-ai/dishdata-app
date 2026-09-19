@@ -110,6 +110,7 @@ export interface InventoryItem {
   purchase_cost: number | null;
   depreciation_months: number | null;
   asset_status: AssetStatus | null;
+  grams_per_unit: number | null;
 }
 
 export interface StorageLocation {
@@ -169,6 +170,9 @@ export interface RecipeIngredient {
   qty_display: string;
   qty_numeric: number;
   cost: number;
+  unit: string | null;
+  yield_pct: number;
+  cost_override: number | null;
 }
 
 export interface PurchaseOrder {

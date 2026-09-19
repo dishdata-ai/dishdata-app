@@ -23,6 +23,8 @@ do $$ begin create type table_status as enum ('open','seated','reserved','cleani
 do $$ begin create type campaign_status as enum ('draft','scheduled','sent'); exception when duplicate_object then null; end $$;
 do $$ begin create type campaign_channel as enum ('email','sms','in_store'); exception when duplicate_object then null; end $$;
 do $$ begin create type waste_reason as enum ('spoiled','burnt','returned','overprep','other'); exception when duplicate_object then null; end $$;
+do $$ begin create type price_source as enum ('manual','po','invoice'); exception when duplicate_object then null; end $$;
+do $$ begin create type bill_status as enum ('parsed','reviewed','confirmed'); exception when duplicate_object then null; end $$;
 
 -- ----------------------------------------------------------------------------
 -- 2. CORE TENANCY TABLES
@@ -229,6 +231,7 @@ create table if not exists public.inventory_items (
   purchase_cost numeric,
   depreciation_months integer,
   asset_status text,                               -- 'in_service' | 'maintenance' | 'retired'
+  grams_per_unit numeric,                          -- bridges pc <-> mass for recipe costing, e.g. 1 lemon ≈ 90g
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   created_by uuid
@@ -243,6 +246,7 @@ alter table public.inventory_items add column if not exists purchase_date date;
 alter table public.inventory_items add column if not exists purchase_cost numeric;
 alter table public.inventory_items add column if not exists depreciation_months integer;
 alter table public.inventory_items add column if not exists asset_status text;
+alter table public.inventory_items add column if not exists grams_per_unit numeric;
 
 -- Physical storage locations (area + shelf), e.g. 'Dry Store' / 'B3'
 create table if not exists public.storage_locations (
@@ -321,8 +325,58 @@ create table if not exists public.recipe_ingredients (
   name text not null,
   qty_display text not null default '',
   qty_numeric numeric not null default 0,
-  cost numeric not null default 0
+  cost numeric not null default 0,
+  -- Derived costing (Phase 1): unit null = "same as the stock item" — the
+  -- app computes a linked line's cost live from qty * unit_factor * the
+  -- stock item's unit_cost / (yield_pct/100); cost above is the fallback
+  -- for lines with no stock link. See unit_factor() below.
+  unit text,
+  yield_pct numeric not null default 100 check (yield_pct > 0 and yield_pct <= 100),
+  cost_override numeric
 );
+
+-- Backfill for pre-existing deployments (create table above is a no-op there).
+alter table public.recipe_ingredients add column if not exists unit text;
+alter table public.recipe_ingredients add column if not exists yield_pct numeric not null default 100;
+alter table public.recipe_ingredients add column if not exists cost_override numeric;
+do $$ begin
+  alter table public.recipe_ingredients
+    add constraint recipe_ingredients_yield_pct_range check (yield_pct > 0 and yield_pct <= 100);
+exception when duplicate_object then null;
+end $$;
+
+-- Converts a recipe ingredient's quantity from its own unit into the linked
+-- stock item's unit — null "from"/"to" means "same unit" (factor 1), the
+-- safety valve that keeps every ingredient line with no unit set behaving
+-- exactly as qty_numeric always has. Returns null when the two units can't
+-- be reconciled (crossing mass/volume, or a piece conversion with no
+-- grams_per_unit) — mirrors src/lib/units.ts::unitFactor(), keep in sync.
+create or replace function public.unit_factor(_from text, _to text, _grams_per_unit numeric)
+returns numeric language plpgsql immutable as $$
+declare _mass constant text[] := array['g','kg'];
+declare _vol  constant text[] := array['ml','L'];
+declare _mass_to_g jsonb := '{"g":1,"kg":1000}'::jsonb;
+declare _vol_to_ml jsonb := '{"ml":1,"L":1000}'::jsonb;
+begin
+  if _from is null or _to is null or _from = _to then return 1; end if;
+
+  if _from = any(_mass) and _to = any(_mass) then
+    return (_mass_to_g->>_from)::numeric / (_mass_to_g->>_to)::numeric;
+  end if;
+  if _from = any(_vol) and _to = any(_vol) then
+    return (_vol_to_ml->>_from)::numeric / (_vol_to_ml->>_to)::numeric;
+  end if;
+
+  if _grams_per_unit is null then return null; end if;
+  if _from = 'pc' and _to = any(_mass) then
+    return _grams_per_unit / (_mass_to_g->>_to)::numeric;
+  end if;
+  if _to = 'pc' and _from = any(_mass) then
+    return (_mass_to_g->>_from)::numeric / _grams_per_unit;
+  end if;
+
+  return null; -- e.g. g <-> ml, or pc <-> ml: not reconcilable
+end $$;
 
 create table if not exists public.purchase_orders (
   id uuid primary key default gen_random_uuid(),
@@ -348,6 +402,80 @@ create table if not exists public.purchase_order_items (
   qty numeric not null default 1,
   unit_cost numeric not null default 0
 );
+
+-- Supplier price intelligence: captured bills + the price-history spine.
+-- Mirrors migration 0007_price_intel.sql — keep both in sync.
+create table if not exists public.supplier_bills (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  vendor_id uuid references public.vendors(id) on delete set null,
+  vendor_name text not null default '',
+  bill_date date,
+  total numeric not null default 0,
+  image_url text,
+  status bill_status not null default 'parsed',
+  raw_extract jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid
+);
+
+create table if not exists public.supplier_bill_items (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  bill_id uuid not null references public.supplier_bills(id) on delete cascade,
+  inventory_item_id uuid references public.inventory_items(id) on delete set null,
+  raw_name text not null,
+  qty numeric not null default 1,
+  unit text,
+  unit_price numeric not null default 0
+);
+
+create table if not exists public.supplier_item_prices (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  inventory_item_id uuid references public.inventory_items(id) on delete set null,
+  vendor_id uuid references public.vendors(id) on delete set null,
+  item_name text not null default '',
+  vendor_name text not null default '',
+  price numeric not null default 0,
+  unit text,
+  pack_qty numeric not null default 1,
+  source price_source not null default 'manual',
+  bill_item_id uuid references public.supplier_bill_items(id) on delete set null,
+  po_item_id uuid references public.purchase_order_items(id) on delete set null,
+  effective_from timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  created_by uuid
+);
+
+create index if not exists supplier_item_prices_item_idx
+  on public.supplier_item_prices(org_id, inventory_item_id, effective_from desc);
+create index if not exists supplier_bill_items_bill_idx
+  on public.supplier_bill_items(bill_id);
+
+do $$
+declare t text;
+begin
+  execute 'drop trigger if exists set_updated_at on public.supplier_bills';
+  execute 'create trigger set_updated_at before update on public.supplier_bills for each row execute function public.set_updated_at()';
+
+  foreach t in array array['supplier_bills','supplier_bill_items','supplier_item_prices'] loop
+    if t <> 'supplier_bill_items' then
+      execute format('drop trigger if exists set_created_by on public.%I', t);
+      execute format('create trigger set_created_by before insert on public.%I for each row execute function public.set_created_by()', t);
+    end if;
+    execute format('alter table public.%I enable row level security', t);
+    execute format('drop policy if exists %I_member_select on public.%I', t, t);
+    execute format('create policy %I_member_select on public.%I for select using (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_member_insert on public.%I', t, t);
+    execute format('create policy %I_member_insert on public.%I for insert with check (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_member_update on public.%I', t, t);
+    execute format('create policy %I_member_update on public.%I for update using (is_org_member(org_id))', t, t);
+    execute format('drop policy if exists %I_manager_delete on public.%I', t, t);
+    execute format('create policy %I_manager_delete on public.%I for delete using (has_org_role(org_id,''owner'',''admin'',''manager''))', t, t);
+  end loop;
+end $$;
 
 create table if not exists public.restaurant_tables (
   id uuid primary key default gen_random_uuid(),
@@ -749,7 +877,7 @@ drop trigger if exists on_order_ready on public.orders;
 create trigger on_order_ready after update on public.orders
   for each row execute function public.notify_order_ready();
 
--- PO delivered → stock in + notification
+-- PO delivered → stock in + notification + record prices (price intelligence)
 create or replace function public.on_po_delivered()
 returns trigger language plpgsql security definer set search_path = public as $$
 declare r record;
@@ -759,6 +887,13 @@ begin
       update inventory_items set stock = stock + r.qty where id = r.inventory_item_id;
       insert into inventory_transactions (org_id, item_id, item_name, delta, reason, note)
       values (new.org_id, r.inventory_item_id, r.name, r.qty, 'purchase', 'PO ' || new.po_number);
+      -- price-intelligence: remember what this vendor charged for this item.
+      insert into supplier_item_prices
+        (org_id, inventory_item_id, vendor_id, item_name, vendor_name, price, unit, pack_qty, source, po_item_id)
+      values (
+        new.org_id, r.inventory_item_id, new.vendor_id, r.name, new.vendor_name,
+        r.unit_cost, (select unit from inventory_items where id = r.inventory_item_id), r.qty, 'po', r.id
+      );
     end loop;
     insert into notifications (org_id, type, title, body, ref)
     values (new.org_id, 'po_delivered', 'PO ' || new.po_number || ' delivered',

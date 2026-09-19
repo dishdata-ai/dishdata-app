@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 import { Modal, Button } from "@/components/ui";
 import {
-  buildSections, paginate, sheetDate, SHEET_STRINGS,
+  buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory,
   type SheetLang, type SheetPage, type SheetSection,
 } from "@/lib/menu-sheet";
 import { cn } from "@/lib/utils";
@@ -57,7 +57,7 @@ function Section({
       )}
       <ul>
         {section.items.map((item, i) => (
-          <li key={i} className={cn(item.description ? "mb-[2.4mm]" : "mb-[1.7mm]")}>
+          <li key={i} className={cn(item.bases ? "mb-[2mm]" : item.description ? "mb-[2.4mm]" : "mb-[1.7mm]")}>
             <div className="flex items-baseline gap-2 text-[10.5pt] leading-tight">
               <span className="text-zinc-800">{item.name}</span>
               {item.price !== null && (
@@ -73,6 +73,24 @@ function Section({
               <p className="mt-[0.8mm] pr-[14mm] text-[8pt] leading-snug text-zinc-500">
                 {item.description}
               </p>
+            )}
+            {item.bases && (
+              // A curry's base+price options, each its own line — data, not
+              // prose, so it's set apart from a description (bolder, tighter)
+              // rather than reusing that paragraph's italic-ish grey styling.
+              <div className="mt-[0.8mm] space-y-[0.4mm]">
+                {item.bases.map((b, bi) => (
+                  <div key={bi} className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
+                    <span className="text-zinc-600">{b.base}</span>
+                    <span className="min-w-[4mm] flex-1" />
+                    {b.price !== null && (
+                      <span className="font-semibold whitespace-nowrap" style={{ color: ink }}>
+                        {money(b.price, currency)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </li>
         ))}
@@ -186,12 +204,13 @@ function Page({
 }
 
 export function MenuSheet({
-  org, recipes, withDescriptions, lang,
+  org, recipes, withDescriptions, lang, consolidateCombos = false,
 }: {
   org: Org;
   recipes: Recipe[];
   withDescriptions: boolean;
   lang: SheetLang;
+  consolidateCombos?: boolean;
 }) {
   const ink = org.accent_color || "#14523C";
   const t = SHEET_STRINGS[lang];
@@ -206,8 +225,11 @@ export function MenuSheet({
     t.footnote;
 
   const pages = useMemo(
-    () => paginate(buildSections(recipes, { withDescriptions, lang, categoryOrder: settings.categoryOrder })),
-    [recipes, withDescriptions, lang, settings.categoryOrder],
+    () =>
+      paginate(
+        buildSections(recipes, { withDescriptions, lang, categoryOrder: settings.categoryOrder, consolidateCombos }),
+      ),
+    [recipes, withDescriptions, lang, settings.categoryOrder, consolidateCombos],
   );
   const empty = pages.length === 1 && !pages[0][0].length && !pages[0][1].length;
 
@@ -262,6 +284,7 @@ export function MenuSheetModal({
 }) {
   const [withDescriptions, setWithDescriptions] = useState(false);
   const [lang, setLang] = useState<SheetLang>("en");
+  const [consolidateCombos, setConsolidateCombos] = useState(false);
 
   // Both the body class and the borderless @page live only while this dialog
   // is open, so the app's other in-place printers (Z-report, floor plan) keep
@@ -273,13 +296,29 @@ export function MenuSheetModal({
   }, [open]);
 
   const categoryOrder = (org.settings as { categoryOrder?: string[] } | null)?.categoryOrder;
+
+  // Only worth offering the toggle at all when there's something for it to
+  // do — a manager with no "___ Combos"-named category would just see a
+  // control that visibly does nothing, which is worse than not showing it.
+  const hasComboCategories = useMemo(
+    () => recipes.some((r) => r.is_active && isComboCategory((r.category || "").trim())),
+    [recipes],
+  );
+
   const { count, pageCount } = useMemo(() => {
-    const sections = buildSections(recipes, { withDescriptions, lang, categoryOrder });
+    const sections = buildSections(recipes, { withDescriptions, lang, categoryOrder, consolidateCombos });
     return {
-      count: sections.reduce((n, s) => n + s.items.length, 0),
+      // A consolidated combo row stands in for several real dishes — count
+      // the dishes it represents, not the printed row, so this summary
+      // ("N items available") still means what it says regardless of the
+      // toggle.
+      count: sections.reduce(
+        (n, s) => n + s.items.reduce((m, it) => m + (it.bases?.length ?? 1), 0),
+        0,
+      ),
       pageCount: paginate(sections).length,
     };
-  }, [recipes, withDescriptions, lang, categoryOrder]);
+  }, [recipes, withDescriptions, lang, categoryOrder, consolidateCombos]);
 
   // How much German the kitchen has actually written, so choosing Deutsch is
   // an informed choice rather than a surprise half-English sheet.
@@ -346,6 +385,32 @@ export function MenuSheetModal({
             ))}
           </div>
 
+          {hasComboCategories && (
+            <div className="flex gap-2">
+              {([false, true] as const).map((v) => (
+                <button
+                  key={String(v)}
+                  onClick={() => setConsolidateCombos(v)}
+                  className={cn(
+                    "flex-1 cursor-pointer rounded-xl border p-3 text-left transition-all",
+                    consolidateCombos === v
+                      ? "border-brand-400/60 bg-brand-400/10"
+                      : "border-line bg-white/[0.02] hover:border-zinc-500",
+                  )}
+                >
+                  <span className="block text-sm font-semibold text-white">
+                    {v ? "Combined combos" : "Separate combos"}
+                  </span>
+                  <span className="block text-xs text-zinc-500">
+                    {v
+                      ? "One line per curry, listing every base"
+                      : "Porotta, Rice, Pathiri… each printed separately"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* True-size pages scaled to fit the modal. The wrapper's height is
               the scaled height so the preview leaves no dead space below. */}
           <div className="max-h-[46vh] overflow-y-auto rounded-xl border border-line">
@@ -356,6 +421,7 @@ export function MenuSheetModal({
                   recipes={recipes}
                   withDescriptions={withDescriptions}
                   lang={lang}
+                  consolidateCombos={consolidateCombos}
                 />
               </div>
             </div>
@@ -380,6 +446,7 @@ export function MenuSheetModal({
               recipes={recipes}
               withDescriptions={withDescriptions}
               lang={lang}
+              consolidateCombos={consolidateCombos}
             />
           </div>,
           document.body,
