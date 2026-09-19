@@ -187,6 +187,8 @@ export interface Recipe {
   sold_out_until: string | null;
   /** null = inherit the org's default tax_rate. Set explicitly for e.g. drinks (19%) on an org whose default is the reduced food rate. */
   tax_rate: number | null;
+  /** null = regular (no dietary tag/symbol shown). */
+  diet: "veg" | "vegan" | null;
 }
 
 export interface RecipeIngredient {

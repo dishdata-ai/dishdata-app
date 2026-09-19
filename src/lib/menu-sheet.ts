@@ -18,6 +18,14 @@ export interface SheetItem {
   price: number | null;
   description: string | null;
   /**
+   * null = no dietary symbol shown. For a consolidated combo row, the
+   * curry's own tag — bases share one curry, so it's one tag for the whole
+   * row: the first non-null tag found among its base recipes wins, rather
+   * than requiring every base to agree, since a manager tagging just one of
+   * them shouldn't silently hide it from the printed row.
+   */
+  diet: "veg" | "vegan" | null;
+  /**
    * Present only for a consolidated combo row (see `consolidateCombos()`):
    * one entry per base this curry is offered with, in the source
    * categories' own encounter order. `price` above is always null when this
@@ -27,7 +35,12 @@ export interface SheetItem {
    * columnHeight() and every non-combo render path stay entirely unaware
    * this field exists.
    */
-  bases?: { base: string; price: number | null }[];
+  bases?: {
+    base: string;
+    price: number | null;
+    /** Pre-formatted "N pcs"/"N Stk." when the base has a known fixed serving count; kept separate from `base` so grouping/`comboBasesNote` lookups stay keyed on the plain base name. */
+    serving?: string;
+  }[];
 }
 
 export interface SheetSection {
@@ -44,6 +57,8 @@ export interface SheetSection {
    * Undefined/true for every ordinary (non-continued) section.
    */
   headingVisible?: boolean;
+  /** One-time explanatory line printed once under the heading (e.g. what the combo bases are). */
+  note?: string;
 }
 
 /** One printed page: two columns of whole (or deliberately carried-over) sections. */
@@ -102,6 +117,14 @@ const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 const COMBO_BASE_ROW_H = 4.4; // mm, one base+price line
 const COMBO_BASE_ROW_MARGIN = 2.5; // mm, row's own top/bottom breathing room
 
+// Placeholder wrap model for a section's one-time note (comboBasesNote) —
+// same column width as an item description, so borrowing its calibrated
+// chars-per-line is a reasonable starting point pending real-DOM measurement.
+const NOTE_CHARS_PER_LINE = 57;
+const NOTE_LINE_H = 3.9;
+const NOTE_BASE = 3.9; // mm, note's own top margin under the heading
+const NOTE_SAFETY = 2; // mm, covers a note landing right at a wrap boundary
+
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
 // Measured against the real rendered header (both org logo present and the
@@ -157,16 +180,81 @@ export const SHEET_STRINGS: Record<SheetLang, {
     stocks: "Available today while stocks last",
     footnote: "Please ask our team about allergens and dietary requirements.",
     continued: "(cont.)",
-    combos: "Combos",
+    combos: "Curry Combo",
   },
   de: {
     title: "Tageskarte",
     stocks: "Heute verfügbar, solange der Vorrat reicht",
     footnote: "Bitte sprechen Sie unser Team auf Allergene und Ernährungswünsche an.",
     continued: "(Fortsetzung)",
-    combos: "Kombis",
+    combos: "Curry-Kombi",
   },
 };
+
+/**
+ * Short, one-time explanations for the less familiar breads/bases a curry
+ * combo can come with — printed once under the "Curry Combo" heading (see
+ * `comboBasesNote`) rather than repeated on every row. Keyed lowercase,
+ * matched against whatever the recipe's own name actually starts with, so
+ * this also silently covers the German base word ("Reis" vs "Rice") without
+ * needing a separate translation lookup keyed by category. An unrecognised
+ * future base (a genuinely new bread the menu hasn't seen yet) just prints
+ * unexplained — no broken text, it simply isn't in this table yet.
+ */
+/**
+ * How many pieces of a bread a combo actually comes with — restaurant-set
+ * fact, not derived from anything else in the data (a curry's price doesn't
+ * say whether it ships with 2 porottas or 4 pathiris). Keyed lowercase like
+ * `BASE_DESCRIPTIONS`; a base with no entry here (rice, or a future base
+ * nobody's specified a count for yet) simply shows no piece count.
+ */
+const BASE_SERVING_COUNT: Record<string, number> = {
+  porotta: 2,
+  pathiri: 4,
+  idiappam: 3,
+};
+
+const SERVING_UNIT: Record<SheetLang, string> = { en: "pcs", de: "Stk." };
+
+const BASE_DESCRIPTIONS: Record<SheetLang, Record<string, string>> = {
+  en: {
+    porotta: "flaky, layered flatbread",
+    rice: "steamed rice",
+    pathiri: "thin rice crêpe",
+    idiappam: "steamed rice noodles",
+    puttu: "steamed rice-flour cylinder",
+  },
+  de: {
+    porotta: "knuspriges, mehrschichtiges Fladenbrot",
+    reis: "gedämpfter Reis",
+    pathiri: "hauchfeine Reis-Crêpe",
+    idiappam: "gedämpfte Reisnudeln",
+    puttu: "gedämpftes Reismehl-Röllchen",
+  },
+};
+
+/**
+ * Builds the one-line "Porotta (flaky, layered flatbread) · Rice (steamed
+ * rice)" note for a consolidated combo section, from whichever bases are
+ * actually present in it — so it only ever lists bases the menu currently
+ * offers, and grows or shrinks on its own as bases are added or removed.
+ * Undefined (no note printed) when nothing in the section has a known
+ * description yet.
+ */
+function comboBasesNote(items: SheetItem[], lang: SheetLang): string | undefined {
+  const seen = new Map<string, string>(); // lowercase key -> original-case label
+  for (const item of items) {
+    for (const { base } of item.bases ?? []) {
+      const key = base.toLowerCase();
+      if (!seen.has(key)) seen.set(key, base);
+    }
+  }
+  const dict = BASE_DESCRIPTIONS[lang];
+  const parts = [...seen.entries()]
+    .filter(([key]) => dict[key])
+    .map(([key, label]) => `${label} (${dict[key]})`);
+  return parts.length ? parts.join(" · ") : undefined;
+}
 
 export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">): boolean {
   return r.is_active && !isSoldOut(r);
@@ -210,8 +298,8 @@ const COMBO_NAME_PATTERN = /^(\S+)\s+(?:with|mit)\s+(.+)$/i;
  * here: staying visibly un-consolidated on the printed preview is a more
  * honest nudge to go fix the source recipe name than papering over it.
  */
-function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
-  const groups = new Map<string, { curry: string; bases: { base: string; price: number | null }[] }>();
+function consolidateComboItems(comboItems: SheetItem[], lang: SheetLang): SheetItem[] {
+  const groups = new Map<string, { curry: string; bases: NonNullable<SheetItem["bases"]>; diet: SheetItem["diet"] }>();
   const standalone: SheetItem[] = [];
 
   for (const item of comboItems) {
@@ -222,14 +310,18 @@ function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
     }
     const [, base, curry] = match;
     const key = curry.toLowerCase().trim();
-    if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [] });
-    groups.get(key)!.bases.push({ base, price: item.price });
+    if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [], diet: item.diet });
+    else if (!groups.get(key)!.diet && item.diet) groups.get(key)!.diet = item.diet;
+    const count = BASE_SERVING_COUNT[base.toLowerCase()];
+    const serving = count ? `${count} ${SERVING_UNIT[lang]}` : undefined;
+    groups.get(key)!.bases.push({ base, price: item.price, serving });
   }
 
-  const consolidated: SheetItem[] = [...groups.values()].map(({ curry, bases }) => ({
+  const consolidated: SheetItem[] = [...groups.values()].map(({ curry, bases, diet }) => ({
     name: curry,
     price: null,
     description: null,
+    diet,
     bases,
   }));
 
@@ -289,6 +381,7 @@ export function buildSections(
       // on a menu is worse than printing nothing at all.
       price: r.price > 0 ? r.price : null,
       description,
+      diet: r.diet ?? null,
     };
 
     if (consolidateCombos && isComboCategory(englishCategory)) {
@@ -323,12 +416,14 @@ export function buildSections(
   }
 
   if (comboItems.length) {
-    byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems));
+    byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems, lang));
   }
 
   return orderCategories(order, categoryOrder).map((englishCategory) => {
     const display = displayOf.get(englishCategory)!;
-    return { category: display, items: byCategory.get(englishCategory)! };
+    const items = byCategory.get(englishCategory)!;
+    const note = englishCategory === COMBOS_KEY ? comboBasesNote(items, lang) : undefined;
+    return { category: display, items, note };
   });
 }
 
@@ -348,8 +443,16 @@ function itemHeight(item: SheetItem): number {
   return h;
 }
 
+function noteHeight(note: string): number {
+  const lines = Math.max(1, Math.ceil(note.length / NOTE_CHARS_PER_LINE));
+  return NOTE_BASE + lines * NOTE_LINE_H + NOTE_SAFETY;
+}
+
 const sectionHeight = (s: SheetSection) =>
-  HEADING_H + s.items.reduce((h, i) => h + itemHeight(i), 0) + SECTION_GAP;
+  HEADING_H +
+  (s.note ? noteHeight(s.note) : 0) +
+  s.items.reduce((h, i) => h + itemHeight(i), 0) +
+  SECTION_GAP;
 
 /** Usable column height for the nth page (0-based), given which footer it reserves. */
 function columnHeight(pageIndex: number, footer: number): number {
@@ -420,7 +523,8 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // nothing in the section fits — see the loop below, which is the part
     // that actually decides what does.
     const smallestItemHeight = Math.min(...section.items.map(itemHeight));
-    const worthSplittingHere = remaining >= HEADING_H + smallestItemHeight + SECTION_GAP;
+    const noteH = section.note ? noteHeight(section.note) : 0;
+    const worthSplittingHere = remaining >= HEADING_H + noteH + smallestItemHeight + SECTION_GAP;
     if (used > 0 && !worthSplittingHere) {
       nextColumn();
       queue.unshift(section);
@@ -436,7 +540,7 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // even though several would have fit in the space that name couldn't.
     const head: SheetItem[] = [];
     const tail: SheetItem[] = [];
-    let h = HEADING_H;
+    let h = HEADING_H + noteH;
     for (const item of section.items) {
       // + SECTION_GAP: a split section still pays the same trailing gap a
       // whole one does once it's actually placed (see the `used +=` below),
@@ -474,7 +578,9 @@ function paginateOnce(sections: SheetSection[], fullFooterFrom: number): SheetPa
     // for.
     used += h + SECTION_GAP;
     crossedPage = false;
-    if (tail.length) queue.unshift({ ...section, items: tail, continued: true });
+    // note already printed once with `head` above — a continuation repeats
+    // the heading (see headingVisible) but not this, or "once" becomes twice.
+    if (tail.length) queue.unshift({ ...section, items: tail, continued: true, note: undefined });
   }
 
   if (page[0].length || page[1].length) pages.push(page);

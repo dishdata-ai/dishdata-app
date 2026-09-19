@@ -91,6 +91,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const [nameDe, setNameDe] = useState(recipe?.name_de ?? "");
   const [descriptionDe, setDescriptionDe] = useState(recipe?.description_de ?? "");
   const [categoryDe, setCategoryDe] = useState(recipe?.category_de ?? "");
+  const [diet, setDiet] = useState<"veg" | "vegan" | null>(recipe?.diet ?? null);
   const [translating, setTranslating] = useState(false);
   const blankRow = (): IngRow => ({
     key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "", unit: "", yield_pct: "100",
@@ -184,6 +185,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           name_de: nameDe.trim() || null,
           description_de: descriptionDe.trim() || null,
           category_de: categoryDe.trim() || null,
+          diet,
         });
         await replaceRecipeIngredients(org!.id, recipe!.id, ingredients);
         return recipe!.id;
@@ -193,6 +195,7 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
         description: description.trim() || null, tax_rate: taxRate.trim() === "" ? null : +taxRate,
         name_de: nameDe.trim() || null, description_de: descriptionDe.trim() || null,
         category_de: categoryDe.trim() || null,
+        diet,
         ingredients,
       };
       return createRecipe(org!.id, input);
@@ -247,6 +250,33 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
         Leave VAT blank to use the restaurant default ({org?.tax_rate ?? 0}%). In Germany drinks are usually 19% while
         food is 7% — set 19 on drink items.
       </p>
+
+      <Field label="Dietary symbol (shown on the printed menu &amp; public storefront)">
+        <div className="flex gap-2">
+          {(
+            [
+              { v: null, label: "Regular", symbol: null },
+              { v: "veg" as const, label: "Vegetarian", symbol: "🟢" },
+              { v: "vegan" as const, label: "Vegan", symbol: "🌱" },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={String(opt.v)}
+              type="button"
+              onClick={() => setDiet(opt.v)}
+              className={cn(
+                "flex-1 cursor-pointer rounded-xl border px-3 py-2 text-sm font-medium transition-all",
+                diet === opt.v
+                  ? "border-brand-400/60 bg-brand-400/10 text-white"
+                  : "border-line bg-white/[0.02] text-zinc-400 hover:border-zinc-500",
+              )}
+            >
+              {opt.symbol && <span className="mr-1.5">{opt.symbol}</span>}
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </Field>
 
       <Field label="Description (shown to customers on the menu)">
         <Textarea

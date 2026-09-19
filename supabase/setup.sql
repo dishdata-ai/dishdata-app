@@ -312,6 +312,8 @@ create table if not exists public.recipes (
   tax_rate numeric,
   is_active boolean not null default true,
   sold_out_until timestamptz,
+  -- null = regular (no symbol shown on the printed menu or public storefront).
+  diet text check (diet in ('veg', 'vegan')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   created_by uuid

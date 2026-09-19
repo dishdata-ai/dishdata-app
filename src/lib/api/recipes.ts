@@ -79,6 +79,7 @@ export interface NewRecipeInput {
   name_de?: string | null;
   description_de?: string | null;
   category_de?: string | null;
+  diet?: "veg" | "vegan" | null;
   ingredients: {
     name: string;
     qty_display: string;
@@ -107,6 +108,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
       name_de: input.name_de ?? null, description_de: input.description_de ?? null,
       category_de: input.category_de ?? null,
       image_url: null, is_active: true, sold_out_until: null, tax_rate: input.tax_rate,
+      diet: input.diet ?? null,
     };
     dRecipes.insert(recipe);
     for (const ing of input.ingredients) {
@@ -124,6 +126,7 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
       tax_rate: input.tax_rate,
       name_de: input.name_de ?? null, description_de: input.description_de ?? null,
       category_de: input.category_de ?? null,
+      diet: input.diet ?? null,
     })
     .select("id")
     .single();

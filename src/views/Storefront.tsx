@@ -12,6 +12,10 @@ import { cn, errorMessage, fmtNumber } from "@/lib/utils";
 import { toast } from "@/lib/toast";
 import { getRememberedEmail, rememberEmail } from "@/lib/storefront-identity";
 
+// Same symbols as the recipe editor's dietary toggle (src/views/Recipes.tsx)
+// and the printed menu sheet — one consistent icon for a tagged dish everywhere.
+const DIET_SYMBOL: Record<"veg" | "vegan", string> = { veg: "🟢", vegan: "🌱" };
+
 export default function Storefront({
   slug,
   tableName,
@@ -309,6 +313,9 @@ export default function Storefront({
 
       {/* Menu */}
       <main className="mx-auto max-w-3xl space-y-8 px-4 py-8">
+        {menu.recipes.some((r) => r.diet === "veg" || r.diet === "vegan") && (
+          <p className="-mt-2 text-xs text-zinc-500">{pick("🟢 Vegetarisch · 🌱 Vegan", "🟢 Vegetarian · 🌱 Vegan")}</p>
+        )}
         {categories.map((cat) => (
           <section key={cat} id={categoryId(cat)} className="scroll-mt-16">
             <h2 className="mb-3 font-display text-lg font-bold text-white">{categoryDisplay.get(cat) ?? cat}</h2>
@@ -338,7 +345,10 @@ export default function Storefront({
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-white">{name}</p>
+                        <p className="font-semibold text-white">
+                          {r.diet && <span className="mr-1">{DIET_SYMBOL[r.diet]}</span>}
+                          {name}
+                        </p>
                         {description && <p className="mt-0.5 text-xs text-zinc-500">{description}</p>}
                         <p className="mt-0.5 text-sm font-bold text-brand-300">{fmt(r.price, 2)}</p>
                       </div>

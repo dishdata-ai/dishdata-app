@@ -24,7 +24,7 @@ function recipe(fields: Partial<Recipe> & { name: string; category: string; pric
   return {
     id: `r${n}`, org_id: "org1", prep_minutes: 10, emoji: "🍛", image_url: null,
     is_active: true, created_at: new Date().toISOString(), created_by: null, sold_out_until: null,
-    description: null, name_de: null, description_de: null, category_de: null, tax_rate: null,
+    description: null, name_de: null, description_de: null, category_de: null, tax_rate: null, diet: null,
     ...fields,
   } as Recipe;
 }
@@ -41,10 +41,10 @@ const recipes: Recipe[] = [
   recipe({ name: "Rice with Kerala Beef Curry", category: "Rice Combos", price: 14.9 }),
   recipe({ name: "Pathiri with Kerala Beef Curry", category: "Pathiri Combos", price: 15.9 }),
   // German-named item — must match via "mit", not just "with".
-  recipe({ name: "Porotta mit Gobi Manchurian", category: "Porotta Combos", price: 11.5, name_de: "Porotta mit Gobi Manchurian" }),
+  recipe({ name: "Porotta mit Gobi Manchurian", category: "Porotta Combos", price: 11.5, name_de: "Porotta mit Gobi Manchurian", diet: "vegan" }),
   recipe({ name: "Rice mit Gobi Manchurian", category: "Rice Combos", price: 11.5 }),
   // No connector word at all — must fall back to standalone, not crash or vanish.
-  recipe({ name: "Porotta Special Veg", category: "Porotta Combos", price: 9.5 }),
+  recipe({ name: "Porotta Special Veg", category: "Porotta Combos", price: 9.5, diet: "veg" }),
   // Non-combo category — must be completely unaffected either way.
   recipe({ name: "Chai", category: "Beverages", price: 2.5 }),
 ];
@@ -65,20 +65,26 @@ check(
   `${consolidatedDishCount} vs ${totalActive}`,
 );
 
-check("toggle off: no 'Combos' section at all", !baseline.some((s) => s.category === "Combos"));
-const combos = consolidated.find((s) => s.category === "Combos");
-check("toggle on: 'Combos' section exists", !!combos);
+check("toggle off: no 'Curry Combo' section at all", !baseline.some((s) => s.category === "Curry Combo"));
+const combos = consolidated.find((s) => s.category === "Curry Combo");
+check("toggle on: 'Curry Combo' section exists", !!combos);
 check("non-combo category (Beverages) untouched", consolidated.some((s) => s.category === "Beverages" && s.items.length === 1));
 
 const beefCurry = combos?.items.find((it) => it.name === "Kerala Beef Curry") as SheetItem | undefined;
 check("'Kerala Beef Curry' consolidated across all 3 bases", beefCurry?.bases?.length === 3, JSON.stringify(beefCurry?.bases));
 check("'Kerala Beef Curry' bases carry their own price (Pathiri costs more)", beefCurry?.bases?.find((b) => b.base === "Pathiri")?.price === 15.9);
+check("Porotta base carries its known serving count", beefCurry?.bases?.find((b) => b.base === "Porotta")?.serving === "2 pcs", JSON.stringify(beefCurry?.bases));
+check("Pathiri base carries its known serving count", beefCurry?.bases?.find((b) => b.base === "Pathiri")?.serving === "4 pcs", JSON.stringify(beefCurry?.bases));
+check("Rice base has no serving count (not a piece-counted bread)", beefCurry?.bases?.find((b) => b.base === "Rice")?.serving === undefined);
+check("section note lists known base descriptions", !!combos?.note && /Porotta/.test(combos.note) && /Pathiri/.test(combos.note), combos?.note);
 
 const gobi = combos?.items.find((it) => it.name === "Gobi Manchurian") as SheetItem | undefined;
 check("German 'mit' connector matches the English 'with' one", gobi?.bases?.length === 2, JSON.stringify(gobi?.bases));
+check("consolidated row carries the curry's diet tag", gobi?.diet === "vegan", gobi?.diet ?? "undefined");
 
 const standalone = combos?.items.find((it) => it.name === "Porotta Special Veg");
 check("item with no connector word falls back standalone, not dropped", !!standalone && !(standalone as SheetItem).bases);
+check("standalone fallback item keeps its own diet tag", (standalone as SheetItem)?.diet === "veg");
 
 console.log("\n== Pagination stays overflow-safe with combo rows ==");
 // Same curry offered with every base at once (4), stressing the height

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 import { Modal, Button } from "@/components/ui";
 import {
-  buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory,
+  buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory, isAvailableToday,
   type SheetLang, type SheetPage, type SheetSection,
 } from "@/lib/menu-sheet";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,10 @@ import type { Org, Recipe } from "@/lib/api/database.types";
  */
 
 const SHEET_CLASS = "menu-print-root";
+
+// Same symbols as the recipe editor's dietary toggle (src/views/Recipes.tsx)
+// — a manager should see the exact icon they picked show up on the sheet.
+const DIET_SYMBOL: Record<"veg" | "vegan", string> = { veg: "🟢", vegan: "🌱" };
 
 function money(value: number, currency: string): string {
   try {
@@ -55,11 +59,19 @@ function Section({
           <div className="mt-[2mm] mb-[3mm] h-px w-full" style={{ background: ink, opacity: 0.35 }} />
         </>
       )}
+      {showHeading && section.note && (
+        <p className="mb-[3mm] text-[8pt] leading-snug text-zinc-500">
+          {section.note}
+        </p>
+      )}
       <ul>
         {section.items.map((item, i) => (
           <li key={i} className={cn(item.bases ? "mb-[2mm]" : item.description ? "mb-[2.4mm]" : "mb-[1.7mm]")}>
             <div className="flex items-baseline gap-2 text-[10.5pt] leading-tight">
-              <span className="text-zinc-800">{item.name}</span>
+              <span className="text-zinc-800">
+                {item.diet && <span className="mr-1">{DIET_SYMBOL[item.diet]}</span>}
+                {item.name}
+              </span>
               {item.price !== null && (
                 <>
                   <span className="min-w-[4mm] flex-1" />
@@ -81,7 +93,10 @@ function Section({
               <div className="mt-[0.8mm] space-y-[0.4mm]">
                 {item.bases.map((b, bi) => (
                   <div key={bi} className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
-                    <span className="text-zinc-600">{b.base}</span>
+                    <span className="text-zinc-600">
+                      {b.base}
+                      {b.serving && <span className="text-zinc-400"> · {b.serving}</span>}
+                    </span>
                     <span className="min-w-[4mm] flex-1" />
                     {b.price !== null && (
                       <span className="font-semibold whitespace-nowrap" style={{ color: ink }}>
@@ -219,10 +234,15 @@ export function MenuSheet({
     categoryOrder?: string[];
   };
   const tagline = settings.menuSheet?.tagline ?? "";
-  const footnote =
+  const baseFootnote =
     (lang === "de" ? settings.menuSheet?.footnote_de : undefined) ??
     settings.menuSheet?.footnote ??
     t.footnote;
+  // Only shown when at least one available dish actually carries a tag — an
+  // unused legend on a menu with no marked dishes would just be noise.
+  const hasDiet = recipes.some((r) => isAvailableToday(r) && (r.diet === "veg" || r.diet === "vegan"));
+  const dietLegend = hasDiet ? (lang === "de" ? "🟢 Vegetarisch · 🌱 Vegan" : "🟢 Vegetarian · 🌱 Vegan") : "";
+  const footnote = dietLegend ? `${baseFootnote}  ${dietLegend}` : baseFootnote;
 
   const pages = useMemo(
     () =>
