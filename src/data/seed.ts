@@ -297,6 +297,7 @@ export function buildSeed(orgId: string): SeedBundle {
     is_partner_task: false, assignee_user_id: null, effort: 1, category: null,
     checklist: [], links: [],
     position, completed_at: null, created_at: daysAgo(1),
+    assigned_role: null, is_daily: false, department: null,
   });
   const tasks = [
     task("Deep-clean walk-in fridge", "Monthly deep clean, log temperatures", "todo", "high", 1),

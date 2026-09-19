@@ -13,6 +13,8 @@ export type InvReason = "sale" | "purchase" | "waste" | "adjustment" | "count" |
 export type WasteReason = "spoiled" | "burnt" | "returned" | "overprep" | "other";
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
+export type StaffRole = "frontend" | "kitchen_lead" | "commi_kitchen" | "owner" | "admin" | "manager";
+export type Department = "front_of_house" | "kitchen" | "management";
 export type ReservationStatus = "booked" | "seated" | "completed" | "no_show" | "cancelled";
 export type PreorderStatus = "confirmed" | "cancelled";
 export type DeliveryStatus = "pending" | "assigned" | "picked_up" | "delivered" | "failed";
@@ -597,6 +599,12 @@ export interface Task {
   position: number;
   completed_at: string | null;
   created_at: string;
+  /** Staff role this task is assigned to (frontend, kitchen_lead, commi_kitchen) */
+  assigned_role: StaffRole | null;
+  /** Whether this is a daily recurring task */
+  is_daily: boolean;
+  /** Department grouping (front_of_house, kitchen, management) */
+  department: Department | null;
 }
 
 export interface TaskComment {

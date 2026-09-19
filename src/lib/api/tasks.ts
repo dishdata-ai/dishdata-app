@@ -34,6 +34,9 @@ export interface NewTaskInput {
   assignee_user_id?: string | null;
   effort?: number;
   category?: string | null;
+  assigned_role?: Task["assigned_role"];
+  is_daily?: boolean;
+  department?: Task["department"];
 }
 
 export async function createTask(orgId: string, input: NewTaskInput): Promise<void> {
@@ -42,15 +45,26 @@ export async function createTask(orgId: string, input: NewTaskInput): Promise<vo
     dTasks.insert({
       id: uid(), org_id: orgId, status: "todo", position: Date.now(),
       completed_at: null, created_at: new Date().toISOString(),
-      is_partner_task: false, assignee_user_id: null, effort: 1, category: null,
+      is_partner_task: input.is_partner_task ?? false, assignee_user_id: input.assignee_user_id ?? null,
+      effort: input.effort ?? 1, category: input.category ?? null,
       checklist: [], links: [],
+      assigned_role: input.assigned_role ?? null,
+      is_daily: input.is_daily ?? false,
+      department: input.department ?? null,
       ...input,
     });
     return;
   }
   const { error } = await getSupabase()
     .from("tasks")
-    .insert({ org_id: orgId, position: Date.now(), ...input });
+    .insert({
+      org_id: orgId,
+      position: Date.now(),
+      assigned_role: input.assigned_role ?? null,
+      is_daily: input.is_daily ?? false,
+      department: input.department ?? null,
+      ...input,
+    });
   if (error) throw error;
 }
 
