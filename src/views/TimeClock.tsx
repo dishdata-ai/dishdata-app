@@ -1,14 +1,55 @@
 import { useEffect, useMemo, useState } from "react";
-import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff, Pencil } from "lucide-react";
-import { Card, SectionTitle, StatCard, Badge, Button, Input, Field, Modal, EmptyState, PageSkeleton, Table } from "@/components/ui";
+import {
+  Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff, Pencil,
+  ChevronDown, ChevronRight,
+} from "lucide-react";
+import { Card, SectionTitle, StatCard, Badge, Button, Input, Field, Modal, EmptyState, PageSkeleton, Table, WeekTabs } from "@/components/ui";
 import { useEmployees, useTimeEntries, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { clockIn, clockOut, toggleBreak, workedSeconds, editTimeEntry } from "@/lib/api/timeclock";
-import { geofenceOf } from "@/lib/geo";
+import { dayKey, weekDays, weekLabel } from "@/lib/api/availability";
+import { geofenceOf, type Geofence } from "@/lib/geo";
 import { toast } from "@/lib/toast";
 import { cn, errorMessage } from "@/lib/utils";
-import type { TimeEntry } from "@/lib/api/database.types";
+import type { Employee, TimeEntry } from "@/lib/api/database.types";
+
+function timesheetWeekLabel(offset: number): string {
+  if (offset === 0) return "This week";
+  if (offset === -1) return "Last week";
+  return weekLabel(weekDays(offset));
+}
+
+/**
+ * Hours/cost/flags for one calendar week (Monday–Sunday), scoped to a set of
+ * employees — shared by the always-current overview cards (offset 0, fixed)
+ * and the browsable timesheet below (offset = whatever week is selected).
+ * Local day-keys, not raw ISO slicing — matches how Availability.tsx safely
+ * assigns an entry's clock-in to a calendar day.
+ */
+function statsForWeek(
+  entries: TimeEntry[],
+  employees: Employee[],
+  geofence: Geofence | null,
+  now: number,
+  offset: number,
+) {
+  const keys = new Set(weekDays(offset).map(dayKey));
+  const map = new Map<string, { seconds: number; cost: number; offSite: number; autoOut: number }>();
+  for (const e of entries) {
+    if (!keys.has(dayKey(new Date(e.clock_in)))) continue;
+    const emp = employees.find((x) => x.id === e.employee_id);
+    if (!emp) continue;
+    const secs = workedSeconds(e, now);
+    const prev = map.get(emp.id) ?? { seconds: 0, cost: 0, offSite: 0, autoOut: 0 };
+    prev.seconds += secs;
+    prev.cost += (secs / 3600) * emp.hourly_rate;
+    if (geofence && e.clock_in_distance_m != null && e.clock_in_distance_m > geofence.radiusM) prev.offSite += 1;
+    if (e.auto_clock_out) prev.autoOut += 1;
+    map.set(emp.id, prev);
+  }
+  return map;
+}
 
 /** <input type="datetime-local"> wants "YYYY-MM-DDTHH:mm" in LOCAL time, not the UTC ISO string we store. */
 function toLocalInput(iso: string): string {
@@ -114,6 +155,11 @@ export default function TimeClock() {
   // Wages and labor cost are manager+ only — staff shouldn't see coworkers' pay.
   const canSeeWages = role !== "staff";
   const [editing, setEditing] = useState<{ entry: TimeEntry; employeeName: string } | null>(null);
+  // The overview cards above always mean the actual current week; only the
+  // timesheet below is browsable, so paging through an old week never makes
+  // "hours right now" look like it changed.
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -131,26 +177,18 @@ export default function TimeClock() {
   // radius on every row just to handle the rare case where it did.
   const geofence = org ? geofenceOf(org) : null;
 
-  const weekStats = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 86400000;
-    const map = new Map<string, { seconds: number; cost: number; offSite: number; autoOut: number }>();
-    for (const e of entries) {
-      if (new Date(e.clock_in).getTime() < weekAgo) continue;
-      const emp = employees.find((x) => x.id === e.employee_id);
-      if (!emp) continue;
-      const secs = workedSeconds(e, now);
-      const prev = map.get(emp.id) ?? { seconds: 0, cost: 0, offSite: 0, autoOut: 0 };
-      prev.seconds += secs;
-      prev.cost += (secs / 3600) * emp.hourly_rate;
-      if (geofence && e.clock_in_distance_m != null && e.clock_in_distance_m > geofence.radiusM) prev.offSite += 1;
-      if (e.auto_clock_out) prev.autoOut += 1;
-      map.set(emp.id, prev);
-    }
-    return map;
-  }, [entries, employees, now, geofence]);
+  const currentWeekStats = useMemo(
+    () => statsForWeek(entries, employees, geofence, now, 0),
+    [entries, employees, geofence, now],
+  );
+  const weekStats = useMemo(
+    () => (weekOffset === 0 ? currentWeekStats : statsForWeek(entries, employees, geofence, now, weekOffset)),
+    [entries, employees, geofence, now, weekOffset, currentWeekStats],
+  );
+  const weekDayKeys = useMemo(() => new Set(weekDays(weekOffset).map(dayKey)), [weekOffset]);
 
-  const totalWeekCost = [...weekStats.values()].reduce((s, v) => s + v.cost, 0);
-  const totalWeekHours = [...weekStats.values()].reduce((s, v) => s + v.seconds, 0) / 3600;
+  const totalWeekCost = [...currentWeekStats.values()].reduce((s, v) => s + v.cost, 0);
+  const totalWeekHours = [...currentWeekStats.values()].reduce((s, v) => s + v.seconds, 0) / 3600;
 
   const doClockIn = async (employeeId: string) => {
     try {
@@ -175,7 +213,7 @@ export default function TimeClock() {
         <StatCard title="On the Clock" value={String(openEntries.length)} hint="right now" icon={Timer} />
         <StatCard title="Hours This Week" value={totalWeekHours.toFixed(1)} hint="tracked across the team" icon={Users} />
         {canSeeWages && (
-          <StatCard title="Labor Cost (7d)" value={fmt(totalWeekCost)} hint="from tracked hours" icon={BadgeDollarSign} />
+          <StatCard title="Labor Cost" value={fmt(totalWeekCost)} hint="this week" icon={BadgeDollarSign} />
         )}
       </div>
 
@@ -272,16 +310,26 @@ export default function TimeClock() {
       )}
 
       <Card>
-        <div className="border-b border-line p-4">
-          <h3 className="font-semibold text-white">This Week's Timesheet</h3>
-          <p className="text-xs text-zinc-500">{canSeeWages ? "Tracked hours and labor cost per person" : "Tracked hours per person"}</p>
+        <div className="space-y-3 border-b border-line p-4">
+          <div>
+            <h3 className="font-semibold text-white">Timesheet</h3>
+            <p className="text-xs text-zinc-500">
+              {canSeeWages ? "Tracked hours and labor cost per person" : "Tracked hours per person"} ·{" "}
+              {weekLabel(weekDays(weekOffset))}
+            </p>
+          </div>
+          <WeekTabs offsets={[0, -1, -2, -3]} value={weekOffset} onChange={setWeekOffset} label={timesheetWeekLabel} />
         </div>
         {weekStats.size === 0 ? (
-          <EmptyState icon={Timer} title="No hours tracked yet" hint="Clock someone in to start the timesheet." />
+          <EmptyState
+            icon={Timer}
+            title="No hours tracked"
+            hint={weekOffset === 0 ? "Clock someone in to start the timesheet." : "Nobody clocked in during this week."}
+          />
         ) : (
           <Table
             headers={[
-              "Employee", "Hours",
+              "", "Employee", "Hours",
               ...(canSeeWages ? ["Rate", "Labor Cost"] : []),
               "Shifts", "Flags",
               ...(isManager ? [""] : []),
@@ -289,17 +337,32 @@ export default function TimeClock() {
           >
             {employees
               .filter((e) => weekStats.has(e.id))
-              .map((emp) => {
+              .flatMap((emp) => {
                 const stat = weekStats.get(emp.id)!;
-                const weekEntries = entries.filter(
-                  (e) => e.employee_id === emp.id && new Date(e.clock_in).getTime() > Date.now() - 7 * 86400000,
-                );
-                const shifts = weekEntries.length;
-                // Most recent first — the one someone's most likely to need
-                // corrected right after noticing something's off.
-                const latestEntry = [...weekEntries].sort((a, b) => b.clock_in.localeCompare(a.clock_in))[0];
-                return (
+                const weekEntries = entries
+                  .filter((e) => e.employee_id === emp.id && weekDayKeys.has(dayKey(new Date(e.clock_in))))
+                  // Most recent first — what someone's most likely to want to check first.
+                  .sort((a, b) => b.clock_in.localeCompare(a.clock_in));
+                const isOpen = expanded.has(emp.id);
+
+                const summaryRow = (
                   <tr key={emp.id} className="hover:bg-white/[0.02]">
+                    <td className="px-2 py-3">
+                      <button
+                        onClick={() =>
+                          setExpanded((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(emp.id)) next.delete(emp.id);
+                            else next.add(emp.id);
+                            return next;
+                          })
+                        }
+                        className="cursor-pointer text-zinc-500 hover:text-white"
+                        title={isOpen ? "Hide shifts" : `Show ${weekEntries.length} shift${weekEntries.length > 1 ? "s" : ""}`}
+                      >
+                        {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+                    </td>
                     <td className="px-4 py-3 font-medium text-white">{emp.name}</td>
                     <td className="px-4 py-3 text-zinc-300">{(stat.seconds / 3600).toFixed(1)}h</td>
                     {canSeeWages && (
@@ -308,7 +371,7 @@ export default function TimeClock() {
                         <td className="px-4 py-3 font-medium text-zinc-200">{fmt(stat.cost, 2)}</td>
                       </>
                     )}
-                    <td className="px-4 py-3 text-zinc-400">{shifts}</td>
+                    <td className="px-4 py-3 text-zinc-400">{weekEntries.length}</td>
                     <td className="px-4 py-3">
                       {stat.offSite === 0 && stat.autoOut === 0 ? (
                         <span className="text-zinc-600">—</span>
@@ -329,9 +392,9 @@ export default function TimeClock() {
                     </td>
                     {isManager && (
                       <td className="px-4 py-3 text-right">
-                        {latestEntry && (
+                        {weekEntries[0] && (
                           <button
-                            onClick={() => setEditing({ entry: latestEntry, employeeName: emp.name })}
+                            onClick={() => setEditing({ entry: weekEntries[0], employeeName: emp.name })}
                             className="cursor-pointer text-zinc-500 hover:text-white"
                             title="Fix their most recent shift"
                           >
@@ -342,6 +405,69 @@ export default function TimeClock() {
                     )}
                   </tr>
                 );
+
+                if (!isOpen) return [summaryRow];
+
+                // Expanded: every individual shift that week, each editable on
+                // its own — not just the one the quick pencil above reaches.
+                const detailRows = weekEntries.map((e) => {
+                  const off = geofence && e.clock_in_distance_m != null && e.clock_in_distance_m > geofence.radiusM;
+                  const d = new Date(e.clock_in);
+                  return (
+                    <tr key={e.id} className="bg-white/[0.015] text-xs">
+                      <td className="px-2 py-2" />
+                      <td className="px-4 py-2 pl-8 text-zinc-400">
+                        {d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+                      </td>
+                      <td className="px-4 py-2 text-zinc-300">
+                        {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}–
+                        {e.clock_out
+                          ? new Date(e.clock_out).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+                          : "open"}
+                        {e.break_seconds > 0 && (
+                          <span className="text-zinc-500"> · {Math.round(e.break_seconds / 60)}m break</span>
+                        )}
+                      </td>
+                      {canSeeWages && (
+                        <>
+                          <td className="px-4 py-2 text-zinc-600">—</td>
+                          <td className="px-4 py-2 text-zinc-400">{fmt((workedSeconds(e, now) / 3600) * emp.hourly_rate, 2)}</td>
+                        </>
+                      )}
+                      <td className="px-4 py-2 text-zinc-600">—</td>
+                      <td className="px-4 py-2">
+                        {off || e.auto_clock_out ? (
+                          <span className="inline-flex items-center gap-2 text-amber-300">
+                            {off && (
+                              <span className="inline-flex items-center gap-1">
+                                <MapPinOff className="h-3 w-3" /> off-site
+                              </span>
+                            )}
+                            {e.auto_clock_out && (
+                              <span className="inline-flex items-center gap-1">
+                                <MapPin className="h-3 w-3" /> auto
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-zinc-600">—</span>
+                        )}
+                      </td>
+                      {isManager && (
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            onClick={() => setEditing({ entry: e, employeeName: emp.name })}
+                            className="cursor-pointer text-zinc-500 hover:text-white"
+                            title="Fix this shift"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                });
+                return [summaryRow, ...detailRows];
               })}
           </Table>
         )}

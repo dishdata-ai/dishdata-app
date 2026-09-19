@@ -5,7 +5,11 @@ import type { TimeEntry } from "@/lib/api/database.types";
 
 const dEntries = demoTable<TimeEntry>("time_entries");
 
-export async function listTimeEntries(orgId: string, daysBack = 14): Promise<TimeEntry[]> {
+// 95 covers Time Clock's 4-week lookback (see WeekTabs there) plus Reports'
+// widest "Labor Hours" range (90 days) with room to spare — both silently
+// under-read against the old 14-day default; trivial data volume either way
+// for a small team's time_entries.
+export async function listTimeEntries(orgId: string, daysBack = 95): Promise<TimeEntry[]> {
   const cutoff = new Date(Date.now() - daysBack * 86400000).toISOString();
   if (!isSupabaseConfigured) {
     await demoDelay();

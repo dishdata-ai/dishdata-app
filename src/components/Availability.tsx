@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CalendarCheck, Check, Clock, Trash2, X } from "lucide-react";
-import { Card, Badge, Button, Input, Field, Modal } from "@/components/ui";
+import { Card, Badge, Button, Input, Field, Modal, WeekTabs } from "@/components/ui";
 import { useAvailability, useShifts, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
@@ -39,27 +39,6 @@ function weekTabLabel(offset: number): string {
   if (offset === 0) return "This week";
   if (offset === 1) return "Next week";
   return weekLabel(weekDays(offset));
-}
-
-function WeekTabs({ offsets, value, onChange }: { offsets: number[]; value: number; onChange: (o: number) => void }) {
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {offsets.map((o) => (
-        <button
-          key={o}
-          onClick={() => onChange(o)}
-          className={cn(
-            "cursor-pointer rounded-full px-3 py-1 text-xs font-semibold transition-all",
-            value === o
-              ? "border border-brand-400/40 bg-brand-500/15 text-brand-200"
-              : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
-          )}
-        >
-          {weekTabLabel(o)}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function DayRow({
@@ -202,7 +181,7 @@ export function AvailabilityPlanner({ employee }: { employee: Employee }) {
             {7 - unset.length}/7 days
           </Badge>
         </div>
-        <WeekTabs offsets={[1, 2, 3, 4]} value={offset} onChange={setOffset} />
+        <WeekTabs offsets={[1, 2, 3, 4]} value={offset} onChange={setOffset} label={weekTabLabel} />
       </div>
       <div className="divide-y divide-line/60">
         {days.map((d) => {
@@ -421,7 +400,7 @@ export function AvailabilityBoard({ employees }: { employees: Employee[] }) {
             </p>
           </div>
         </div>
-        <WeekTabs offsets={[0, 1, 2, 3, 4]} value={offset} onChange={setOffset} />
+        <WeekTabs offsets={[0, 1, 2, 3, 4]} value={offset} onChange={setOffset} label={weekTabLabel} />
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-sm">

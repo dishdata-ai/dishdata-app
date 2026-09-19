@@ -352,8 +352,11 @@ export function Table({
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b border-line text-xs tracking-wide text-zinc-500 uppercase">
-            {headers.map((h) => (
-              <th key={h} className="px-4 py-3 font-medium">
+            {headers.map((h, i) => (
+              // Index, not the label — two blank ("") header cells (an icon
+              // column plus a trailing actions column is a common pattern)
+              // would otherwise collide on the same key.
+              <th key={i} className="px-4 py-3 font-medium">
                 {h}
               </th>
             ))}
@@ -361,6 +364,44 @@ export function Table({
         </thead>
         <tbody className="divide-y divide-line/60">{children}</tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * A row of pill buttons paging through weeks by offset (0 = the current
+ * week; negative = past, positive = future — see weekDays() in
+ * lib/api/availability.ts, which supports both directions with no change).
+ * `label` renders each offset's text, since "This week"/"Next week"/"Last
+ * week" wording differs by direction and by feature.
+ */
+export function WeekTabs({
+  offsets,
+  value,
+  onChange,
+  label,
+}: {
+  offsets: number[];
+  value: number;
+  onChange: (offset: number) => void;
+  label: (offset: number) => string;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {offsets.map((o) => (
+        <button
+          key={o}
+          onClick={() => onChange(o)}
+          className={cn(
+            "cursor-pointer rounded-full px-3 py-1 text-xs font-semibold transition-all",
+            value === o
+              ? "border border-brand-400/40 bg-brand-500/15 text-brand-200"
+              : "border border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+          )}
+        >
+          {label(o)}
+        </button>
+      ))}
     </div>
   );
 }
