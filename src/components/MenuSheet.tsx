@@ -5,7 +5,11 @@ import { createPortal } from "react-dom";
 import { Printer } from "lucide-react";
 import { Modal, Button } from "@/components/ui";
 import {
+<<<<<<< HEAD
   buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory, isAvailableToday,
+=======
+  buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory,
+>>>>>>> origin/main
   type SheetLang, type SheetPage, type SheetSection,
 } from "@/lib/menu-sheet";
 import { cn } from "@/lib/utils";
@@ -93,10 +97,14 @@ function Section({
               <div className="mt-[0.8mm] space-y-[0.4mm]">
                 {item.bases.map((b, bi) => (
                   <div key={bi} className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
+<<<<<<< HEAD
                     <span className="text-zinc-600">
                       {b.base}
                       {b.serving && <span className="text-zinc-400"> · {b.serving}</span>}
                     </span>
+=======
+                    <span className="text-zinc-600">{b.base}</span>
+>>>>>>> origin/main
                     <span className="min-w-[4mm] flex-1" />
                     {b.price !== null && (
                       <span className="font-semibold whitespace-nowrap" style={{ color: ink }}>

@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
+<<<<<<< HEAD
 import {
   Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff, Pencil,
   ChevronDown, ChevronRight,
 } from "lucide-react";
 import { Card, SectionTitle, StatCard, Badge, Button, Input, Field, Modal, EmptyState, PageSkeleton, Table, WeekTabs } from "@/components/ui";
+=======
+import { Timer, Coffee, LogOut as ClockOutIcon, BadgeDollarSign, Users, MapPin, MapPinOff, Pencil } from "lucide-react";
+import { Card, SectionTitle, StatCard, Badge, Button, Input, Field, Modal, EmptyState, PageSkeleton, Table } from "@/components/ui";
+>>>>>>> origin/main
 import { useEmployees, useTimeEntries, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { clockIn, clockOut, toggleBreak, workedSeconds, editTimeEntry } from "@/lib/api/timeclock";
+<<<<<<< HEAD
 import { dayKey, weekDays, weekLabel } from "@/lib/api/availability";
 import { geofenceOf, type Geofence } from "@/lib/geo";
 import { toast } from "@/lib/toast";
@@ -50,6 +56,12 @@ function statsForWeek(
   }
   return map;
 }
+=======
+import { geofenceOf } from "@/lib/geo";
+import { toast } from "@/lib/toast";
+import { cn, errorMessage } from "@/lib/utils";
+import type { TimeEntry } from "@/lib/api/database.types";
+>>>>>>> origin/main
 
 /** <input type="datetime-local"> wants "YYYY-MM-DDTHH:mm" in LOCAL time, not the UTC ISO string we store. */
 function toLocalInput(iso: string): string {
@@ -155,11 +167,14 @@ export default function TimeClock() {
   // Wages and labor cost are manager+ only — staff shouldn't see coworkers' pay.
   const canSeeWages = role !== "staff";
   const [editing, setEditing] = useState<{ entry: TimeEntry; employeeName: string } | null>(null);
+<<<<<<< HEAD
   // The overview cards above always mean the actual current week; only the
   // timesheet below is browsable, so paging through an old week never makes
   // "hours right now" look like it changed.
   const [weekOffset, setWeekOffset] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+=======
+>>>>>>> origin/main
 
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -339,6 +354,7 @@ export default function TimeClock() {
               .filter((e) => weekStats.has(e.id))
               .flatMap((emp) => {
                 const stat = weekStats.get(emp.id)!;
+<<<<<<< HEAD
                 const weekEntries = entries
                   .filter((e) => e.employee_id === emp.id && weekDayKeys.has(dayKey(new Date(e.clock_in))))
                   // Most recent first — what someone's most likely to want to check first.
@@ -346,6 +362,16 @@ export default function TimeClock() {
                 const isOpen = expanded.has(emp.id);
 
                 const summaryRow = (
+=======
+                const weekEntries = entries.filter(
+                  (e) => e.employee_id === emp.id && new Date(e.clock_in).getTime() > Date.now() - 7 * 86400000,
+                );
+                const shifts = weekEntries.length;
+                // Most recent first — the one someone's most likely to need
+                // corrected right after noticing something's off.
+                const latestEntry = [...weekEntries].sort((a, b) => b.clock_in.localeCompare(a.clock_in))[0];
+                return (
+>>>>>>> origin/main
                   <tr key={emp.id} className="hover:bg-white/[0.02]">
                     <td className="px-2 py-3">
                       <button
@@ -392,9 +418,15 @@ export default function TimeClock() {
                     </td>
                     {isManager && (
                       <td className="px-4 py-3 text-right">
+<<<<<<< HEAD
                         {weekEntries[0] && (
                           <button
                             onClick={() => setEditing({ entry: weekEntries[0], employeeName: emp.name })}
+=======
+                        {latestEntry && (
+                          <button
+                            onClick={() => setEditing({ entry: latestEntry, employeeName: emp.name })}
+>>>>>>> origin/main
                             className="cursor-pointer text-zinc-500 hover:text-white"
                             title="Fix their most recent shift"
                           >
