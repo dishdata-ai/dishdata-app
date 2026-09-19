@@ -106,6 +106,13 @@ export default function TabsLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="loyalty"
+        options={{
+          title: "Loyalty",
+          tabBarIcon: ({ color, size }) => <Ionicons name="gift" color={color} size={size} />,
+        }}
+      />
     </Tabs>
   );
 }

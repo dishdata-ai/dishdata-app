@@ -17,6 +17,17 @@ export interface SheetItem {
   /** null when the item is priced on the day (drinks selection, market fish). */
   price: number | null;
   description: string | null;
+  /**
+   * Present only for a consolidated combo row (see `consolidateCombos()`):
+   * one entry per base this curry is offered with, in the source
+   * categories' own encounter order. `price` above is always null when this
+   * is set — there's no single number to show next to the name, each base
+   * has its own. Absent for every ordinary item, which is every item
+   * anywhere else in the codebase — paginate(), sectionHeight(),
+   * columnHeight() and every non-combo render path stay entirely unaware
+   * this field exists.
+   */
+  bases?: { base: string; price: number | null }[];
 }
 
 export interface SheetSection {
@@ -78,6 +89,15 @@ const DESC_SAFETY = 2; // mm, covers a description landing right at a wrap bound
 const ITEM_MARGIN_WITH_DESC = 2.4; // mm, li's mb-[2.4mm]
 const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
+// A consolidated combo row (see consolidateCombos()) is the curry name plus
+// one short, fixed-shape "base — price" line per base ("Porotta 14,90 €") —
+// not wrapped prose, so this is a flat per-line height like NAME_LINE_H, not
+// a char-count wrap model like DESC_LINE_H/DESC_CHARS_PER_LINE. Placeholder
+// until measured against real rendered DOM (see this file's git history for
+// how HEADER_FIRST and the item constants above were corrected the same way).
+const COMBO_BASE_ROW_H = 4.2; // mm, one base+price line
+const COMBO_BASE_ROW_MARGIN = 2; // mm, row's own top/bottom breathing room
+
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
 // Measured against the real rendered header (both org logo present and the
@@ -126,23 +146,90 @@ export const SHEET_STRINGS: Record<SheetLang, {
   stocks: string;
   footnote: string;
   continued: string;
+  combos: string;
 }> = {
   en: {
     title: "Today's Menu",
     stocks: "Available today while stocks last",
     footnote: "Please ask our team about allergens and dietary requirements.",
     continued: "(cont.)",
+    combos: "Combos",
   },
   de: {
     title: "Tageskarte",
     stocks: "Heute verfügbar, solange der Vorrat reicht",
     footnote: "Bitte sprechen Sie unser Team auf Allergene und Ernährungswünsche an.",
     continued: "(Fortsetzung)",
+    combos: "Kombis",
   },
 };
 
 export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">): boolean {
   return r.is_active && !isSoldOut(r);
+}
+
+const COMBO_CATEGORY = /combo/i;
+
+/**
+ * Whether a category should fold into the consolidated "Combos" section
+ * when that print option is on — detected purely from the category's own
+ * name (matches "Porotta Combos", "Rice & Curry Combo", and any future
+ * "___ Combos" category with zero configuration), the same naming-
+ * convention-as-behavior approach `LAST_BY_DEFAULT` already uses in
+ * category-order.ts. Exposed as its own predicate so an explicit
+ * include/exclude override can replace the regex later without touching
+ * any call site, if this convention ever stops being reliable.
+ */
+export function isComboCategory(category: string): boolean {
+  return COMBO_CATEGORY.test(category);
+}
+
+// Matches both languages' connector word — a German-named item reads
+// "Porotta mit Kerala Beef Curry", not "... with ...", and the sheet always
+// prints in one specific language at a time, so this has to catch whichever
+// one is actually on the page rather than only the English convention.
+const COMBO_NAME_PATTERN = /^(\S+)\s+(?:with|mit)\s+(.+)$/i;
+
+/**
+ * Collapse "{base} with {curry}" items from every combo category into one
+ * row per curry, each listing the bases it's offered with and their own
+ * price — "Porotta with Kerala Beef Curry" (14,90 €) and "Rice with Kerala
+ * Beef Curry" (14,90 €) become a single "Kerala Beef Curry" row listing
+ * both. Bases stay in the order their recipes were originally entered
+ * (Porotta before Rice, in the real data), not alphabetised.
+ *
+ * Grouped on the curry text alone — case-insensitive, trimmed, nothing
+ * fuzzier. A name that doesn't match "{base} with {curry}" at all, or a
+ * curry whose text doesn't exactly match another combo item's (a stray
+ * double space, say), prints as an ordinary standalone item instead of
+ * being merged — never silently dropped, and deliberately not "fixed up"
+ * here: staying visibly un-consolidated on the printed preview is a more
+ * honest nudge to go fix the source recipe name than papering over it.
+ */
+function consolidateComboItems(comboItems: SheetItem[]): SheetItem[] {
+  const groups = new Map<string, { curry: string; bases: { base: string; price: number | null }[] }>();
+  const standalone: SheetItem[] = [];
+
+  for (const item of comboItems) {
+    const match = COMBO_NAME_PATTERN.exec(item.name);
+    if (!match) {
+      standalone.push(item);
+      continue;
+    }
+    const [, base, curry] = match;
+    const key = curry.toLowerCase().trim();
+    if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [] });
+    groups.get(key)!.bases.push({ base, price: item.price });
+  }
+
+  const consolidated: SheetItem[] = [...groups.values()].map(({ curry, bases }) => ({
+    name: curry,
+    price: null,
+    description: null,
+    bases,
+  }));
+
+  return [...consolidated, ...standalone];
 }
 
 /**
@@ -160,7 +247,14 @@ export function buildSections(
     withDescriptions = false,
     lang = "en",
     categoryOrder,
-  }: { withDescriptions?: boolean; lang?: SheetLang; categoryOrder?: string[] | null } = {},
+    consolidateCombos = false,
+  }: {
+    withDescriptions?: boolean;
+    lang?: SheetLang;
+    categoryOrder?: string[] | null;
+    /** Print-only, opt-in: fold every combo category (see `isComboCategory`) into one consolidated "Combos" section instead of printing each separately. */
+    consolidateCombos?: boolean;
+  } = {},
 ): SheetSection[] {
   const order: string[] = []; // English category, for ordering
   const displayOf = new Map<string, string>(); // English category -> display label
@@ -171,10 +265,41 @@ export function buildSections(
   const de = lang === "de";
   const pick = (german: string | null, english: string) => (de && german ? german : english);
 
+  // Every combo-category item is diverted here instead of `byCategory`, then
+  // consolidated once after the loop — see consolidateComboItems(). Not a
+  // real category name (never collides with a recipe's own category), so
+  // it's safe to use as `order`'s and `displayOf`'s key too.
+  const COMBOS_KEY = "__combos__";
+  const comboItems: SheetItem[] = [];
+
   // Oldest-first, as a stable base order before categoryOrder is applied.
   for (const r of [...recipes].reverse()) {
     if (!isAvailableToday(r)) continue;
     const englishCategory = (r.category || "Weitere").trim();
+    const description = withDescriptions
+      ? pick(r.description_de, r.description || "").trim() || null
+      : null;
+    const item: SheetItem = {
+      name: pick(r.name_de, r.name).trim(),
+      // A zero price means "ask us" rather than "free" — printing "0.00 €"
+      // on a menu is worse than printing nothing at all.
+      price: r.price > 0 ? r.price : null,
+      description,
+    };
+
+    if (consolidateCombos && isComboCategory(englishCategory)) {
+      if (!byCategory.has(COMBOS_KEY)) {
+        byCategory.set(COMBOS_KEY, []);
+        // Fixed sheet furniture, not derived from any one source category's
+        // name — "Rice & Curry Combo" alone would misname the heading once
+        // Porotta/Pathiri/Idiappam are folded in too.
+        displayOf.set(COMBOS_KEY, SHEET_STRINGS[lang].combos);
+        order.push(COMBOS_KEY);
+      }
+      comboItems.push(item);
+      continue;
+    }
+
     if (!byCategory.has(englishCategory)) {
       byCategory.set(englishCategory, []);
       order.push(englishCategory);
@@ -190,16 +315,11 @@ export function buildSections(
     if (!displayOf.has(englishCategory) || (de && r.category_de && displayOf.get(englishCategory) === englishCategory)) {
       displayOf.set(englishCategory, display);
     }
-    const description = withDescriptions
-      ? pick(r.description_de, r.description || "").trim() || null
-      : null;
-    byCategory.get(englishCategory)!.push({
-      name: pick(r.name_de, r.name).trim(),
-      // A zero price means "ask us" rather than "free" — printing "0.00 €"
-      // on a menu is worse than printing nothing at all.
-      price: r.price > 0 ? r.price : null,
-      description,
-    });
+    byCategory.get(englishCategory)!.push(item);
+  }
+
+  if (comboItems.length) {
+    byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems));
   }
 
   return orderCategories(order, categoryOrder).map((englishCategory) => {
@@ -211,7 +331,11 @@ export function buildSections(
 function itemHeight(item: SheetItem): number {
   const nameLines = Math.max(1, Math.ceil(item.name.length / NAME_CHARS_PER_LINE));
   let h = nameLines * NAME_LINE_H;
-  if (item.description) {
+  if (item.bases) {
+    // Scales with base count on purpose — a flat estimate would be wrong
+    // precisely once bases go from 2 to 4, which is the reason this exists.
+    h += COMBO_BASE_ROW_H * item.bases.length + COMBO_BASE_ROW_MARGIN;
+  } else if (item.description) {
     const descLines = Math.max(1, Math.ceil(item.description.length / DESC_CHARS_PER_LINE));
     h += DESC_BASE + descLines * DESC_LINE_H + DESC_SAFETY + ITEM_MARGIN_WITH_DESC;
   } else {

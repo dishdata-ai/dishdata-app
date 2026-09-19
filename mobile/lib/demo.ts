@@ -14,6 +14,9 @@ import type {
   Customer,
   RestaurantTable,
   Delivery,
+  LoyaltyTier,
+  LoyaltyEarnRule,
+  LoyaltyReward,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -107,6 +110,7 @@ function seedInventory(): InventoryItem[] {
     purchase_cost: null,
     depreciation_months: null,
     asset_status: null,
+    grams_per_unit: null,
   });
   return [
     i("Salmon Fillet", "Seafood", 6, "kg", 12, 18.5),
@@ -301,6 +305,58 @@ function seedCustomers(): Customer[] {
   ];
 }
 
+function seedLoyaltyTiers(): LoyaltyTier[] {
+  const t = (name: string, threshold: number, sort: number, color: string, perks: LoyaltyTier["perks"]): LoyaltyTier => ({
+    id: uid(), org_id: DEMO_ORG.id, name, threshold, sort_order: sort, color, icon: null, perks, created_at: nowISO(),
+  });
+  return [
+    t("Bronze", 0, 0, "#cd7f32", { earn_multiplier: 1, birthday_bonus: 50 }),
+    t("Silver", 500, 1, "#c0c0c0", { earn_multiplier: 1.25, birthday_bonus: 100 }),
+    t("Gold", 2000, 2, "#ffd700", { earn_multiplier: 1.5, birthday_bonus: 200, free_delivery: true }),
+    t("Platinum", 5000, 3, "#e5e4e2", { earn_multiplier: 2, birthday_bonus: 500, free_delivery: true }),
+  ];
+}
+
+function seedLoyaltyEarnRules(): LoyaltyEarnRule[] {
+  const r = (
+    action_type: LoyaltyEarnRule["action_type"],
+    label: string,
+    description: string,
+    points: number,
+    verification: LoyaltyEarnRule["verification"],
+    repeatable: boolean,
+  ): LoyaltyEarnRule => ({
+    id: uid(), org_id: DEMO_ORG.id, action_type, label, description, points, enabled: true,
+    verification, repeatable, cooldown_days: null, config: {}, created_at: nowISO(),
+  });
+  return [
+    r("purchase", "Make a purchase", "Earn points on every order", 0, "auto", true),
+    r("signup", "Create an account", "Welcome bonus for joining", 100, "auto", false),
+    r("birthday", "Birthday treat", "Bonus points every birthday", 200, "auto", false),
+    r("newsletter", "Subscribe to the newsletter", "One-time bonus for opting in", 75, "honor", false),
+    r("review", "Leave a review", "Thank-you points for feedback", 40, "honor", true),
+  ];
+}
+
+function seedLoyaltyRewards(): LoyaltyReward[] {
+  const w = (
+    reward_type: LoyaltyReward["reward_type"],
+    label: string,
+    description: string,
+    cost_points: number,
+    value: number,
+    sort: number,
+  ): LoyaltyReward => ({
+    id: uid(), org_id: DEMO_ORG.id, reward_type, label, description, cost_points, value,
+    free_recipe_id: null, min_tier_id: null, enabled: true, image_url: null, sort_order: sort, created_at: nowISO(),
+  });
+  return [
+    w("amount_discount", "$5 off", "Take $5 off your next order", 500, 5, 0),
+    w("percent_discount", "10% off", "10% off your whole order", 800, 10, 1),
+    w("free_delivery", "Free delivery", "We cover delivery on your next order", 300, 0, 2),
+  ];
+}
+
 export interface DemoState {
   org: Org;
   me: Employee;
@@ -312,6 +368,9 @@ export interface DemoState {
   customers: Customer[];
   tables: RestaurantTable[];
   deliveries: Delivery[];
+  loyaltyTiers: LoyaltyTier[];
+  loyaltyEarnRules: LoyaltyEarnRule[];
+  loyaltyRewards: LoyaltyReward[];
   timeEntry: TimeEntry | null; // open shift, if clocked in
 }
 
@@ -329,6 +388,9 @@ function build(): DemoState {
     customers: seedCustomers(),
     tables: seedTables(),
     deliveries: seedDeliveries(orders),
+    loyaltyTiers: seedLoyaltyTiers(),
+    loyaltyEarnRules: seedLoyaltyEarnRules(),
+    loyaltyRewards: seedLoyaltyRewards(),
     timeEntry: {
       id: uid(),
       org_id: DEMO_ORG.id,

@@ -41,6 +41,7 @@ import {
 } from "@/lib/calc";
 import { toast } from "@/lib/toast";
 import { cn, fmtPct, uid } from "@/lib/utils";
+import { computeIngredientCost } from "@/lib/units";
 
 // Seed suggestions only — for a brand-new org with no recipes yet. Once
 // recipes exist, the filter pills and the new-recipe autocomplete are both
@@ -55,7 +56,14 @@ interface IngRow {
   cost: string;
   inventory_item_id: string;
   qty_numeric: string;
+  /** "" = same unit as the linked stock item. Ignored for unlinked lines. */
+  unit: string;
+  yield_pct: string;
 }
+
+// Recipe lines are written in whichever of these makes sense for the dish —
+// "" defers to the linked stock item's own unit (today's implicit behavior).
+const RECIPE_UNITS = ["", "g", "kg", "ml", "L", "pc"];
 
 function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null; onDone: () => void }) {
   const { org } = useOrg();
@@ -84,6 +92,9 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
   const [descriptionDe, setDescriptionDe] = useState(recipe?.description_de ?? "");
   const [categoryDe, setCategoryDe] = useState(recipe?.category_de ?? "");
   const [translating, setTranslating] = useState(false);
+  const blankRow = (): IngRow => ({
+    key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "", unit: "", yield_pct: "100",
+  });
   const [rows, setRows] = useState<IngRow[]>(
     recipe && recipe.ingredients.length
       ? recipe.ingredients.map((i) => ({
@@ -93,8 +104,10 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           cost: String(i.cost),
           inventory_item_id: i.inventory_item_id ?? "",
           qty_numeric: String(i.qty_numeric),
+          unit: i.unit ?? "",
+          yield_pct: String(i.yield_pct ?? 100),
         }))
-      : [{ key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "" }],
+      : [blankRow()],
   );
 
   const setRow = (key: string, patch: Partial<IngRow>) =>
@@ -119,7 +132,25 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
     }
   };
 
-  const plateCost = rows.reduce((s, r) => s + (+r.cost || 0), 0);
+  // A linked row's real cost — computed live from the stock item's current
+  // price, same formula the recipe list uses (src/lib/api/recipes.ts). Falls
+  // back to the typed Cost field when the units don't reconcile yet, so the
+  // preview never goes blank mid-edit.
+  const rowCost = (r: IngRow): number => {
+    if (!r.inventory_item_id) return +r.cost || 0;
+    const stock = (inventoryQ.data ?? []).find((i) => i.id === r.inventory_item_id);
+    if (!stock) return +r.cost || 0;
+    const live = computeIngredientCost({
+      qtyNumeric: +r.qty_numeric || 0,
+      ingredientUnit: r.unit || null,
+      yieldPct: +r.yield_pct || 100,
+      stockUnit: stock.unit,
+      stockUnitCost: stock.unit_cost,
+      gramsPerUnit: stock.grams_per_unit,
+    });
+    return live ?? (+r.cost || 0);
+  };
+  const plateCost = rows.reduce((s, r) => s + rowCost(r), 0);
   // Ingredients are optional: most of the menu is costed later (or never), and
   // requiring one made every ingredient-less recipe permanently uneditable —
   // the price or description could not be changed without inventing a line.
@@ -133,8 +164,13 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
           name: r.name.trim(),
           qty_display: r.qty_display,
           qty_numeric: +r.qty_numeric || 0,
-          cost: +r.cost || 0,
+          // Snapshot cost — only ever used as a fallback for an unlinked
+          // line, or a linked one whose units can't (yet) be reconciled.
+          // A linked line's real cost is computed live on every read.
+          cost: rowCost(r),
           inventory_item_id: r.inventory_item_id || null,
+          unit: r.inventory_item_id ? r.unit || null : null,
+          yield_pct: r.inventory_item_id ? +r.yield_pct || 100 : 100,
         }));
       if (isEdit) {
         await updateRecipe(org!.id, recipe!.id, {
@@ -259,7 +295,16 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
               <div className="flex gap-2">
                 <Input placeholder="Ingredient" value={r.name} onChange={(e) => setRow(r.key, { name: e.target.value })} />
                 <Input placeholder="Qty (e.g. 200g)" className="w-28" value={r.qty_display} onChange={(e) => setRow(r.key, { qty_display: e.target.value })} />
-                <Input placeholder="Cost" type="number" min="0" step="0.1" className="w-24" value={r.cost} onChange={(e) => setRow(r.key, { cost: e.target.value })} />
+                {r.inventory_item_id ? (
+                  <div
+                    className="flex w-24 shrink-0 items-center justify-end rounded-lg border border-line bg-white/[0.02] px-2.5 text-sm text-zinc-300"
+                    title="Computed live from the linked stock item's current price"
+                  >
+                    {fmt(rowCost(r), 2)}
+                  </div>
+                ) : (
+                  <Input placeholder="Cost" type="number" min="0" step="0.1" className="w-24" value={r.cost} onChange={(e) => setRow(r.key, { cost: e.target.value })} />
+                )}
                 <button
                   onClick={() => setRows((prev) => prev.filter((x) => x.key !== r.key))}
                   disabled={rows.length === 1}
@@ -268,11 +313,11 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Select
                   value={r.inventory_item_id}
                   onChange={(e) => setRow(r.key, { inventory_item_id: e.target.value })}
-                  className="flex-1 text-xs"
+                  className="min-w-0 flex-1 text-xs"
                 >
                   <option value="">No stock link (cost only)</option>
                   {(inventoryQ.data ?? []).map((i) => (
@@ -282,22 +327,47 @@ function RecipeForm({ recipe, onDone }: { recipe?: RecipeWithIngredients | null;
                   ))}
                 </Select>
                 {r.inventory_item_id && (
-                  <Input
-                    placeholder="Stock used / plate"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="w-44 text-xs"
-                    value={r.qty_numeric}
-                    onChange={(e) => setRow(r.key, { qty_numeric: e.target.value })}
-                  />
+                  <>
+                    <Input
+                      placeholder="Stock used / plate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="w-32 text-xs"
+                      value={r.qty_numeric}
+                      onChange={(e) => setRow(r.key, { qty_numeric: e.target.value })}
+                    />
+                    <Select
+                      value={r.unit}
+                      onChange={(e) => setRow(r.key, { unit: e.target.value })}
+                      className="w-24 text-xs"
+                      title="Unit the quantity above is in — leave as stock unit if you're not sure"
+                    >
+                      {RECIPE_UNITS.map((u) => (
+                        <option key={u} value={u}>
+                          {u || "stock unit"}
+                        </option>
+                      ))}
+                    </Select>
+                    <Input
+                      placeholder="Yield %"
+                      type="number"
+                      min="1"
+                      max="100"
+                      step="1"
+                      className="w-20 text-xs"
+                      value={r.yield_pct}
+                      onChange={(e) => setRow(r.key, { yield_pct: e.target.value })}
+                      title="Usable share after trimming/peeling — 100 if none is lost"
+                    />
+                  </>
                 )}
               </div>
             </div>
           ))}
         </div>
         <button
-          onClick={() => setRows((prev) => [...prev, { key: uid(), name: "", qty_display: "", cost: "", inventory_item_id: "", qty_numeric: "" }])}
+          onClick={() => setRows((prev) => [...prev, blankRow()])}
           className="mt-2 inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-accent-400 hover:underline"
         >
           <Plus className="h-3.5 w-3.5" /> Add ingredient
