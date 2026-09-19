@@ -174,6 +174,7 @@ export const SHEET_STRINGS: Record<SheetLang, {
   footnote: string;
   continued: string;
   combos: string;
+  or: string;
 }> = {
   en: {
     title: "Today's Menu",
@@ -181,6 +182,7 @@ export const SHEET_STRINGS: Record<SheetLang, {
     footnote: "Please ask our team about allergens and dietary requirements.",
     continued: "(cont.)",
     combos: "Curry Combo",
+    or: "or",
   },
   de: {
     title: "Tageskarte",
@@ -188,6 +190,7 @@ export const SHEET_STRINGS: Record<SheetLang, {
     footnote: "Bitte sprechen Sie unser Team auf Allergene und Ernährungswünsche an.",
     continued: "(Fortsetzung)",
     combos: "Curry-Kombi",
+    or: "oder",
   },
 };
 
@@ -254,6 +257,29 @@ function comboBasesNote(items: SheetItem[], lang: SheetLang): string | undefined
     .filter(([key]) => dict[key])
     .map(([key, label]) => `${label} (${dict[key]})`);
   return parts.length ? parts.join(" · ") : undefined;
+}
+
+/**
+ * True when every base offered for a combo item costs the same — the common
+ * case (see `BASE_SERVING_COUNT`'s callers), where printing the identical
+ * price on every base's own line repeats a number with nothing new to say
+ * and reads ambiguously, like ordering both instead of choosing one. Only
+ * ever consulted for a `bases` array (length > 1 by construction — see
+ * `consolidateComboItems`), so no separate length check is needed here.
+ * `null` (price-on-request) only "matches" another `null` — "ask us" and a
+ * real price are genuinely different answers, not a coincidence to collapse.
+ */
+export function basesShareOnePrice(bases: NonNullable<SheetItem["bases"]>): boolean {
+  return bases.every((b) => b.price === bases[0].price);
+}
+
+/** "Porotta (2 pcs) or Rice" / "... oder ..." — only meaningful when basesShareOnePrice(). */
+export function joinBaseNames(bases: NonNullable<SheetItem["bases"]>, lang: SheetLang): string {
+  const labels = bases.map((b) => (b.serving ? `${b.base} (${b.serving})` : b.base));
+  const or = SHEET_STRINGS[lang].or;
+  if (labels.length < 2) return labels[0] ?? "";
+  if (labels.length === 2) return `${labels[0]} ${or} ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, ${or} ${labels[labels.length - 1]}`;
 }
 
 export function isAvailableToday(r: Pick<Recipe, "is_active" | "sold_out_until">): boolean {
@@ -433,7 +459,11 @@ function itemHeight(item: SheetItem): number {
   if (item.bases) {
     // Scales with base count on purpose — a flat estimate would be wrong
     // precisely once bases go from 2 to 4, which is the reason this exists.
-    h += COMBO_BASE_ROW_H * item.bases.length + COMBO_BASE_ROW_MARGIN;
+    // Equal-priced bases collapse onto one printed line (see
+    // basesShareOnePrice/joinBaseNames in MenuSheet.tsx), so that case costs
+    // the same one row height regardless of how many bases it lists.
+    const rows = basesShareOnePrice(item.bases) ? 1 : item.bases.length;
+    h += COMBO_BASE_ROW_H * rows + COMBO_BASE_ROW_MARGIN;
   } else if (item.description) {
     const descLines = Math.max(1, Math.ceil(item.description.length / DESC_CHARS_PER_LINE));
     h += DESC_BASE + descLines * DESC_LINE_H + DESC_SAFETY + ITEM_MARGIN_WITH_DESC;

@@ -6,6 +6,7 @@ import { Printer } from "lucide-react";
 import { Modal, Button } from "@/components/ui";
 import {
   buildSections, paginate, sheetDate, SHEET_STRINGS, isComboCategory, isAvailableToday,
+  basesShareOnePrice, joinBaseNames,
   type SheetLang, type SheetPage, type SheetSection,
 } from "@/lib/menu-sheet";
 import { cn } from "@/lib/utils";
@@ -37,11 +38,12 @@ function money(value: number, currency: string): string {
 }
 
 function Section({
-  section, currency, ink,
+  section, currency, ink, lang,
 }: {
   section: SheetSection;
   currency: string;
   ink: string;
+  lang: SheetLang;
 }) {
   // A continuation that landed on the same page as its head (next column,
   // no page turn) skips the heading entirely — "Salads" directly under
@@ -90,21 +92,38 @@ function Section({
               // A curry's base+price options, each its own line — data, not
               // prose, so it's set apart from a description (bolder, tighter)
               // rather than reusing that paragraph's italic-ish grey styling.
+              // When every base costs the same, that per-line price is a
+              // repeated number with nothing new to say, and two full-price
+              // lines read like ordering both rather than choosing one — so
+              // that case collapses onto a single "Porotta or Rice" line
+              // with one trailing price instead.
               <div className="mt-[0.8mm] space-y-[0.4mm]">
-                {item.bases.map((b, bi) => (
-                  <div key={bi} className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
-                    <span className="text-zinc-600">
-                      {b.base}
-                      {b.serving && <span className="text-zinc-400"> · {b.serving}</span>}
-                    </span>
+                {basesShareOnePrice(item.bases) ? (
+                  <div className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
+                    <span className="text-zinc-600">{joinBaseNames(item.bases, lang)}</span>
                     <span className="min-w-[4mm] flex-1" />
-                    {b.price !== null && (
+                    {item.bases[0].price !== null && (
                       <span className="font-semibold whitespace-nowrap" style={{ color: ink }}>
-                        {money(b.price, currency)}
+                        {money(item.bases[0].price, currency)}
                       </span>
                     )}
                   </div>
-                ))}
+                ) : (
+                  item.bases.map((b, bi) => (
+                    <div key={bi} className="flex items-baseline gap-2 pr-[6mm] text-[9pt] leading-tight">
+                      <span className="text-zinc-600">
+                        {b.base}
+                        {b.serving && <span className="text-zinc-400"> · {b.serving}</span>}
+                      </span>
+                      <span className="min-w-[4mm] flex-1" />
+                      {b.price !== null && (
+                        <span className="font-semibold whitespace-nowrap" style={{ color: ink }}>
+                          {money(b.price, currency)}
+                        </span>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </li>
@@ -115,7 +134,7 @@ function Section({
 }
 
 function Page({
-  page, org, ink, index, total, tagline, footnote, t,
+  page, org, ink, index, total, tagline, footnote, t, lang,
 }: {
   page: SheetPage;
   org: Org;
@@ -125,6 +144,7 @@ function Page({
   tagline: string;
   footnote: string;
   t: (typeof SHEET_STRINGS)[SheetLang];
+  lang: SheetLang;
 }) {
   const first = index === 0;
   const last = index === total - 1;
@@ -176,6 +196,7 @@ function Page({
                 section={s}
                 currency={org.currency}
                 ink={ink}
+                lang={lang}
               />
             ))}
           </div>
@@ -186,6 +207,7 @@ function Page({
                 section={s}
                 currency={org.currency}
                 ink={ink}
+                lang={lang}
               />
             ))}
           </div>
@@ -279,6 +301,7 @@ export function MenuSheet({
           tagline={tagline}
           footnote={footnote}
           t={t}
+          lang={lang}
         />
       ))}
     </>
