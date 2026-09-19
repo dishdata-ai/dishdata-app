@@ -89,14 +89,18 @@ const DESC_SAFETY = 2; // mm, covers a description landing right at a wrap bound
 const ITEM_MARGIN_WITH_DESC = 2.4; // mm, li's mb-[2.4mm]
 const ITEM_MARGIN_NO_DESC = 1.7; // mm, li's mb-[1.7mm]
 
-// A consolidated combo row (see consolidateCombos()) is the curry name plus
-// one short, fixed-shape "base — price" line per base ("Porotta 14,90 €") —
-// not wrapped prose, so this is a flat per-line height like NAME_LINE_H, not
-// a char-count wrap model like DESC_LINE_H/DESC_CHARS_PER_LINE. Placeholder
-// until measured against real rendered DOM (see this file's git history for
-// how HEADER_FIRST and the item constants above were corrected the same way).
-const COMBO_BASE_ROW_H = 4.2; // mm, one base+price line
-const COMBO_BASE_ROW_MARGIN = 2; // mm, row's own top/bottom breathing room
+// A consolidated combo row (see consolidateComboItems()) is the curry name
+// plus one short, fixed-shape "base — price" line per base ("Porotta
+// 14,90 €") — not wrapped prose, so this is a flat per-line height like
+// NAME_LINE_H, not a char-count wrap model like DESC_LINE_H/
+// DESC_CHARS_PER_LINE. Measured directly against the real rendered DOM (a
+// 4-base row): 0.8mm gap before the base list + N × 3.97mm per base line +
+// (N-1) × 0.4mm between lines + 2.0mm trailing margin — algebraically
+// exactly `2.4 + 4.37×N`. Rounded up a shade for the same reason every
+// other constant here is: ending a row early is invisible, overflowing one
+// is not.
+const COMBO_BASE_ROW_H = 4.4; // mm, one base+price line
+const COMBO_BASE_ROW_MARGIN = 2.5; // mm, row's own top/bottom breathing room
 
 const PAGE_H = 297;
 const PAD_Y = 22; // 12mm top + 10mm bottom
