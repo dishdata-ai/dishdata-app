@@ -26,7 +26,7 @@ import {
   createRecipe, deleteRecipe, updateRecipe, replaceRecipeIngredients, translateRecipe,
   type NewRecipeInput,
 } from "@/lib/api/recipes";
-import { uploadOrgAsset, updateOrg } from "@/lib/api/orgs";
+import { uploadOrgAsset, setCategoryOrder } from "@/lib/api/orgs";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { Languages } from "lucide-react";
 import {
@@ -511,7 +511,7 @@ function CategoryOrderModal({
   const save = async () => {
     setSaving(true);
     try {
-      await updateOrg(orgId, { settings: { ...orgSettings, categoryOrder: order } });
+      await setCategoryOrder(orgId, order);
       onSaved();
       toast.success("Category order saved", "Applies to the ordering page and printed menu");
       onClose();

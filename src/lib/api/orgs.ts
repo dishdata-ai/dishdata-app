@@ -91,6 +91,27 @@ export async function updateOrg(orgId: string, patch: Partial<Org>): Promise<voi
   if (error) throw error;
 }
 
+/**
+ * Saves the printed-menu / ordering-page category order only. Not just
+ * `updateOrg({ settings: {...} })` — the `orgs` row's RLS update policy is
+ * owner/admin only (it also gates business info, payment/TSE credentials,
+ * geofencing), which silently blocked a manager or partner from reordering
+ * categories even though the feature itself is meant for them (see
+ * CategoryOrderModal). This calls a narrowly-scoped RPC instead, so a
+ * manager/partner can save just this one field without the whole `orgs` row
+ * opening up to their write access.
+ */
+export async function setCategoryOrder(orgId: string, order: string[]): Promise<void> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    const org = demoOrgs.get(orgId);
+    demoOrgs.update(orgId, { settings: { ...(org?.settings as object | null), categoryOrder: order } });
+    return;
+  }
+  const { error } = await getSupabase().rpc("set_category_order", { _org: orgId, _order: order });
+  if (error) throw error;
+}
+
 /** Downscale an image to max 320px and return a Blob (webp). Keeps uploads + demo storage small. */
 async function resizeImage(file: File, max = 320): Promise<Blob> {
   const bitmap = await createImageBitmap(file);
