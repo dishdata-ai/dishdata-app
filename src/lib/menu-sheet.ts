@@ -445,7 +445,20 @@ export function buildSections(
     byCategory.set(COMBOS_KEY, consolidateComboItems(comboItems, lang));
   }
 
-  return orderCategories(order, categoryOrder).map((englishCategory) => {
+  const ordered = orderCategories(order, categoryOrder);
+  // The generated section has no entry in the saved category order, so it
+  // can land after even explicitly ordered desserts and drinks. Move it up
+  // before those closing sections while preserving every other category's order.
+  const comboIndex = ordered.indexOf(COMBOS_KEY);
+  const closingIndex = ordered.findIndex((category) =>
+    /dessert|sweet|beverage|drink|getr(ä|ae)nk|nachspeis|süß|suess/i.test(category),
+  );
+  if (comboIndex >= 0 && closingIndex >= 0 && comboIndex > closingIndex) {
+    ordered.splice(comboIndex, 1);
+    ordered.splice(closingIndex, 0, COMBOS_KEY);
+  }
+
+  return ordered.map((englishCategory) => {
     const display = displayOf.get(englishCategory)!;
     const items = byCategory.get(englishCategory)!;
     const note = englishCategory === COMBOS_KEY ? comboBasesNote(items, lang) : undefined;
