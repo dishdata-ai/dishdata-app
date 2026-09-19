@@ -291,19 +291,43 @@ export function buildSeed(orgId: string): SeedBundle {
     { id: uid(), org_id: orgId, po_number: "PO-1003", vendor_id: vid("Prime Cuts Co"), vendor_name: "Prime Cuts Co", status: "draft", expected_at: "TBD", total: 980, items_count: 4, created_at: daysAgo(0) },
   ];
 
-  const task = (title: string, description: string, status: Task["status"], priority: Task["priority"], position: number, partner?: string): Task => ({
+  const task = (
+    title: string,
+    description: string,
+    status: Task["status"],
+    priority: Task["priority"],
+    position: number,
+    partner?: string | null,
+    role?: Task["assigned_role"],
+    daily?: boolean,
+    dept?: Task["department"],
+  ): Task => ({
     id: uid(), org_id: orgId, title, description, status, priority,
     assignee_employee_id: null, partner_email: partner ?? null, due_date: null,
     is_partner_task: false, assignee_user_id: null, effort: 1, category: null,
     checklist: [], links: [],
     position, completed_at: null, created_at: daysAgo(1),
-    assigned_role: null, is_daily: false, department: null,
+    assigned_role: role ?? null, is_daily: daily ?? false, department: dept ?? null,
   });
   const tasks = [
     task("Deep-clean walk-in fridge", "Monthly deep clean, log temperatures", "todo", "high", 1),
     task("Update allergen chart", "New menu items need allergen labels", "todo", "medium", 2),
     task("Train new server on POS", "Onboarding for weekend hire", "in_progress", "medium", 1),
     task("Repair patio heater", "Facilities contractor visit", "todo", "low", 3, "facilities@partnerco.com"),
+    // Daily frontend tasks
+    task("Prepare drinks service", "Handle Coconut Thunder, Pina Colada, Lemonades with Naruneendi", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Prepare cocktails", "Prepare and serve all cocktails", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Pack main dishes", "Take beef curry, chicken curry, paneer butter masala, veg stew from bain-marie and pack", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Rice and heating", "Ensure rice is prepared and heated, ready to serve", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Check stock: drinks & mains", "Verify at least 5 portions of drinks (Coconut Thunder, Pina Colada, Lemonades) and main dishes in stock", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Check stock: cutlery & plates", "Verify enough cutlery, main plates, and glasses available", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Clean front area", "Clean front desk, tables, floors, toilets, and urinals", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Close till", "Close the till and complete end-of-day cash out", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    // Daily commi kitchen/kitchen helper tasks
+    task("Clean kitchen floors", "Sweep and mop all kitchen floors", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
+    task("Wash dishes", "Complete all dish washing and clean sink area", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
+    task("Check bain-marie stock", "Verify bain-marie has at least 5 portions of each main dish (beef curry, chicken curry, paneer butter masala, veg stew)", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
+    task("Check curry plates", "Ensure sufficient curry plates available for service", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
   ];
 
   const { orders, payments } = buildOrderHistory(orgId, recipes);

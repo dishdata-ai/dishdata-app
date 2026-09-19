@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   ScrollText,
   Sun,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/lib/api/database.types";
@@ -55,6 +56,7 @@ export const MODULES: ModuleDef[] = [
   { id: "orders", name: "Orders", path: "/orders", icon: ListOrdered, group: "Operate", blurb: "Full order history, search & receipts" },
   { id: "preorders", name: "Preorders", path: "/preorders", icon: CalendarClock, group: "Operate", blurb: "Event preorders & seating capacity" },
   { id: "kitchen", name: "Kitchen", path: "/kitchen", icon: Flame, group: "Operate", blurb: "Live ticket board for the line" },
+  { id: "daily-tasks", name: "Daily Tasks", path: "/daily-tasks", icon: ListChecks, group: "Operate", blurb: "Role-based daily checklists" },
   { id: "floor", name: "Floor & Reservations", path: "/floor", icon: LayoutGrid, group: "Operate", blurb: "Tables, seating and bookings" },
   { id: "recipes", name: "Recipes", path: "/recipes", icon: ChefHat, group: "Operate", blurb: "Plate costing and margins" },
   { id: "inventory", name: "Inventory", path: "/inventory", icon: Boxes, group: "Operate", blurb: "Stock, waste and par levels" },
