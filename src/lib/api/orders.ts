@@ -561,6 +561,36 @@ export async function setKitchenStatus(orgId: string, orderId: string, status: K
 }
 
 /**
+ * Mark one line of a ticket ready (or undo it). The ticket follows along:
+ * first ready line → Preparing, every line ready → Ready to Serve (which is
+ * what notifies service), un-marking a line pulls a Ready ticket back to
+ * Preparing. Returns the ticket's resulting kitchen status.
+ */
+export async function setLineReady(
+  orgId: string,
+  order: Order,
+  lineIndex: number,
+  ready: boolean,
+): Promise<KitchenStatus> {
+  const items = order.items.map((l, i) => (i === lineIndex ? { ...l, ready } : l));
+  const all = items.every((l) => l.ready);
+  const any = items.some((l) => l.ready);
+  let status = order.kitchen_status;
+  if (all) status = "ready";
+  else if (status === "ready") status = "preparing";
+  else if (any && status === "new") status = "preparing";
+  const patch = { items, kitchen_status: status };
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    dOrders.update(order.id, patch);
+    return status;
+  }
+  const { error } = await getSupabase().from("orders").update(patch).eq("id", order.id).eq("org_id", orgId);
+  if (error) throw error;
+  return status;
+}
+
+/**
  * Settle an open order (e.g. a dine-in tab where the waiter took the order and
  * the guest pays after eating). Records the payment(s) and flips status to paid.
  * Pass `tip` to add a gratuity at settle time — the order's tip/total are

@@ -314,6 +314,8 @@ export interface OrderLine {
   price: number;
   /** VAT rate snapshotted at checkout — what applied then, not the recipe's current setting. Missing on pre-0032 orders (treat as the org's rate). */
   tax_rate?: number;
+  /** Kitchen marked this line ready (item-by-item hand-over). Absent = not yet. */
+  ready?: boolean;
 }
 
 export interface Order {
