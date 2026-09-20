@@ -56,7 +56,7 @@ export const MODULES: ModuleDef[] = [
   { id: "orders", name: "Orders", path: "/orders", icon: ListOrdered, group: "Operate", blurb: "Full order history, search & receipts" },
   { id: "preorders", name: "Preorders", path: "/preorders", icon: CalendarClock, group: "Operate", blurb: "Event preorders & seating capacity" },
   { id: "kitchen", name: "Kitchen", path: "/kitchen", icon: Flame, group: "Operate", blurb: "Live ticket board for the line" },
-  { id: "daily-tasks", name: "Daily Tasks", path: "/daily-tasks", icon: ListChecks, group: "Operate", blurb: "Role-based daily checklists" },
+  { id: "dailytasks", name: "Daily Tasks", path: "/daily-tasks", icon: ListChecks, group: "Operate", blurb: "Role-based daily checklists" },
   { id: "floor", name: "Floor & Reservations", path: "/floor", icon: LayoutGrid, group: "Operate", blurb: "Tables, seating and bookings" },
   { id: "recipes", name: "Recipes", path: "/recipes", icon: ChefHat, group: "Operate", blurb: "Plate costing and margins" },
   { id: "inventory", name: "Inventory", path: "/inventory", icon: Boxes, group: "Operate", blurb: "Stock, waste and par levels" },
@@ -99,7 +99,7 @@ export const MODULE_GROUPS: ModuleGroup[] = ["Operate", "Grow", "Money", "People
  * modules show as off in Settings before this.
  */
 export const ALWAYS_ENABLED_MODULES = [
-  "dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders",
+  "dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders", "dailytasks",
 ] as const;
 
 export const moduleById = (id: string) => MODULES.find((m) => m.id === id);
@@ -109,8 +109,8 @@ export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   owner: "all",
   admin: "all",
   partner: "all",
-  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till"],
-  staff: ["myday", "pos", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks"],
+  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till", "dailytasks"],
+  staff: ["myday", "pos", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks", "dailytasks"],
   accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "till", "insights"],
   viewer: ["dashboard", "sales", "insights"],
 };

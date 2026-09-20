@@ -34,7 +34,8 @@ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import PartnerBoard from "@/views/PartnerBoard";
 import TaskDetail from "@/views/TaskDetail";
-import type { Task, TaskStatus, TaskPriority } from "@/lib/api/database.types";
+import { DUTY_ROLES, DUTY_LABELS } from "@/lib/api/duties";
+import type { Task, TaskStatus, TaskPriority, StaffRole } from "@/lib/api/database.types";
 
 const columns: { status: TaskStatus; title: string; tone: string }[] = [
   { status: "todo", title: "To Do", tone: "#22d3ee" },
@@ -59,6 +60,7 @@ function NewTaskForm({ onDone }: { onDone: () => void }) {
     assignee: "",
     partnerEmail: "",
     dueDate: "",
+    duty: "" as StaffRole | "",
   });
 
   const create = useMutation({
@@ -70,6 +72,7 @@ function NewTaskForm({ onDone }: { onDone: () => void }) {
         assignee_employee_id: form.assignee || null,
         partner_email: form.partnerEmail.trim() || null,
         due_date: form.dueDate || null,
+        assigned_role: form.duty || null,
       }),
     onSuccess: () => {
       invalidate("tasks");
@@ -114,6 +117,16 @@ function NewTaskForm({ onDone }: { onDone: () => void }) {
           ))}
         </Select>
       </Field>
+      <Field label="Or give it to a duty — whoever holds it gets the task">
+        <Select value={form.duty} onChange={(e) => setForm((f) => ({ ...f, duty: e.target.value as StaffRole | "" }))}>
+          <option value="">No duty</option>
+          {DUTY_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {DUTY_LABELS[r]}
+            </option>
+          ))}
+        </Select>
+      </Field>
       <Field label="Or delegate to an external contractor (email)">
         <Input
           type="email"
@@ -151,7 +164,8 @@ export default function Tasks() {
     if (id) setOpenTaskId(id);
   }, []);
 
-  const teamTasks = useMemo(() => (tasksQ.data ?? []).filter((t) => !t.is_partner_task), [tasksQ.data]);
+  // Daily checklists have their own page (Daily Tasks); keep the board for one-off work.
+  const teamTasks = useMemo(() => (tasksQ.data ?? []).filter((t) => !t.is_partner_task && !t.is_daily), [tasksQ.data]);
   const tasks = useMemo(
     () => teamTasks.filter((t) => !showPartnerOnly || t.partner_email),
     [teamTasks, showPartnerOnly],
@@ -356,6 +370,7 @@ export default function Tasks() {
                           {t.description && <p className="mt-1 line-clamp-2 text-xs text-zinc-500">{t.description}</p>}
                           <div className="mt-3 flex flex-wrap items-center gap-1.5">
                             <Badge tone={priorityTone[t.priority]} className="capitalize">{t.priority}</Badge>
+                            {t.assigned_role && <Badge tone="violet">{DUTY_LABELS[t.assigned_role]}</Badge>}
                             {assignee && (
                               <span
                                 className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-zinc-950"
@@ -464,6 +479,7 @@ export default function Tasks() {
                           <p className="text-[11px] text-zinc-500">
                             {t.status === "in_progress" ? "In progress" : t.status === "done" ? "Done" : "To do"}
                             {t.partner_email && " · contractor"}
+                            {t.assigned_role && ` · ${DUTY_LABELS[t.assigned_role]}`}
                             {(t.checklist ?? []).length > 0 && ` · ☑ ${(t.checklist ?? []).filter((c) => c.done).length}/${(t.checklist ?? []).length}`}
                             {t.due_date && (
                               <span className={cn(overdue && "font-semibold text-rose-soft")}>

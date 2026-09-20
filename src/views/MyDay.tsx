@@ -28,6 +28,7 @@ import {
   useEmployees,
   useTimeEntries,
   useTasks,
+  useDuties,
   useOrders,
   useReservations,
   useAvailability,
@@ -42,6 +43,8 @@ import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclo
 import { linkEmployeeToUser, setMyPin } from "@/lib/api/people";
 import { getStaffMealUsage } from "@/lib/api/orders";
 import { updateTask } from "@/lib/api/tasks";
+import { myDuties, isMyDutyTask, DUTY_LABELS } from "@/lib/api/duties";
+import { isDoneToday } from "@/lib/daily";
 import { toast } from "@/lib/toast";
 import { cn, errorMessage } from "@/lib/utils";
 import { getCurrentPosition, distanceMeters, geofenceOf, GeoError } from "@/lib/geo";
@@ -150,6 +153,7 @@ export function MyDayView() {
   const employeesQ = useEmployees();
   const entriesQ = useTimeEntries();
   const tasksQ = useTasks();
+  const dutiesQ = useDuties();
   const ordersQ = useOrders();
   const reservationsQ = useReservations();
   const availabilityQ = useAvailability();
@@ -188,18 +192,30 @@ export function MyDayView() {
     return { hours: seconds / 3600, earnings: (seconds / 3600) * me.hourly_rate, shifts };
   }, [entriesQ.data, me, now]);
 
-  // Employee tasks (roster assignment) + partner tasks assigned to this user directly.
+  // Duties I hold (frontend / head chef / commi) — every task on a duty is mine, daily or one-off.
+  const duties = useMemo(() => myDuties(dutiesQ.data ?? [], me, user?.id), [dutiesQ.data, me, user?.id]);
+
+  // Employee tasks (roster assignment), partner tasks assigned to this user directly,
+  // and one-off tasks given to a duty I hold. Daily checklists live on their own card below.
   const myTasks = useMemo(
     () =>
       (tasksQ.data ?? [])
         .filter(
           (t) =>
             t.status !== "done" &&
-            ((me && t.assignee_employee_id === me.id) || (user && t.assignee_user_id === user.id)),
+            !t.is_daily &&
+            ((me && t.assignee_employee_id === me.id) ||
+              (user && t.assignee_user_id === user.id) ||
+              isMyDutyTask(t, duties)),
         )
         .sort((a, b) => (a.priority === "high" ? -1 : b.priority === "high" ? 1 : 0)),
-    [tasksQ.data, me, user],
+    [tasksQ.data, me, user, duties],
   );
+
+  const myDaily = useMemo(() => {
+    const mineDaily = (tasksQ.data ?? []).filter((t) => t.is_daily && isMyDutyTask(t, duties));
+    return { total: mineDaily.length, left: mineDaily.filter((t) => !isDoneToday(t)).length };
+  }, [tasksQ.data, duties]);
 
   const nextWeekFilled = useMemo(() => {
     if (!me) return 0;
@@ -607,6 +623,25 @@ export function MyDayView() {
       </Card>
 
       <MyPinCard orgId={org!.id} employeeId={me.id} hasPin={!!me.pin} />
+
+      {/* Daily checklist for the duties I hold */}
+      {duties.size > 0 && moduleIds.has("dailytasks") && (
+        <Link href="/daily-tasks">
+          <Card className="flex items-center gap-3 p-4 transition-all hover:border-brand-400/40">
+            <div className="rounded-xl bg-gradient-to-br from-brand-500/20 to-accent-400/10 p-2.5">
+              <CheckCircle2 className="h-5 w-5 text-brand-300" />
+            </div>
+            <div>
+              <p className="font-semibold text-white">Today's checklist</p>
+              <p className="text-xs text-zinc-500">
+                {[...duties].map((d) => DUTY_LABELS[d]).join(" · ")} ·{" "}
+                {myDaily.left === 0 ? "all done" : `${myDaily.left} of ${myDaily.total} to do`}
+              </p>
+            </div>
+            <ArrowRight className="ml-auto h-4 w-4 text-zinc-600" />
+          </Card>
+        </Link>
+      )}
 
       {/* My tasks */}
       <Card>

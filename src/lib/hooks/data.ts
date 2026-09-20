@@ -17,6 +17,7 @@ import { listTimeEntries } from "@/lib/api/timeclock";
 import { listAvailability } from "@/lib/api/availability";
 import { listShifts } from "@/lib/api/shifts";
 import { listTasks } from "@/lib/api/tasks";
+import { listDuties } from "@/lib/api/duties";
 import { listMembers } from "@/lib/api/team";
 import { listPartnerProfiles, listKudos } from "@/lib/api/partners";
 import { listAcctInvoices, listAcctDocuments } from "@/lib/api/accounting";
@@ -58,6 +59,7 @@ export const useTimeEntries = () => useOrgQuery("time_entries", (id) => listTime
 export const useAvailability = () => useOrgQuery("staff_availability", listAvailability);
 export const useShifts = () => useOrgQuery("shifts", listShifts);
 export const useTasks = () => useOrgQuery("tasks", listTasks);
+export const useDuties = () => useOrgQuery("duty_assignments", listDuties);
 export const useMembers = () => useOrgQuery("members", listMembers);
 export const usePartnerProfiles = () => useOrgQuery("partner_profiles", listPartnerProfiles);
 export const useKudos = () => useOrgQuery("kudos", listKudos);

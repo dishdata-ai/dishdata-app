@@ -567,10 +567,28 @@ export interface StaffAvailability {
   updated_at: string;
 }
 
+export interface DutyAssignment {
+  id: string;
+  org_id: string;
+  duty: StaffRole;
+  /** Exactly one of employee_id / user_id is set (staff vs. partner/manager login). */
+  employee_id: string | null;
+  user_id: string | null;
+  created_at: string;
+}
+
 export interface ChecklistItem {
   id: string;
   text: string;
   done: boolean;
+}
+
+export interface TaskPhoto {
+  id: string;
+  url: string;
+  /** Who took it (display name at upload time). */
+  by: string | null;
+  at: string;
 }
 
 export interface TaskLink {
@@ -605,6 +623,12 @@ export interface Task {
   is_daily: boolean;
   /** Department grouping (front_of_house, kitchen, management) */
   department: Department | null;
+  /** "How it should look" reference photo shown to whoever does the task. */
+  example_photo_url: string | null;
+  /** Must attach a photo of the finished work before ticking done. */
+  requires_photo: boolean;
+  /** Photos of completed work; only today's count (see lib/daily.ts). */
+  proof_photos: TaskPhoto[];
 }
 
 export interface TaskComment {

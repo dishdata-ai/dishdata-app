@@ -1,5 +1,12 @@
+"use client";
+
+import { RequireModule } from "@/components/guards";
 import DailyTasks from "@/views/DailyTasks";
 
 export default function DailyTasksPage() {
-  return <DailyTasks />;
+  return (
+    <RequireModule id="dailytasks">
+      <DailyTasks />
+    </RequireModule>
+  );
 }

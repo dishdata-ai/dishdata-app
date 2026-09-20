@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { DollarSign, Percent, ShoppingCart, Receipt, Sparkles, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { MyDayView } from "@/views/MyDay";
+import OpsPulse from "@/components/OpsPulse";
 import {
   AreaChart,
   Area,
@@ -181,6 +182,8 @@ export default function Dashboard() {
         <StatCard title="Orders" value={String(stats.orderCount)} hint="completed" icon={ShoppingCart} trend={stats.ordersTrend} />
         <StatCard title="Avg Ticket" value={fmt(stats.avgTicket, 2)} hint="per order" icon={Receipt} trend={stats.avgTrend} />
       </div>
+
+      <OpsPulse />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="p-5">

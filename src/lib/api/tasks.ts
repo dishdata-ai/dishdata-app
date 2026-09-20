@@ -37,6 +37,7 @@ export interface NewTaskInput {
   assigned_role?: Task["assigned_role"];
   is_daily?: boolean;
   department?: Task["department"];
+  requires_photo?: boolean;
 }
 
 export async function createTask(orgId: string, input: NewTaskInput): Promise<void> {
@@ -51,6 +52,9 @@ export async function createTask(orgId: string, input: NewTaskInput): Promise<vo
       assigned_role: input.assigned_role ?? null,
       is_daily: input.is_daily ?? false,
       department: input.department ?? null,
+      example_photo_url: null,
+      requires_photo: input.requires_photo ?? false,
+      proof_photos: [],
       ...input,
     });
     return;

@@ -125,8 +125,8 @@ async function resizeImage(file: File, max = 320): Promise<Blob> {
   );
 }
 
-export async function uploadOrgAsset(orgId: string, file: File, path: string): Promise<string> {
-  const blob = await resizeImage(file);
+export async function uploadOrgAsset(orgId: string, file: File, path: string, maxSize = 320): Promise<string> {
+  const blob = await resizeImage(file, maxSize);
   if (!isSupabaseConfigured) {
     // Store as data URL in demo mode
     return new Promise((resolve, reject) => {
