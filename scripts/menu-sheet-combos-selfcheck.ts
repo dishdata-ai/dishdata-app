@@ -86,6 +86,15 @@ const standalone = combos?.items.find((it) => it.name === "Porotta Special Veg")
 check("item with no connector word falls back standalone, not dropped", !!standalone && !(standalone as SheetItem).bases);
 check("standalone fallback item keeps its own diet tag", (standalone as SheetItem)?.diet === "veg");
 
+console.log("\n== Diet tag on a mixed row: weakest claim wins ==");
+for (const order of [["vegan", "veg"], ["veg", "vegan"]] as const) {
+  const mixed = order.map((diet, i) =>
+    recipe({ name: `${i ? "Rice" : "Porotta"} with Mixed Curry`, category: i ? "Rice Combos" : "Porotta Combos", price: 10, diet }),
+  );
+  const row = buildSections(mixed, { consolidateCombos: true })[0]?.items[0] as SheetItem | undefined;
+  check(`order ${order.join("/")}: row shows veg, not vegan`, row?.diet === "veg", String(row?.diet));
+}
+
 console.log("\n== Pagination stays overflow-safe with combo rows ==");
 // Same curry offered with every base at once (4), stressing the height
 // estimate for the base-count-scaling branch specifically.

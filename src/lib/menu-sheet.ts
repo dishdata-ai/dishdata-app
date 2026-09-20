@@ -20,9 +20,9 @@ export interface SheetItem {
   /**
    * null = no dietary symbol shown. For a consolidated combo row, the
    * curry's own tag — bases share one curry, so it's one tag for the whole
-   * row: the first non-null tag found among its base recipes wins, rather
-   * than requiring every base to agree, since a manager tagging just one of
-   * them shouldn't silently hide it from the printed row.
+   * row: the weakest non-null tag among its base recipes (veg beats vegan),
+   * so the row never claims more than its least-strict base does, while an
+   * untagged base doesn't hide a tag a manager set on another one.
    */
   diet: "veg" | "vegan" | null;
   /**
@@ -337,7 +337,12 @@ function consolidateComboItems(comboItems: SheetItem[], lang: SheetLang): SheetI
     const [, base, curry] = match;
     const key = curry.toLowerCase().trim();
     if (!groups.has(key)) groups.set(key, { curry: curry.trim(), bases: [], diet: item.diet });
-    else if (!groups.get(key)!.diet && item.diet) groups.get(key)!.diet = item.diet;
+    else {
+      // Weakest claim wins: a row offering a vegetarian porotta and a vegan
+      // rice must not print as vegan. Untagged bases don't veto a tag.
+      const g = groups.get(key)!;
+      if (!g.diet || item.diet === "veg") g.diet = item.diet ?? g.diet;
+    }
     const count = BASE_SERVING_COUNT[base.toLowerCase()];
     const serving = count ? `${count} ${SERVING_UNIT[lang]}` : undefined;
     groups.get(key)!.bases.push({ base, price: item.price, serving });
