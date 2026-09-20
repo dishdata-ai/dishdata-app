@@ -1,25 +1,29 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { CheckCircle2, Circle, Clock } from "lucide-react";
+import { CheckCircle2, Circle, ChevronDown, Link2, Square, CheckSquare } from "lucide-react";
 import { SectionTitle, Card, Badge, EmptyState, PageSkeleton } from "@/components/ui";
-import { useTasks } from "@/lib/hooks/data";
+import { useTasks, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { updateTask } from "@/lib/api/tasks";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
-import type { Task, StaffRole } from "@/lib/api/database.types";
+import type { Task, StaffRole, ChecklistItem } from "@/lib/api/database.types";
+
+type Tone = "green" | "amber" | "rose" | "violet" | "cyan" | "neutral";
+
+const ROLE_ORDER: (StaffRole | null)[] = ["frontend", "kitchen_lead", "commi_kitchen", "manager", "admin", "owner", null];
 
 const ROLE_LABELS: Record<StaffRole, string> = {
   frontend: "Frontend",
-  kitchen_lead: "Kitchen Lead",
+  kitchen_lead: "Kitchen Lead / Head Chef",
   commi_kitchen: "Commi Kitchen / Kitchen Helper",
   owner: "Owner",
   admin: "Admin",
   manager: "Manager",
 };
 
-const ROLE_TONES: Record<StaffRole, "green" | "amber" | "rose" | "violet" | "cyan" | "neutral"> = {
+const ROLE_TONES: Record<StaffRole, Tone> = {
   frontend: "cyan",
   kitchen_lead: "amber",
   commi_kitchen: "violet",
@@ -28,129 +32,169 @@ const ROLE_TONES: Record<StaffRole, "green" | "amber" | "rose" | "violet" | "cya
   manager: "amber",
 };
 
+const roleLabel = (r: StaffRole | null) => (r ? ROLE_LABELS[r] : "Unassigned — decide who later");
+const roleTone = (r: StaffRole | null): Tone => (r ? ROLE_TONES[r] : "neutral");
+
+const isImageUrl = (url: string) => /\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(url);
+
+// Daily tasks reset without a cron job: completed_at doubles as "last touched",
+// and anything last touched before today reads as not done yet.
+const isToday = (iso: string | null) => !!iso && new Date(iso).toDateString() === new Date().toDateString();
+const isFresh = (t: Task) => isToday(t.completed_at);
+const isDone = (t: Task) => t.status === "done" && isFresh(t);
+const stepsToday = (t: Task): ChecklistItem[] =>
+  (t.checklist ?? []).map((c) => ({ ...c, done: isFresh(t) && c.done }));
+
 export default function DailyTasks() {
   const { org } = useOrg();
   const tasksQ = useTasks();
-  const [expandedRole, setExpandedRole] = useState<StaffRole | null>(null);
+  const invalidate = useInvalidate();
+  const [open, setOpen] = useState<Set<string>>(new Set());
 
-  const dailyTasks = useMemo(() => {
-    return (tasksQ.data ?? []).filter((t) => t.is_daily && !t.is_partner_task);
+  const groups = useMemo(() => {
+    const daily = (tasksQ.data ?? []).filter((t) => t.is_daily && !t.is_partner_task);
+    return ROLE_ORDER.map((role) => ({
+      role,
+      tasks: daily.filter((t) => t.assigned_role === role).sort((a, b) => a.position - b.position),
+    })).filter((g) => g.tasks.length > 0);
   }, [tasksQ.data]);
 
-  const tasksByRole = useMemo(() => {
-    const grouped = new Map<StaffRole | null, Task[]>();
-    dailyTasks.forEach((task) => {
-      const role = task.assigned_role;
-      if (!grouped.has(role)) grouped.set(role, []);
-      grouped.get(role)!.push(task);
-    });
-    return grouped;
-  }, [dailyTasks]);
-
-  const handleToggleTask = async (task: Task) => {
+  const save = async (task: Task, patch: Partial<Task>) => {
     try {
-      const newStatus = task.status === "done" ? "todo" : "done";
-      await updateTask(org!.id, task.id, { status: newStatus });
-      toast.success(newStatus === "done" ? "Task completed" : "Task reopened", task.title);
+      await updateTask(org!.id, task.id, patch);
+      invalidate("tasks");
     } catch (e) {
       toast.error("Could not update task", e instanceof Error ? e.message : "");
     }
   };
 
-  if (tasksQ.isLoading) return <PageSkeleton />;
+  const toggleTask = (task: Task) => {
+    const now = new Date().toISOString();
+    if (isDone(task)) {
+      save(task, { status: "todo", completed_at: now, checklist: stepsToday(task).map((c) => ({ ...c, done: false })) });
+    } else {
+      save(task, { status: "done", completed_at: now, checklist: stepsToday(task).map((c) => ({ ...c, done: true })) });
+    }
+  };
 
-  const roles = Array.from(tasksByRole.keys()).filter((r) => r !== null) as StaffRole[];
-  roles.sort();
+  const toggleStep = (task: Task, stepId: string) => {
+    const next = stepsToday(task).map((c) => (c.id === stepId ? { ...c, done: !c.done } : c));
+    save(task, {
+      checklist: next,
+      status: next.every((c) => c.done) ? "done" : "todo",
+      completed_at: new Date().toISOString(),
+    });
+  };
+
+  const toggleOpen = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  if (tasksQ.isLoading) return <PageSkeleton />;
 
   return (
     <div className="space-y-6">
       <SectionTitle
         title="Daily Tasks"
-        subtitle="Role-based daily checklists for staff to keep operations running smoothly"
+        subtitle="Role-based checklists that reset every day. Attach a “how it should look” photo to a task as a link on the Tasks board."
       />
 
-      {dailyTasks.length === 0 ? (
-        <EmptyState
-          icon={Clock}
-          title="No daily tasks yet"
-          hint="Create role-based daily checklists for your team"
-        />
+      {groups.length === 0 ? (
+        <EmptyState icon={CheckCircle2} title="No daily tasks yet" hint="Create tasks on the Tasks board and mark them as daily." />
       ) : (
         <div className="space-y-4">
-          {roles.map((role) => {
-            const roleTasks = tasksByRole.get(role) || [];
-            const isExpanded = expandedRole === role;
-            const completedCount = roleTasks.filter((t) => t.status === "done").length;
-
+          {groups.map(({ role, tasks }) => {
+            const done = tasks.filter(isDone).length;
             return (
-              <Card key={role} className="overflow-hidden">
-                <button
-                  onClick={() => setExpandedRole(isExpanded ? null : role)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-                >
-                  <div className="flex items-center gap-3 flex-1 text-left">
-                    <Badge tone={ROLE_TONES[role]}>
-                      {ROLE_LABELS[role]}
-                    </Badge>
+              <Card key={role ?? "unassigned"} className="overflow-hidden">
+                <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <Badge tone={roleTone(role)}>{roleLabel(role)}</Badge>
                     <span className="text-sm text-zinc-400">
-                      {completedCount} / {roleTasks.length} completed
+                      {done} / {tasks.length} done today
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-12 bg-zinc-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-green-500 transition-all"
-                        style={{ width: `${(completedCount / roleTasks.length) * 100}%` }}
-                      />
-                    </div>
-                    <svg
-                      className={cn("h-5 w-5 text-zinc-400 transition-transform", isExpanded && "rotate-180")}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                    </svg>
+                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full bg-brand-400 transition-all" style={{ width: `${(done / tasks.length) * 100}%` }} />
                   </div>
-                </button>
+                </div>
 
-                {isExpanded && (
-                  <div className="border-t border-zinc-700/50 divide-y divide-zinc-700/50">
-                    {roleTasks.map((task) => (
-                      <div
-                        key={task.id}
-                        className="px-4 py-3 flex items-start gap-3 hover:bg-white/[0.02] transition-colors"
-                      >
-                        <button
-                          onClick={() => handleToggleTask(task)}
-                          className="mt-0.5 flex-shrink-0 text-zinc-400 hover:text-white transition-colors"
-                        >
-                          {task.status === "done" ? (
-                            <CheckCircle2 className="h-5 w-5 text-green-500" />
-                          ) : (
-                            <Circle className="h-5 w-5" />
-                          )}
-                        </button>
-                        <div className="flex-1 min-w-0">
-                          <h4
-                            className={cn(
-                              "font-medium text-sm",
-                              task.status === "done" && "line-through text-zinc-500",
-                            )}
+                <div className="divide-y divide-line/60">
+                  {tasks.map((task) => {
+                    const steps = stepsToday(task);
+                    const links = task.links ?? [];
+                    const expandable = steps.length > 0 || links.length > 0;
+                    const expanded = open.has(task.id);
+                    const finished = isDone(task);
+                    return (
+                      <div key={task.id} className="px-4 py-3">
+                        <div className="flex items-start gap-3">
+                          <button
+                            onClick={() => toggleTask(task)}
+                            aria-label={finished ? "Mark not done" : "Mark done"}
+                            className="mt-0.5 shrink-0 cursor-pointer text-zinc-400 transition-colors hover:text-white"
                           >
-                            {task.title}
-                          </h4>
-                          {task.description && (
-                            <p className="text-xs text-zinc-400 mt-1">{task.description}</p>
-                          )}
+                            {finished ? <CheckCircle2 className="h-5 w-5 text-brand-400" /> : <Circle className="h-5 w-5" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <h4 className={cn("text-sm font-medium", finished && "text-zinc-500 line-through")}>{task.title}</h4>
+                            {task.description && <p className="mt-0.5 text-xs text-zinc-400">{task.description}</p>}
+                            {expandable && (
+                              <button
+                                onClick={() => toggleOpen(task.id)}
+                                className="mt-1.5 inline-flex cursor-pointer items-center gap-1 text-xs text-zinc-400 hover:text-white"
+                              >
+                                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")} />
+                                {steps.length > 0 && `${steps.filter((c) => c.done).length}/${steps.length} steps`}
+                                {steps.length > 0 && links.length > 0 && " · "}
+                                {links.length > 0 && `${links.length} reference${links.length > 1 ? "s" : ""}`}
+                              </button>
+                            )}
+                            {expanded && (
+                              <div className="mt-2 space-y-2">
+                                {steps.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    onClick={() => toggleStep(task, c.id)}
+                                    className="flex w-full cursor-pointer items-center gap-2 text-left text-sm text-zinc-300 hover:text-white"
+                                  >
+                                    {c.done ? <CheckSquare className="h-4 w-4 text-brand-400" /> : <Square className="h-4 w-4 text-zinc-500" />}
+                                    <span className={cn(c.done && "text-zinc-500 line-through")}>{c.text}</span>
+                                  </button>
+                                ))}
+                                {links.map((l) =>
+                                  isImageUrl(l.url) ? (
+                                    <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className="block w-fit">
+                                      <img src={l.url} alt={l.label} className="max-h-48 rounded-lg ring-1 ring-white/10" />
+                                      <span className="mt-1 block text-xs text-zinc-400">{l.label}</span>
+                                    </a>
+                                  ) : (
+                                    <a
+                                      key={l.id}
+                                      href={l.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="flex items-center gap-1.5 text-xs text-accent-400 hover:underline"
+                                    >
+                                      <Link2 className="h-3.5 w-3.5" /> {l.label}
+                                    </a>
+                                  ),
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <Badge tone={task.priority === "high" ? "rose" : task.priority === "medium" ? "amber" : "neutral"} className="shrink-0">
+                            {task.priority}
+                          </Badge>
                         </div>
-                        <Badge tone={task.priority === "high" ? "rose" : task.priority === "medium" ? "amber" : "neutral"} className="text-xs flex-shrink-0">
-                          {task.priority}
-                        </Badge>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    );
+                  })}
+                </div>
               </Card>
             );
           })}

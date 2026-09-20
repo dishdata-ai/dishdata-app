@@ -309,33 +309,70 @@ export function buildSeed(orgId: string): SeedBundle {
     position, completed_at: null, created_at: daysAgo(1),
     assigned_role: role ?? null, is_daily: daily ?? false, department: dept ?? null,
   });
+  let dailyPos = 100;
+  const daily = (
+    title: string,
+    description: string,
+    role: Task["assigned_role"],
+    dept: Task["department"],
+    priority: Task["priority"] = "medium",
+    steps: string[] = [],
+  ): Task => ({
+    ...task(title, description, "todo", priority, dailyPos++, null, role, true, dept),
+    checklist: steps.map((text) => ({ id: uid(), text, done: false })),
+  });
+  const mains = ["Beef curry", "Chicken curry", "Paneer butter masala", "Veg stew"];
+  const dailyTasks = (): Task[] => [
+    // Frontend — opening
+    daily("Front-of-house open check", "Lights, music, card terminal and till float ready", "frontend", "front_of_house", "high"),
+    daily("Guest area setup", "Wipe tables, set cutlery caddies, check takeaway packing stock (boxes, bags, lids)", "frontend", "front_of_house"),
+    // Frontend — service
+    daily("Prepare drinks", "Coconut Thunder, Pina Colada and lemonades with Naruneendi ready to serve", "frontend", "front_of_house", "high", ["Coconut Thunder", "Pina Colada", "Lemonades with Naruneendi"]),
+    daily("Prepare cocktails", "All cocktail ingredients, garnishes and glasses ready", "frontend", "front_of_house"),
+    daily("Pack main dishes", "Take mains from the bain-marie and pack for takeaway", "frontend", "front_of_house", "high", mains),
+    daily("Rice and heating", "Rice cooked and kept hot; heat dishes before serving", "frontend", "front_of_house", "high"),
+    daily("Check drink stock (5+ portions)", "Always at least 5 portions of each drink ready", "frontend", "front_of_house", "high", ["Coconut Thunder", "Pina Colada", "Lemonades with Naruneendi"]),
+    daily("Check cutlery, plates & glasses", "Enough cutlery, main plates and glasses at the front", "frontend", "front_of_house", "high", ["Cutlery", "Main plates", "Glasses"]),
+    daily("Check front inventory", "Enough of the front-line staples before service", "frontend", "front_of_house", "high", ["Porotta", "Coconut milk", "Oil", "Ketchup"]),
+    daily("Inventory in its proper place", "Every inventory item stored in its labelled location, easy for anyone to find", "frontend", "front_of_house"),
+    daily("Allergen & label check", "Allergen info and labels match today's dishes", "frontend", "front_of_house"),
+    // Frontend — cleaning
+    daily("Clean front desk & tables", "Front desk, tables and under the tables", "frontend", "front_of_house"),
+    daily("Clean floors", "Sweep and mop the guest area", "frontend", "front_of_house"),
+    daily("Clean guest toilets & urinals", "Toilets, urinals, sinks and floor", "frontend", "front_of_house", "high"),
+    daily("Check tissue & toilet paper", "Tissue and toilet paper stocked in every restroom", "frontend", "front_of_house"),
+    daily("Clean mirrors", "Front area and restroom mirrors", "frontend", "front_of_house", "low"),
+    // Frontend — closing
+    daily("Close till", "Count and close the till, complete the end-of-day cash out", "frontend", "front_of_house", "high"),
+    daily("Lock-up check", "Lights off, doors, windows and card terminal closed", "frontend", "front_of_house"),
+    // Kitchen lead / head chef
+    daily("Chiller & bain-marie temperature log", "Record every chiller, freezer and the bain-marie; flag anything out of range", "kitchen_lead", "kitchen", "high"),
+    daily("Cooked dish locations", "Each cooked dish is in its assigned chiller; note which chiller holds which item", "kitchen_lead", "kitchen", "high", mains),
+    daily("Label cooked dishes (FIFO)", "Date and label every cooked dish before it goes in the chiller", "kitchen_lead", "kitchen", "high"),
+    daily("Recipe check", "Every dish cooked to its recipe; recipes in DishData complete and current", "kitchen_lead", "kitchen"),
+    daily("Prep list for the day", "Set prep quantities per dish from recent sales", "kitchen_lead", "kitchen"),
+    daily("Delivery check", "Check incoming goods for quantity, damage and expiry before signing", "kitchen_lead", "kitchen"),
+    daily("Waste log", "Record what was thrown away and why", "kitchen_lead", "kitchen", "low"),
+    // Commi / kitchen helper
+    daily("Clean kitchen floors", "Sweep and mop all kitchen floors", "commi_kitchen", "kitchen", "high"),
+    daily("Wash dishes", "All dishes washed, sink area clean", "commi_kitchen", "kitchen", "high"),
+    daily("Check bain-marie stock (5+ portions)", "At least 5 portions of each main dish in the bain-marie", "commi_kitchen", "kitchen", "high", mains),
+    daily("Check curry plates", "Enough curry plates ready for service", "commi_kitchen", "kitchen", "high"),
+    daily("Hand-wash station check", "Soap, paper towels and hot water at every sink", "commi_kitchen", "kitchen", "low"),
+    daily("Bins and trash out", "Empty all bins, take waste out, replace liners", "commi_kitchen", "kitchen"),
+    daily("Equipment off", "Grill, stove, fryer and extractor off; gas closed", "commi_kitchen", "kitchen", "high"),
+    // Cleaning — assignee decided later. Attach a "how it should look" photo as a link on each task.
+    daily("Clean grill", "Grill surface and grates; match the reference photo", null, "kitchen", "high", ["Scrape grates", "Degrease surface", "Wipe outside"]),
+    daily("Clean stove", "Burners, hob and surrounding wall; match the reference photo", null, "kitchen", "high", ["Remove and wash burner caps", "Degrease hob", "Wipe wall and knobs"]),
+    daily("Clean work table between stations", "Work table in between stations; match the reference photo", null, "kitchen", "medium", ["Clear the table", "Scrub and sanitise", "Dry and reset"]),
+    daily("Clean employee toilet", "Toilet, sink, floor and supplies", null, "front_of_house", "medium"),
+  ];
   const tasks = [
     task("Deep-clean walk-in fridge", "Monthly deep clean, log temperatures", "todo", "high", 1),
     task("Update allergen chart", "New menu items need allergen labels", "todo", "medium", 2),
     task("Train new server on POS", "Onboarding for weekend hire", "in_progress", "medium", 1),
     task("Repair patio heater", "Facilities contractor visit", "todo", "low", 3, "facilities@partnerco.com"),
-    // Daily frontend tasks
-    task("Prepare drinks service", "Handle Coconut Thunder, Pina Colada, Lemonades with Naruneendi", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Prepare cocktails", "Prepare and serve all cocktails", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Pack main dishes", "Take beef curry, chicken curry, paneer butter masala, veg stew from bain-marie and pack", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Rice and heating", "Ensure rice is prepared and heated, ready to serve", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Check stock: drinks & mains", "Verify at least 5 portions of drinks (Coconut Thunder, Pina Colada, Lemonades) and main dishes in stock", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Check stock: cutlery & plates", "Verify enough cutlery, main plates, and glasses available", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Clean front area", "Clean front desk, tables, floors, toilets, and urinals", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    task("Check supplies: tissue & toilet paper", "Ensure tissue and toilet paper stocked in restrooms", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
-    task("Clean mirrors", "Clean and polish all mirrors in front area and restrooms", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
-    task("Check front inventory locations", "Verify porotta, coconut milk, oil, ketchup are in proper locations and easily accessible", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
-    task("Close till", "Close the till and complete end-of-day cash out", "todo", "high", 1, null, "frontend", true, "front_of_house"),
-    // Daily commi kitchen/kitchen helper tasks
-    task("Clean kitchen floors", "Sweep and mop all kitchen floors", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
-    task("Clean grill", "Deep clean grill surface and grates", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
-    task("Clean stove", "Wipe down stove surface and burners", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
-    task("Clean work tables", "Clean work tables and surfaces between stations", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
-    task("Wash dishes", "Complete all dish washing and clean sink area", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
-    task("Check bain-marie stock", "Verify bain-marie has at least 5 portions of each main dish (beef curry, chicken curry, paneer butter masala, veg stew)", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
-    task("Check curry plates", "Ensure sufficient curry plates available for service", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
-    task("Organize cooked dishes", "Verify proper location of cooked dishes - which cooler has which item", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
-    task("Clean employee toilet", "Clean and sanitize employee restroom", "todo", "medium", 2, null, "commi_kitchen", true, "kitchen"),
+    ...dailyTasks(),
   ];
 
   const { orders, payments } = buildOrderHistory(orgId, recipes);

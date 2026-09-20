@@ -69,7 +69,7 @@ export async function createTask(orgId: string, input: NewTaskInput): Promise<vo
 }
 
 export async function updateTask(orgId: string, taskId: string, patch: Partial<Task>): Promise<void> {
-  if (patch.status) {
+  if (patch.status && !("completed_at" in patch)) {
     patch.completed_at = patch.status === "done" ? new Date().toISOString() : null;
   }
   if (!isSupabaseConfigured) {
