@@ -322,12 +322,20 @@ export function buildSeed(orgId: string): SeedBundle {
     task("Check stock: drinks & mains", "Verify at least 5 portions of drinks (Coconut Thunder, Pina Colada, Lemonades) and main dishes in stock", "todo", "high", 1, null, "frontend", true, "front_of_house"),
     task("Check stock: cutlery & plates", "Verify enough cutlery, main plates, and glasses available", "todo", "high", 1, null, "frontend", true, "front_of_house"),
     task("Clean front area", "Clean front desk, tables, floors, toilets, and urinals", "todo", "high", 1, null, "frontend", true, "front_of_house"),
+    task("Check supplies: tissue & toilet paper", "Ensure tissue and toilet paper stocked in restrooms", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
+    task("Clean mirrors", "Clean and polish all mirrors in front area and restrooms", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
+    task("Check front inventory locations", "Verify porotta, coconut milk, oil, ketchup are in proper locations and easily accessible", "todo", "medium", 2, null, "frontend", true, "front_of_house"),
     task("Close till", "Close the till and complete end-of-day cash out", "todo", "high", 1, null, "frontend", true, "front_of_house"),
     // Daily commi kitchen/kitchen helper tasks
     task("Clean kitchen floors", "Sweep and mop all kitchen floors", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
+    task("Clean grill", "Deep clean grill surface and grates", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
+    task("Clean stove", "Wipe down stove surface and burners", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
+    task("Clean work tables", "Clean work tables and surfaces between stations", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
     task("Wash dishes", "Complete all dish washing and clean sink area", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
     task("Check bain-marie stock", "Verify bain-marie has at least 5 portions of each main dish (beef curry, chicken curry, paneer butter masala, veg stew)", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
     task("Check curry plates", "Ensure sufficient curry plates available for service", "todo", "high", 1, null, "commi_kitchen", true, "kitchen"),
+    task("Organize cooked dishes", "Verify proper location of cooked dishes - which cooler has which item", "todo", "high", 2, null, "commi_kitchen", true, "kitchen"),
+    task("Clean employee toilet", "Clean and sanitize employee restroom", "todo", "medium", 2, null, "commi_kitchen", true, "kitchen"),
   ];
 
   const { orders, payments } = buildOrderHistory(orgId, recipes);

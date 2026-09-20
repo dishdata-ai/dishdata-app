@@ -1,3 +1,5 @@
+"use client";
+
 import { useState, useMemo } from "react";
 import { CheckCircle2, Circle, Clock } from "lucide-react";
 import { SectionTitle, Card, Badge, EmptyState, PageSkeleton } from "@/components/ui";
