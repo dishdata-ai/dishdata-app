@@ -421,6 +421,43 @@ export interface Reservation {
   source: string;
 }
 
+// --- Catering (0061_catering_inquiries.sql) ----------------------------------
+// A request submitted from the public catering page. Distinct from an Order:
+// nothing here goes to the kitchen or takes payment — a human confirms date,
+// headcount and logistics, then rings it up separately once agreed.
+
+export interface CateringInquiryItem {
+  recipe_id: string;
+  name: string;
+  qty: number;
+  /** Snapshot of the price when they submitted — a later menu-price change must not reprice a pending request. */
+  unit_price: number;
+}
+
+export type CateringInquiryStatus = "new" | "contacted" | "confirmed" | "declined";
+
+export interface CateringInquiry {
+  id: string;
+  org_id: string;
+  guest_name: string;
+  phone: string;
+  email: string | null;
+  event_date: string | null;
+  headcount: number | null;
+  notes: string | null;
+  items: CateringInquiryItem[];
+  subtotal: number;
+  discount_pct: number;
+  status: CateringInquiryStatus;
+  created_at: string;
+}
+
+/** One spend threshold in `org.settings.cateringTiers` — e.g. "spend €300, get 10% off." */
+export interface CateringTier {
+  minSpend: number;
+  discountPct: number;
+}
+
 // --- Event preorders (0036_preorders.sql) ------------------------------------
 // A named preorder campaign (Onam Sadhya, Christmas...) and the orders placed
 // against it. Distinct from Reservation, which books a specific table.

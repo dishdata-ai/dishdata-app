@@ -25,6 +25,7 @@ import { listPayProfiles, listPayrollRuns } from "@/lib/api/payroll";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import { listChannels, listChannelOrders } from "@/lib/api/channels";
 import { listPreorderEvents, listPreorderOrders } from "@/lib/api/preorders";
+import { listCateringInquiries } from "@/lib/api/catering";
 
 function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
   const { org } = useOrg();
@@ -36,6 +37,7 @@ function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
 }
 
 export const useRecipes = () => useOrgQuery("recipes", listRecipes);
+export const useCateringInquiries = () => useOrgQuery("catering_inquiries", listCateringInquiries);
 export const useEventMenus = () => useOrgQuery("event_menus", listEventMenus);
 export const usePreorderEvents = () => useOrgQuery("preorder_events", listPreorderEvents);
 export const useInventory = () => useOrgQuery("inventory", listInventory);

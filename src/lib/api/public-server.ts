@@ -1,6 +1,6 @@
 import "server-only";
 import { createSupabaseServerClient } from "@/lib/supabase-server";
-import { publicCategoryOrder, type PublicMenu } from "@/lib/api/public";
+import { publicCategoryOrder, publicCateringTiers, type PublicMenu } from "@/lib/api/public";
 import type { Recipe } from "@/lib/api/database.types";
 
 /**
@@ -18,7 +18,11 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
     .maybeSingle();
   if (!orgRow) return null;
   const { settings, ...orgPublicFields } = orgRow;
-  const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
+  const org: PublicMenu["org"] = {
+    ...orgPublicFields,
+    category_order: publicCategoryOrder(settings),
+    catering_tiers: publicCateringTiers(settings),
+  };
 
   // An event menu explicitly shown on the website replaces the catalog with
   // just its own items (e.g. a tournament-only ordering page).

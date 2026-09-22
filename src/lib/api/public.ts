@@ -4,7 +4,9 @@ import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoNotification } from "@/lib/api/notifications";
-import type { Org, Recipe, Order, Reservation, EventMenu, EventMenuItem } from "@/lib/api/database.types";
+import type {
+  Org, Recipe, Order, Reservation, EventMenu, EventMenuItem, CateringInquiry, CateringInquiryItem, CateringTier,
+} from "@/lib/api/database.types";
 import { isSoldOut } from "@/lib/calc";
 import { computeTaxGroups, sumTax } from "@/lib/tax";
 
@@ -17,6 +19,8 @@ export interface PublicMenu {
      * this is the one field of it ever forwarded to the public menu.
      */
     category_order: string[] | null;
+    /** Spend-tier discounts for the catering page (see publicCateringTiers). */
+    catering_tiers: CateringTier[];
   };
   recipes: Recipe[];
 }
@@ -25,6 +29,28 @@ export interface PublicMenu {
 export function publicCategoryOrder(settings: unknown): string[] | null {
   const order = (settings as { categoryOrder?: unknown } | null)?.categoryOrder;
   return Array.isArray(order) ? order.filter((c): c is string => typeof c === "string") : null;
+}
+
+/**
+ * A restaurant's own catering spend-tier discounts, lifted out of
+ * `org.settings` the same deliberate way publicCategoryOrder() is — never
+ * the rest of settings. Starter tiers when the org hasn't set any yet, so
+ * the page has something sensible to show before a manager first edits it.
+ */
+const DEFAULT_CATERING_TIERS: CateringTier[] = [
+  { minSpend: 150, discountPct: 5 },
+  { minSpend: 300, discountPct: 10 },
+  { minSpend: 500, discountPct: 15 },
+];
+
+export function publicCateringTiers(settings: unknown): CateringTier[] {
+  const tiers = (settings as { cateringTiers?: unknown } | null)?.cateringTiers;
+  if (!Array.isArray(tiers)) return DEFAULT_CATERING_TIERS;
+  const valid = tiers.filter(
+    (t): t is CateringTier =>
+      !!t && typeof t === "object" && typeof (t as CateringTier).minSpend === "number" && typeof (t as CateringTier).discountPct === "number",
+  );
+  return valid.length ? valid.sort((a, b) => a.minSpend - b.minSpend) : DEFAULT_CATERING_TIERS;
 }
 
 /** Tournament-priced items are for in-restaurant/event sale via POS only — never on the public QR/online menu. */
@@ -36,6 +62,7 @@ const dOrders = demoTable<Order>("orders");
 const dReservations = demoTable<Reservation>("reservations");
 const dEventMenus = demoTable<EventMenu>("event_menus");
 const dEventMenuItems = demoTable<EventMenuItem>("event_menu_items");
+const dCateringInquiries = demoTable<CateringInquiry>("catering_inquiries");
 
 /**
  * Recipes belonging to ANY event menu (e.g. a tournament) are POS/event-only —
@@ -57,7 +84,11 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     const orgRow = dOrgs.list().find((o) => o.slug === slug);
     if (!orgRow) return null;
     const { settings, ...orgPublicFields } = orgRow;
-    const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
+    const org: PublicMenu["org"] = {
+      ...orgPublicFields,
+      category_order: publicCategoryOrder(settings),
+      catering_tiers: publicCateringTiers(settings),
+    };
 
     const websiteMenu = dEventMenus
       .list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
@@ -90,7 +121,11 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
   if (error) throw error;
   if (!orgRow) return null;
   const { settings, ...orgPublicFields } = orgRow;
-  const org: PublicMenu["org"] = { ...orgPublicFields, category_order: publicCategoryOrder(settings) };
+  const org: PublicMenu["org"] = {
+    ...orgPublicFields,
+    category_order: publicCategoryOrder(settings),
+    catering_tiers: publicCateringTiers(settings),
+  };
 
   // An event menu explicitly shown on the website replaces the catalog with
   // just its own items (e.g. a tournament-only ordering page).
@@ -229,6 +264,56 @@ export async function placePublicReservation(
     _party_size: partySize,
     _starts_at: startsAt,
     _note: note,
+  });
+  if (error) throw error;
+}
+
+export interface CateringInquiryInput {
+  guestName: string;
+  phone: string;
+  email: string | null;
+  eventDate: string | null;
+  headcount: number | null;
+  notes: string | null;
+  items: CateringInquiryItem[];
+  subtotal: number;
+  discountPct: number;
+}
+
+/**
+ * Submits a catering request — does NOT check out like placePublicOrder;
+ * nothing goes to the kitchen or takes payment. A human confirms date,
+ * headcount and logistics, same reasoning as placePublicReservation.
+ */
+export async function placeCateringInquiry(slug: string, input: CateringInquiryInput): Promise<void> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    const org = dOrgs.list().find((o) => o.slug === slug);
+    if (!org) throw new Error("Restaurant not found");
+    dCateringInquiries.insert({
+      id: uid(), org_id: org.id, guest_name: input.guestName, phone: input.phone, email: input.email,
+      event_date: input.eventDate, headcount: input.headcount, notes: input.notes, items: input.items,
+      subtotal: input.subtotal, discount_pct: input.discountPct, status: "new",
+      created_at: new Date().toISOString(),
+    });
+    pushDemoNotification(
+      org.id, "catering", `New catering request: ${input.guestName}`,
+      `${input.headcount ? `${input.headcount} guests · ` : ""}€${Math.round(input.subtotal)}${input.discountPct > 0 ? ` (${input.discountPct}% off)` : ""}`,
+      "recipes",
+    );
+    return;
+  }
+  const { error } = await getSupabase().rpc("place_catering_inquiry", {
+    _slug: slug,
+    _guest_name: input.guestName,
+    _phone: input.phone,
+    _email: input.email,
+    _event_date: input.eventDate,
+    _headcount: input.headcount,
+    _notes: input.notes,
+    _items: input.items,
+    _subtotal: input.subtotal,
+    _discount_pct: input.discountPct,
   });
   if (error) throw error;
 }

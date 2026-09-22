@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert, ArrowUpDown, ArrowUp, ArrowDown, GripVertical } from "lucide-react";
+import { Search, Plus, Clock, Flame, Trash2, ChefHat, ImagePlus, Pencil, Ban, CheckCircle2, EyeOff, Eye, FileText, TriangleAlert, ArrowUpDown, ArrowUp, ArrowDown, GripVertical, PartyPopper } from "lucide-react";
 import {
   Card,
   SectionTitle,
@@ -15,7 +15,7 @@ import {
   EmptyState,
   PageSkeleton,
 } from "@/components/ui";
-import { useRecipes, useInventory, useOrders, useInvalidate } from "@/lib/hooks/data";
+import { useRecipes, useInventory, useOrders, useInvalidate, useCateringInquiries } from "@/lib/hooks/data";
 import { EventMenusCard } from "@/components/EventMenus";
 import { MenuSheetModal } from "@/components/MenuSheet";
 import { useOrg } from "@/lib/hooks/useOrg";
@@ -27,6 +27,9 @@ import {
   type NewRecipeInput,
 } from "@/lib/api/recipes";
 import { uploadOrgAsset, setCategoryOrder } from "@/lib/api/orgs";
+import { publicCateringTiers } from "@/lib/api/public";
+import { setCateringInquiryStatus, setCateringTiers } from "@/lib/api/catering";
+import type { Org, CateringTier, CateringInquiryStatus } from "@/lib/api/database.types";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { Languages } from "lucide-react";
 import {
@@ -597,6 +600,196 @@ function CategoryOrderModal({
   );
 }
 
+const CATERING_STATUS_TONE: Record<CateringInquiryStatus, "amber" | "cyan" | "green" | "neutral"> = {
+  new: "amber", contacted: "cyan", confirmed: "green", declined: "neutral",
+};
+
+/**
+ * Two tabs sharing one modal: the requests a customer sent in from the
+ * public catering page, and the spend-tier discounts that page shows them.
+ * Kept together (rather than two separate buttons) because they're the same
+ * feature from opposite ends — a manager adjusting a discount almost always
+ * wants to glance at recent requests in the same sitting.
+ */
+function CateringModal({
+  open, onClose, org,
+}: {
+  open: boolean;
+  onClose: () => void;
+  org: Org;
+}) {
+  const fmt = useFmt();
+  const invalidate = useInvalidate();
+  const inquiriesQ = useCateringInquiries();
+  const inquiries = inquiriesQ.data ?? [];
+  const [tab, setTab] = useState<"requests" | "tiers">("requests");
+  const [tiers, setTiers] = useState<CateringTier[]>([]);
+  const [savingTiers, setSavingTiers] = useState(false);
+  const link = typeof window !== "undefined" ? `${window.location.origin}/r/${org.slug}/catering` : `/r/${org.slug}/catering`;
+
+  useEffect(() => {
+    if (open) setTiers(publicCateringTiers(org.settings));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      toast.success("Link copied", link);
+    } catch {
+      toast.error("Could not copy", "Copy the link manually instead");
+    }
+  };
+
+  const setStatus = async (id: string, status: CateringInquiryStatus) => {
+    try {
+      await setCateringInquiryStatus(id, status);
+      invalidate("catering_inquiries");
+    } catch (e) {
+      toast.error("Could not update", e instanceof Error ? e.message : "");
+    }
+  };
+
+  const saveTiers = async () => {
+    setSavingTiers(true);
+    try {
+      const clean = tiers
+        .filter((t) => t.minSpend > 0 && t.discountPct > 0)
+        .sort((a, b) => a.minSpend - b.minSpend);
+      await setCateringTiers(org.id, clean);
+      toast.success("Discount tiers saved", "Applies to the catering page immediately");
+    } catch (e) {
+      toast.error("Could not save", e instanceof Error ? e.message : "");
+    } finally {
+      setSavingTiers(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Catering" wide>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-line bg-white/[0.02] px-3 py-2.5">
+          <p className="min-w-0 truncate text-xs text-zinc-400">{link}</p>
+          <div className="flex shrink-0 gap-1.5">
+            <Button variant="ghost" onClick={copyLink}>Copy link</Button>
+            <a href={link} target="_blank" rel="noreferrer">
+              <Button variant="ghost">Preview</Button>
+            </a>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          {(
+            [
+              ["requests", `Requests${inquiries.filter((i) => i.status === "new").length ? ` (${inquiries.filter((i) => i.status === "new").length} new)` : ""}`],
+              ["tiers", "Discount Tiers"],
+            ] as const
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setTab(v)}
+              className={cn(
+                "flex-1 cursor-pointer rounded-xl border px-3 py-2 text-xs font-semibold transition-all",
+                tab === v
+                  ? "border-brand-400/60 bg-brand-400/10 text-white"
+                  : "border-line bg-white/[0.02] text-zinc-400 hover:border-zinc-500",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "requests" ? (
+          <div className="max-h-[28rem] space-y-2 overflow-y-auto">
+            {inquiries.length === 0 ? (
+              <p className="p-6 text-center text-xs text-zinc-500">
+                Nothing yet — share the link above and requests will show up here.
+              </p>
+            ) : (
+              inquiries.map((inq) => (
+                <div key={inq.id} className="rounded-xl border border-line bg-white/[0.02] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-white">{inq.guest_name}</p>
+                      <p className="text-xs text-zinc-500">
+                        {inq.phone}{inq.email ? ` · ${inq.email}` : ""}
+                        {inq.event_date ? ` · ${new Date(inq.event_date).toLocaleDateString()}` : ""}
+                        {inq.headcount ? ` · ${inq.headcount} guests` : ""}
+                      </p>
+                    </div>
+                    <Select
+                      value={inq.status}
+                      onChange={(e) => setStatus(inq.id, e.target.value as CateringInquiryStatus)}
+                      className="w-auto shrink-0 py-1 text-xs"
+                    >
+                      <option value="new">New</option>
+                      <option value="contacted">Contacted</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="declined">Declined</option>
+                    </Select>
+                  </div>
+                  {inq.items.length > 0 && (
+                    <ul className="mt-2 space-y-0.5 text-xs text-zinc-400">
+                      {inq.items.map((it, i) => (
+                        <li key={i}>{it.qty}× {it.name}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {inq.notes && <p className="mt-1.5 text-xs text-zinc-500 italic">&ldquo;{inq.notes}&rdquo;</p>}
+                  <div className="mt-2 flex items-center justify-between">
+                    <Badge tone={CATERING_STATUS_TONE[inq.status]}>{inq.status}</Badge>
+                    <p className="text-sm font-semibold text-white">
+                      {fmt(inq.subtotal * (1 - inq.discount_pct / 100), 2)}
+                      {inq.discount_pct > 0 && <span className="ml-1 text-xs text-zinc-500">({inq.discount_pct}% off)</span>}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-400">
+              Discounts unlock automatically as a customer's catering order grows — shown live on the catering page.
+            </p>
+            <div className="space-y-2">
+              {tiers.map((tier, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Field label="Spend over">
+                    <Input
+                      type="number" min="0" value={tier.minSpend}
+                      onChange={(e) => setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, minSpend: +e.target.value } : t)))}
+                    />
+                  </Field>
+                  <Field label="Discount %">
+                    <Input
+                      type="number" min="0" max="100" value={tier.discountPct}
+                      onChange={(e) => setTiers((prev) => prev.map((t, j) => (j === i ? { ...t, discountPct: +e.target.value } : t)))}
+                    />
+                  </Field>
+                  <button
+                    onClick={() => setTiers((prev) => prev.filter((_, j) => j !== i))}
+                    className="mt-5 cursor-pointer rounded-lg p-2 text-zinc-500 hover:text-rose-soft"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <Button variant="ghost" onClick={() => setTiers((prev) => [...prev, { minSpend: 0, discountPct: 0 }])}>
+              <Plus className="h-4 w-4" /> Add tier
+            </Button>
+            <Button className="w-full" disabled={savingTiers} onClick={saveTiers}>
+              {savingTiers ? "Saving…" : "Save Discount Tiers"}
+            </Button>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 export default function Recipes() {
   const { org, isManager, refresh } = useOrg();
   const fmt = useFmt();
@@ -610,6 +803,7 @@ export default function Recipes() {
   const [adding, setAdding] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [reorderOpen, setReorderOpen] = useState(false);
+  const [cateringOpen, setCateringOpen] = useState(false);
 
   const recipes = recipesQ.data ?? [];
   const popularity = useMemo(() => popularityScores(recipes, ordersQ.data ?? []), [recipes, ordersQ.data]);
@@ -737,6 +931,9 @@ export default function Recipes() {
             </Button>
             <Button variant="ghost" onClick={() => setSheetOpen(true)}>
               <FileText className="h-4 w-4" /> Today&rsquo;s Menu
+            </Button>
+            <Button variant="ghost" onClick={() => setCateringOpen(true)}>
+              <PartyPopper className="h-4 w-4" /> Catering
             </Button>
             <Button onClick={() => setAdding(true)}>
               <Plus className="h-4 w-4" /> New Recipe
@@ -1058,6 +1255,10 @@ export default function Recipes() {
           recipes={recipes}
           onSaved={refresh}
         />
+      )}
+
+      {org && (
+        <CateringModal open={cateringOpen} onClose={() => setCateringOpen(false)} org={org} />
       )}
     </div>
   );
