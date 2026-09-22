@@ -49,6 +49,28 @@ export async function listOrders(orgId: string, limit = 500): Promise<Order[]> {
   return data ?? [];
 }
 
+/**
+ * Ninety days of orders for the Kitchen Ops demand model. listOrders() is capped at the newest 500,
+ * which is only ~2–3 weeks for a busy kitchen; the model needs the full history to learn weekday patterns.
+ * Only the columns the model reads are fetched.
+ */
+export async function listKitchenOrders(orgId: string): Promise<Order[]> {
+  const since = new Date(Date.now() - 90 * 86400000).toISOString();
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    return dOrders.list({ org_id: orgId } as Partial<Order>).filter((o) => o.created_at >= since);
+  }
+  const { data, error } = await getSupabase()
+    .from("orders")
+    .select("id, org_id, order_number, order_type, guest_name, items, status, kitchen_status, kitchen_notes, source, created_at, kitchen_started_at, kitchen_ready_at, kitchen_served_at")
+    .eq("org_id", orgId)
+    .gte("created_at", since)
+    .order("created_at", { ascending: false })
+    .limit(5000);
+  if (error) throw error;
+  return (data ?? []) as unknown as Order[];
+}
+
 export async function listPayments(orgId: string, limit = 500): Promise<Payment[]> {
   if (!isSupabaseConfigured) {
     await demoDelay();
@@ -546,10 +568,20 @@ export async function setOrderStatus(
   if (error) throw error;
 }
 
+/** Demo mode has no DB trigger, so mirror stamp_kitchen_times() from migration 0057 here. */
+function demoKitchenStamps(order: Order | undefined, status: KitchenStatus): Partial<Order> {
+  const now = new Date().toISOString();
+  const out: Partial<Order> = {};
+  if (status !== "new" && !order?.kitchen_started_at) out.kitchen_started_at = now;
+  if ((status === "ready" || status === "served") && !order?.kitchen_ready_at) out.kitchen_ready_at = now;
+  if (status === "served" && !order?.kitchen_served_at) out.kitchen_served_at = now;
+  return out;
+}
+
 export async function setKitchenStatus(orgId: string, orderId: string, status: KitchenStatus): Promise<void> {
   if (!isSupabaseConfigured) {
     await demoDelay();
-    dOrders.update(orderId, { kitchen_status: status });
+    dOrders.update(orderId, { kitchen_status: status, ...demoKitchenStamps(dOrders.get(orderId), status) });
     return;
   }
   const { error } = await getSupabase()
@@ -582,7 +614,7 @@ export async function setLineReady(
   const patch = { items, kitchen_status: status };
   if (!isSupabaseConfigured) {
     await demoDelay();
-    dOrders.update(order.id, patch);
+    dOrders.update(order.id, { ...patch, ...demoKitchenStamps(order, status) });
     return status;
   }
   const { error } = await getSupabase().from("orders").update(patch).eq("id", order.id).eq("org_id", orgId);

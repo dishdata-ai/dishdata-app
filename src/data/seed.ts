@@ -19,6 +19,8 @@ import type {
   Payment,
   Expense,
   PaymentMethod,
+  SocialTarget,
+  SocialPlatform,
 } from "@/lib/api/database.types";
 
 export interface SeedBundle {
@@ -419,4 +421,13 @@ function buildExpenses(orgId: string): Expense[] {
     mk(12, "Supplies", "CleanPro Wholesale", 310, 0.08),
     mk(13, "Food & Beverage", "Casa Latteria", 540, 0.05),
   ];
+}
+
+export function buildSocialTargets(orgId: string): SocialTarget[] {
+  return [["instagram", 4, 1200, 2000], ["tiktok", 2, 300, 1000], ["facebook", 2, 450, 800], ["google", 1, null, null]].map(
+    ([platform, n, now, goal]) => ({
+      id: uid(), org_id: orgId, platform: platform as SocialPlatform, posts_per_week: n as number,
+      followers_now: now as number | null, followers_goal: goal as number | null,
+    }),
+  );
 }

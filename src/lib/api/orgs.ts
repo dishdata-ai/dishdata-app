@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demoTable, demoDelay } from "@/lib/api/demoDb";
-import { buildSeed } from "@/data/seed";
+import { buildSeed, buildSocialTargets } from "@/data/seed";
+import { buildKitchenDishes, buildKeralaOrders } from "@/data/kitchen-demo";
 import { uid } from "@/lib/utils";
 import { MODULES } from "@/lib/modules";
 import type { Org, Role } from "@/lib/api/database.types";
@@ -163,7 +164,9 @@ export async function seedSampleData(orgId: string): Promise<void> {
     demoTable("customers").setAll(seed.customers);
     demoTable("purchase_orders").setAll(seed.purchase_orders);
     demoTable("tasks").setAll(seed.tasks);
-    demoTable("orders").setAll(seed.orders);
+    demoTable("kitchen_dishes").setAll(buildKitchenDishes(orgId));
+    demoTable("social_targets").setAll(buildSocialTargets(orgId));
+    demoTable("orders").setAll([...buildKeralaOrders(orgId), ...seed.orders]);
     demoTable("payments").setAll(seed.payments);
     demoTable("expenses").setAll(seed.expenses);
     return;

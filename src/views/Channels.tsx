@@ -19,7 +19,7 @@ import {
 } from "@/lib/api/channels";
 import { PROVIDERS, PROVIDER_LABEL, PROVIDER_STORE_LABEL } from "@/lib/channels/providers";
 import { toast } from "@/lib/toast";
-import { cn } from "@/lib/utils";
+import { cn, timeAgo } from "@/lib/utils";
 import type { ChannelProvider, ChannelSafe, ChannelOrder } from "@/lib/api/database.types";
 
 const PROVIDER_TONE: Record<ChannelProvider, string> = {
@@ -51,14 +51,6 @@ function minutesLeft(co: ChannelOrder): number | null {
   if (!window) return null;
   const elapsed = (Date.now() - new Date(co.received_at).getTime()) / 60000;
   return window - elapsed;
-}
-
-function timeAgo(iso: string): string {
-  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const h = Math.floor(mins / 60);
-  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
 }
 
 // ---------------------------------------------------------------------------

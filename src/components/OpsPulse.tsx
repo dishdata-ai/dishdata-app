@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import Link from "next/link";
 import { ArrowRight, ClipboardCheck, Flame, UserX } from "lucide-react";
 import { Card, Badge } from "@/components/ui";
-import { useTasks, useDuties, useEmployees, useMembers, useOrders } from "@/lib/hooks/data";
+import { useTasks, useDuties, useEmployees, useMembers, useOrders, useKitchenDishes } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { DUTY_ROLES, DUTY_LABELS } from "@/lib/api/duties";
 import { isDoneToday } from "@/lib/daily";
@@ -18,6 +18,7 @@ export default function OpsPulse() {
   const employeesQ = useEmployees();
   const membersQ = useMembers();
   const ordersQ = useOrders();
+  const bainQ = useKitchenDishes();
 
   const data = useMemo(() => {
     const daily = (tasksQ.data ?? []).filter((t) => t.is_daily && !t.is_partner_task);
@@ -52,6 +53,7 @@ export default function OpsPulse() {
   }, [tasksQ.data, dutiesQ.data, employeesQ.data, membersQ.data, ordersQ.data]);
 
   if (data.total === 0) return null;
+  const lowDishes = (bainQ.data ?? []).filter((i) => i.is_active && i.bain_marie === "yes" && i.hot_portions <= i.reorder_at);
   const pct = Math.round((data.done / data.total) * 100);
 
   return (
@@ -107,6 +109,11 @@ export default function OpsPulse() {
               <p className="text-xs text-zinc-500">Oldest waiting {data.kitchen.oldest} min</p>
               {data.kitchen.late > 0 && <p className="text-xs font-semibold text-rose-soft">{data.kitchen.late} waiting 15+ min</p>}
             </div>
+          )}
+          {lowDishes.length > 0 && (
+            <p className="mt-2 text-xs font-semibold text-amber-soft">
+              Bain-marie low: {lowDishes.map((d) => `${d.dish} (${d.hot_portions})`).join(", ")}
+            </p>
           )}
           {moduleIds.has("kitchen") && (
             <Link href="/kitchen" className="mt-3 inline-flex items-center gap-1 text-xs text-accent-400 hover:underline">

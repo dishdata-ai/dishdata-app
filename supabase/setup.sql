@@ -3080,6 +3080,14 @@ comment on column public.tasks.department is 'Department grouping (front_of_hous
 -- Requires 0055 (staff_role / department enums, tasks.assigned_role etc.).
 -- ============================================================================
 
+-- The starter checklists keep their steps in tasks.checklist / tasks.links, which migration
+-- 0024 added. At least one database (production, 2026-09-21) never got 0024 and failed here
+-- with 'column "checklist" of relation "tasks" does not exist', so add them here too.
+-- Harmless where they already exist.
+alter table public.tasks
+  add column if not exists checklist jsonb not null default '[]'::jsonb,
+  add column if not exists links jsonb not null default '[]'::jsonb;
+
 create table if not exists public.duty_assignments (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs(id) on delete cascade,
@@ -3197,6 +3205,692 @@ end $$;
 -- Not granted to app users: it's run from the SQL editor.
 revoke all on function public.seed_daily_tasks(uuid) from public, anon, authenticated;
 
+
+
+-- ============================================================================
+-- 0058 · Marketing foundations: social accounts, posts, unified inbox
+--
+-- Phase 0 of the Marketing expansion (Google Business, Instagram/Facebook,
+-- TikTok, and one inbox for every customer message). Schema only — the
+-- providers arrive in later phases.
+--
+--   org_profile          address / phone / hours / website for the venue
+--                        (Google Business Profile needs them structured)
+--   social_accounts      one row per connected external account. Holds NO
+--                        secrets; safe to select from the browser.
+--   social_credentials   the OAuth tokens (encrypted by the app). RLS on, NO
+--                        policies and revoked from anon/authenticated → only the
+--                        service-role key can read it. Stronger than
+--                        channels.credentials, which relies on the client
+--                        never selecting the column.
+--   outbound_posts         a piece of content, plus one outbound_post_targets row
+--                        per account it goes to (status, permalink, retries)
+--   conversations        one thread per customer per channel: Messenger,
+--   messages             Instagram, SMS, email, website chat, Google reviews
+--   quick_replies        canned answers
+--
+-- NOTE: the publishing queue is called outbound_posts / outbound_post_targets on
+-- purpose. 0057 already owns social_posts (the manual content calendar) and
+-- social_targets (weekly posting goals); this is a different table.
+--
+-- Provider / channel / status columns are text + CHECK, not enums, so adding a
+-- value never hits the "new enum value can't be used in the same transaction"
+-- problem (see 0043).
+--
+-- Also: managers get the Marketing module by default (default_modules_for_role
+-- + a backfill for members who already have explicit per-module rows, the 0037
+-- pattern), and has_module_access() lets RLS enforce the module gate for
+-- tables that hold customer PII — the client-side RequireModule alone is not a
+-- boundary.
+-- ============================================================================
+
+-- ---- 1. Module gate usable from RLS ----------------------------------------
+-- Mirrors useOrg.tsx: owner/admin always; otherwise the member's explicit rows;
+-- otherwise (no rows at all) the role default.
+create or replace function public.has_module_access(_org uuid, _module text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.org_members om
+    where om.org_id = _org and om.user_id = auth.uid()
+      and (
+        om.role::text in ('owner','admin')
+        or exists (
+          select 1 from public.member_module_access ma
+          where ma.org_id = om.org_id and ma.user_id = om.user_id
+            and ma.module_id = _module and ma.can_access
+        )
+        or (
+          not exists (
+            select 1 from public.member_module_access ma2
+            where ma2.org_id = om.org_id and ma2.user_id = om.user_id
+          )
+          and _module = any(public.default_modules_for_role(om.role))
+        )
+      )
+  )
+$$;
+
+-- ---- 2. Managers get Marketing by default ----------------------------------
+-- Same function as 0056 with 'marketing' added for manager.
+create or replace function public.default_modules_for_role(_role org_role)
+returns text[] language sql immutable as $$
+  select case _role::text
+    when 'owner' then array(select id from public.modules)
+    when 'admin' then array(select id from public.modules)
+    when 'partner' then array(select id from public.modules)
+    when 'manager' then array['dashboard','myday','pos','kitchen','floor','recipes','inventory','procurement','delivery','sales','insights','menu','reports','staff','timeclock','tasks','crm','zreport','till','dailytasks','marketing']
+    when 'staff' then array['myday','pos','preorders','channels','kitchen','floor','timeclock','tasks','dailytasks']
+    when 'accountant' then array['dashboard','myday','finance','accounting','reports','zreport','till','insights']
+    when 'viewer' then array['dashboard','sales','insights']
+  end
+$$;
+
+-- Existing managers who already have explicit per-module rows (a lone row would
+-- otherwise flip a member into explicit mode and hide their other modules).
+insert into public.member_module_access (org_id, user_id, module_id, can_access)
+select distinct om.org_id, om.user_id, 'marketing', true
+from public.org_members om
+where om.role::text = 'manager'
+  and exists (
+    select 1 from public.member_module_access ma
+    where ma.org_id = om.org_id and ma.user_id = om.user_id
+  )
+on conflict (org_id, user_id, module_id) do nothing;
+
+-- ---- 3. Venue profile ------------------------------------------------------
+create table if not exists public.org_profile (
+  org_id uuid primary key references public.orgs(id) on delete cascade,
+  description text,
+  phone text,
+  website text,
+  address_line text,
+  postal_code text,
+  city text,
+  country text not null default 'DE',
+  google_place_id text,
+  categories text[] not null default '{}',
+  -- {"mon":[{"open":"11:00","close":"22:00"}], ..., "sun":[]}; empty day = closed
+  hours jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- address / phone used to live as loose keys in orgs.settings.
+insert into public.org_profile (org_id, phone, address_line)
+select o.id, nullif(o.settings->>'phone', ''), nullif(o.settings->>'address', '')
+from public.orgs o
+on conflict (org_id) do nothing;
+
+-- ---- 4. Connected social accounts ------------------------------------------
+create table if not exists public.social_accounts (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  provider text not null
+    check (provider in ('google_business','facebook','instagram','tiktok','tiktok_shop','meta_catalog')),
+  -- The platform's id for the asset: IG user id, FB page id, GBP location name…
+  external_id text not null,
+  display_name text not null default '',
+  handle text,
+  avatar_url text,
+  scopes text[] not null default '{}',
+  settings jsonb not null default '{}'::jsonb,
+  is_active boolean not null default true,
+  -- Set by the server when the refresh token dies; the UI shows "Reconnect".
+  needs_reauth boolean not null default false,
+  token_expires_at timestamptz,
+  last_error text,
+  last_error_at timestamptz,
+  last_synced_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id),
+  unique (org_id, provider, external_id)
+);
+
+create table if not exists public.social_credentials (
+  account_id uuid primary key references public.social_accounts(id) on delete cascade,
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  -- AES-256-GCM blobs written by src/lib/social/crypto.ts, never plaintext.
+  access_token_enc text not null,
+  refresh_token_enc text,
+  expires_at timestamptz,
+  refresh_expires_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+alter table public.social_credentials enable row level security;
+revoke all on table public.social_credentials from anon, authenticated;
+
+-- ---- 5. Posts + per-account publish state ----------------------------------
+create table if not exists public.outbound_posts (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  caption text not null default '',
+  -- [{"url": "...", "type": "image"|"video", "w": 1080, "h": 1350}]
+  media jsonb not null default '[]'::jsonb,
+  recipe_id uuid references public.recipes(id) on delete set null,
+  status text not null default 'draft'
+    check (status in ('draft','scheduled','publishing','published','partial','failed')),
+  scheduled_at timestamptz,
+  published_at timestamptz,
+  ai_generated boolean not null default false,
+  utm jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid references auth.users(id)
+);
+create index if not exists outbound_posts_org_status_idx on public.outbound_posts (org_id, status, scheduled_at);
+
+create table if not exists public.outbound_post_targets (
+  id uuid primary key default gen_random_uuid(),
+  post_id uuid not null references public.outbound_posts(id) on delete cascade,
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  account_id uuid not null references public.social_accounts(id) on delete cascade,
+  provider text not null,
+  status text not null default 'pending'
+    check (status in ('pending','publishing','published','failed','skipped')),
+  external_id text,
+  permalink text,
+  -- Persisted BEFORE the final publish call so a retry resumes instead of
+  -- double-posting (Instagram container id / TikTok publish id).
+  container_id text,
+  publish_id text,
+  attempts integer not null default 0,
+  next_attempt_at timestamptz,
+  error text,
+  metrics jsonb not null default '{}'::jsonb,
+  metrics_synced_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (post_id, account_id)
+);
+create index if not exists outbound_post_targets_due_idx
+  on public.outbound_post_targets (status, next_attempt_at)
+  where status in ('pending','publishing');
+
+-- Atomically hand due targets to ONE cron run. `skip locked` means two
+-- overlapping runs never receive the same row. A target stuck in 'publishing'
+-- (crashed worker) is reclaimed after 10 minutes and resumes from its
+-- container_id/publish_id. Service-role only.
+create or replace function public.claim_due_outbound_targets(_limit integer default 10)
+returns setof public.outbound_post_targets
+language plpgsql security definer set search_path = public as $$
+begin
+  return query
+  with due as (
+    select t.id
+    from public.outbound_post_targets t
+    join public.outbound_posts p on p.id = t.post_id
+    where p.status in ('scheduled','publishing')
+      and (
+        (t.status = 'pending'
+          and coalesce(t.next_attempt_at, p.scheduled_at, now()) <= now())
+        or (t.status = 'publishing' and t.updated_at < now() - interval '10 minutes')
+      )
+    order by coalesce(t.next_attempt_at, p.scheduled_at, t.created_at)
+    limit _limit
+    for update of t skip locked
+  )
+  update public.outbound_post_targets t
+     set status = 'publishing', attempts = t.attempts + 1, updated_at = now()
+    from due
+   where t.id = due.id
+  returning t.*;
+end $$;
+revoke all on function public.claim_due_outbound_targets(integer) from public, anon, authenticated;
+
+-- ---- 6. Unified inbox ------------------------------------------------------
+create table if not exists public.conversations (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  channel text not null
+    check (channel in ('facebook','instagram','whatsapp','sms','email','webchat','google_review')),
+  kind text not null default 'message' check (kind in ('message','comment','review')),
+  account_id uuid references public.social_accounts(id) on delete set null,
+  -- Platform thread id (PSID, phone number, email Message-ID root, chat token…).
+  external_thread_id text not null,
+  -- {"name","handle","email","phone","avatar"}
+  contact jsonb not null default '{}'::jsonb,
+  customer_id uuid references public.customers(id) on delete set null,
+  rating smallint check (rating between 1 and 5),
+  subject text,
+  status text not null default 'open' check (status in ('open','pending','closed')),
+  assignee_id uuid references auth.users(id) on delete set null,
+  unread_count integer not null default 0,
+  last_message_at timestamptz not null default now(),
+  last_inbound_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, channel, external_thread_id)
+);
+create index if not exists conversations_org_status_idx
+  on public.conversations (org_id, status, last_message_at desc);
+
+create table if not exists public.messages (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  direction text not null check (direction in ('in','out')),
+  body text not null default '',
+  attachments jsonb not null default '[]'::jsonb,
+  -- Platform message id: makes webhook redelivery idempotent. NULL for an
+  -- outbound message not yet accepted by the platform (NULLs never collide).
+  external_id text,
+  status text not null default 'received'
+    check (status in ('received','queued','sent','delivered','read','failed')),
+  error text,
+  sent_by uuid references auth.users(id),
+  ai_drafted boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (conversation_id, external_id)
+);
+create index if not exists messages_conversation_idx on public.messages (conversation_id, created_at);
+
+-- Keep the thread header honest without every webhook having to remember to:
+-- bump last_message_at, count unread inbound, reopen a closed thread.
+create or replace function public.bump_conversation_on_message()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.conversations c set
+    last_message_at = new.created_at,
+    last_inbound_at = case when new.direction = 'in' then new.created_at else c.last_inbound_at end,
+    unread_count = c.unread_count + case when new.direction = 'in' then 1 else 0 end,
+    status = case when new.direction = 'in' and c.status = 'closed' then 'open' else c.status end,
+    updated_at = now()
+  where c.id = new.conversation_id;
+  return new;
+end $$;
+
+drop trigger if exists bump_conversation_on_message on public.messages;
+create trigger bump_conversation_on_message
+  after insert on public.messages
+  for each row execute function public.bump_conversation_on_message();
+
+create table if not exists public.quick_replies (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  title text not null,
+  body text not null,
+  -- Empty = offered on every channel.
+  channels text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  created_by uuid references auth.users(id)
+);
+
+-- ---- 7. Triggers -----------------------------------------------------------
+do $$
+declare t text;
+begin
+  foreach t in array array['org_profile','social_accounts','outbound_posts','outbound_post_targets','conversations'] loop
+    execute format('drop trigger if exists set_updated_at on public.%I', t);
+    execute format('create trigger set_updated_at before update on public.%I for each row execute function public.set_updated_at()', t);
+  end loop;
+  foreach t in array array['social_accounts','outbound_posts','quick_replies'] loop
+    execute format('drop trigger if exists set_created_by on public.%I', t);
+    execute format('create trigger set_created_by before insert on public.%I for each row execute function public.set_created_by()', t);
+  end loop;
+end $$;
+
+-- ---- 8. RLS ----------------------------------------------------------------
+-- Customer messages and reviews are PII → gated by the Marketing module in the
+-- database, not just in the UI. Server code (webhooks, cron, sending) uses the
+-- service-role key and so never depends on these policies.
+alter table public.org_profile enable row level security;
+alter table public.social_accounts enable row level security;
+alter table public.outbound_posts enable row level security;
+alter table public.outbound_post_targets enable row level security;
+alter table public.conversations enable row level security;
+alter table public.messages enable row level security;
+alter table public.quick_replies enable row level security;
+
+-- org_profile: any member reads (it is the venue's public details); managers edit.
+drop policy if exists org_profile_member_select on public.org_profile;
+create policy org_profile_member_select on public.org_profile for select
+  using (is_org_member(org_id));
+drop policy if exists org_profile_editor_insert on public.org_profile;
+create policy org_profile_editor_insert on public.org_profile for insert
+  with check (has_org_role(org_id,'owner','admin','partner','manager'));
+drop policy if exists org_profile_editor_update on public.org_profile;
+create policy org_profile_editor_update on public.org_profile for update
+  using (has_org_role(org_id,'owner','admin','partner','manager'));
+
+-- social_accounts: marketing users see them; only owner/admin connect/change.
+drop policy if exists social_accounts_select on public.social_accounts;
+create policy social_accounts_select on public.social_accounts for select
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists social_accounts_admin_insert on public.social_accounts;
+create policy social_accounts_admin_insert on public.social_accounts for insert
+  with check (has_org_role(org_id,'owner','admin'));
+drop policy if exists social_accounts_admin_update on public.social_accounts;
+create policy social_accounts_admin_update on public.social_accounts for update
+  using (has_org_role(org_id,'owner','admin'));
+drop policy if exists social_accounts_admin_delete on public.social_accounts;
+create policy social_accounts_admin_delete on public.social_accounts for delete
+  using (has_org_role(org_id,'owner','admin'));
+
+-- outbound_posts / targets: marketing users read; owner/admin/partner/manager write.
+do $$
+declare t text;
+begin
+  foreach t in array array['outbound_posts','outbound_post_targets'] loop
+    execute format('drop policy if exists %I_select on public.%I', t, t);
+    execute format('create policy %I_select on public.%I for select using (has_module_access(org_id, ''marketing''))', t, t);
+    execute format('drop policy if exists %I_editor_insert on public.%I', t, t);
+    execute format('create policy %I_editor_insert on public.%I for insert with check (has_module_access(org_id, ''marketing'') and has_org_role(org_id,''owner'',''admin'',''partner'',''manager''))', t, t);
+    execute format('drop policy if exists %I_editor_update on public.%I', t, t);
+    execute format('create policy %I_editor_update on public.%I for update using (has_module_access(org_id, ''marketing'') and has_org_role(org_id,''owner'',''admin'',''partner'',''manager''))', t, t);
+    execute format('drop policy if exists %I_editor_delete on public.%I', t, t);
+    execute format('create policy %I_editor_delete on public.%I for delete using (has_module_access(org_id, ''marketing'') and has_org_role(org_id,''owner'',''admin'',''partner'',''manager''))', t, t);
+  end loop;
+end $$;
+
+-- conversations: marketing users read and triage (assign, close, mark read).
+-- Rows are created by webhooks and the send route, never by the browser.
+drop policy if exists conversations_select on public.conversations;
+create policy conversations_select on public.conversations for select
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists conversations_update on public.conversations;
+create policy conversations_update on public.conversations for update
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists conversations_admin_delete on public.conversations;
+create policy conversations_admin_delete on public.conversations for delete
+  using (has_org_role(org_id,'owner','admin'));
+
+drop policy if exists messages_select on public.messages;
+create policy messages_select on public.messages for select
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists messages_admin_delete on public.messages;
+create policy messages_admin_delete on public.messages for delete
+  using (has_org_role(org_id,'owner','admin'));
+
+-- quick_replies: anyone with Marketing manages the canned answers.
+drop policy if exists quick_replies_select on public.quick_replies;
+create policy quick_replies_select on public.quick_replies for select
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists quick_replies_insert on public.quick_replies;
+create policy quick_replies_insert on public.quick_replies for insert
+  with check (has_module_access(org_id, 'marketing'));
+drop policy if exists quick_replies_update on public.quick_replies;
+create policy quick_replies_update on public.quick_replies for update
+  using (has_module_access(org_id, 'marketing'));
+drop policy if exists quick_replies_delete on public.quick_replies;
+create policy quick_replies_delete on public.quick_replies for delete
+  using (has_module_access(org_id, 'marketing'));
+
+-- ---- 9. Realtime (live inbox + publish status) -----------------------------
+do $$ begin alter publication supabase_realtime add table public.conversations;
+exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.messages;
+exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.outbound_post_targets;
+exception when duplicate_object then null; end $$;
+
+-- ============================================================================
+-- 0057 · Social planner (Marketing)
+--
+-- social_posts / social_targets: the content calendar and weekly targets inside
+--   Marketing. Owners, admins, partners and managers can edit; every member can
+--   read. Platform/status/format are text with CHECKs (no enums to migrate).
+--
+-- Seeds Kokoland's default weekly targets. Idempotent. (Bain-marie counts now live in
+-- kitchen_dishes, migration 0059.)
+-- ============================================================================
+
+create table if not exists public.social_posts (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  title text not null,
+  caption text,
+  platform text not null default 'instagram' check (platform in ('instagram','tiktok','facebook','google')),
+  format text not null default 'post' check (format in ('post','reel','story','video')),
+  status text not null default 'idea' check (status in ('idea','drafted','scheduled','posted')),
+  scheduled_for date,
+  owner_user_id uuid references auth.users(id) on delete set null,
+  link text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists social_posts_org_day_idx on public.social_posts (org_id, scheduled_for);
+
+create table if not exists public.social_targets (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  platform text not null check (platform in ('instagram','tiktok','facebook','google')),
+  posts_per_week integer not null default 3 check (posts_per_week >= 0),
+  followers_now integer,
+  followers_goal integer,
+  unique (org_id, platform)
+);
+
+drop trigger if exists social_posts_updated on public.social_posts;
+create trigger social_posts_updated before update on public.social_posts
+  for each row execute function public.set_updated_at();
+
+alter table public.social_posts enable row level security;
+alter table public.social_targets enable row level security;
+
+-- Social: read for members, write for marketing roles.
+drop policy if exists social_posts_member_select on public.social_posts;
+create policy social_posts_member_select on public.social_posts for select using (is_org_member(org_id));
+drop policy if exists social_posts_editor_write on public.social_posts;
+create policy social_posts_editor_write on public.social_posts for all
+  using (has_org_role(org_id,'owner','admin','partner','manager'))
+  with check (has_org_role(org_id,'owner','admin','partner','manager'));
+
+drop policy if exists social_targets_member_select on public.social_targets;
+create policy social_targets_member_select on public.social_targets for select using (is_org_member(org_id));
+drop policy if exists social_targets_editor_write on public.social_targets;
+create policy social_targets_editor_write on public.social_targets for all
+  using (has_org_role(org_id,'owner','admin','partner','manager'))
+  with check (has_org_role(org_id,'owner','admin','partner','manager'));
+
+-- Kokoland starter data.
+insert into public.social_targets (org_id, platform, posts_per_week)
+select o.id, t.platform, t.n
+from public.orgs o,
+     (values ('instagram', 4), ('tiktok', 2), ('facebook', 2), ('google', 1)) as t(platform, n)
+where o.name ilike 'kokoland%'
+on conflict (org_id, platform) do nothing;
+
+-- ============================================================================
+-- 0059 · Kitchen Ops: production standards, live kitchen counts, kitchen log,
+--        ticket timing, and the Kitchen Ops module
+--
+-- kitchen_dishes: one row per production component (Porotta, Chicken Curry, ...):
+--   how it is made/held/finished, batch + reorder rules, and the LIVE counts the
+--   line updates (hot_portions in the bain-marie/hot box, fridge_portions chilled, or the
+--   freezer for items bought frozen: porotta, uzhunnuvada, parippuvada, pathiri).
+--   "terms" are lowercase fragments: an order line containing one counts a portion
+--   of that component, so "Porotta with Beef Curry" uses Porotta AND Beef Curry.
+--   Any member can update counts; only owner/admin/manager add or remove dishes.
+-- kitchen_log: cooked / wasted / stockout events (waste %, "runs out often", etc).
+-- orders.kitchen_*_at: stamped by a trigger when a ticket changes kitchen status,
+--   which is what makes prep time and customer wait measurable.
+--
+-- Seeds Kokoland's 26 components (from the 26 Aug - 19 Sep 2026 sales export).
+-- Idempotent. Supersedes the unused bain_marie_items table from the first 0057 draft.
+-- ============================================================================
+
+create table if not exists public.kitchen_dishes (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  recipe_id uuid references public.recipes(id) on delete set null,
+  dish text not null,
+  terms text not null default '',
+  method text not null default 'hot_hold'
+    check (method in ('hot_hold','fridge_reheat','pan_finish','fresh','batch_portion','assembly')),
+  bain_marie text not null default 'no' check (bain_marie in ('yes','limited','no')),
+  open_pct numeric not null default 0.8 check (open_pct >= 0 and open_pct <= 1),
+  portion text not null default '1 serving',
+  portion_g integer,
+  frozen boolean not null default false,
+  station text not null default 'curry',
+  container text not null default '',
+  batch_portions integer not null default 3 check (batch_portions >= 0),
+  min_portions integer not null default 1 check (min_portions >= 0),
+  reorder_at integer not null default 2 check (reorder_at >= 0),
+  prep_minutes integer not null default 30,
+  finish_minutes integer not null default 2,
+  target_wait_min integer not null default 5,
+  hold_temp_c integer,
+  max_hold_min integer,
+  notes text not null default '',
+  hot_portions integer not null default 0 check (hot_portions >= 0),
+  fridge_portions integer not null default 0 check (fridge_portions >= 0),
+  position integer not null default 0,
+  is_active boolean not null default true,
+  updated_at timestamptz not null default now(),
+  updated_by text,
+  unique (org_id, dish)
+);
+
+create table if not exists public.kitchen_log (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  dish text not null,
+  kind text not null check (kind in ('cooked','wasted','stockout')),
+  portions numeric not null default 0,
+  value numeric not null default 0,
+  reason text,
+  created_at timestamptz not null default now(),
+  created_by text
+);
+create index if not exists kitchen_log_org_time_idx on public.kitchen_log (org_id, created_at desc);
+
+alter table public.orders
+  add column if not exists kitchen_started_at timestamptz,
+  add column if not exists kitchen_ready_at timestamptz,
+  add column if not exists kitchen_served_at timestamptz;
+
+create or replace function public.stamp_kitchen_times()
+returns trigger language plpgsql as $$
+begin
+  if new.kitchen_status is distinct from old.kitchen_status then
+    if new.kitchen_status::text in ('preparing','ready','served') and new.kitchen_started_at is null then
+      new.kitchen_started_at := now();
+    end if;
+    if new.kitchen_status::text in ('ready','served') and new.kitchen_ready_at is null then
+      new.kitchen_ready_at := now();
+    end if;
+    if new.kitchen_status::text = 'served' and new.kitchen_served_at is null then
+      new.kitchen_served_at := now();
+    end if;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists orders_stamp_kitchen_times on public.orders;
+create trigger orders_stamp_kitchen_times before update on public.orders
+  for each row execute function public.stamp_kitchen_times();
+
+alter table public.kitchen_dishes enable row level security;
+alter table public.kitchen_log enable row level security;
+
+drop policy if exists kitchen_dishes_member_select on public.kitchen_dishes;
+create policy kitchen_dishes_member_select on public.kitchen_dishes for select using (is_org_member(org_id));
+drop policy if exists kitchen_dishes_member_update on public.kitchen_dishes;
+create policy kitchen_dishes_member_update on public.kitchen_dishes for update using (is_org_member(org_id));
+drop policy if exists kitchen_dishes_manager_insert on public.kitchen_dishes;
+create policy kitchen_dishes_manager_insert on public.kitchen_dishes for insert
+  with check (has_org_role(org_id,'owner','admin','manager'));
+drop policy if exists kitchen_dishes_manager_delete on public.kitchen_dishes;
+create policy kitchen_dishes_manager_delete on public.kitchen_dishes for delete
+  using (has_org_role(org_id,'owner','admin','manager'));
+
+drop policy if exists kitchen_log_member_select on public.kitchen_log;
+create policy kitchen_log_member_select on public.kitchen_log for select using (is_org_member(org_id));
+drop policy if exists kitchen_log_member_insert on public.kitchen_log;
+create policy kitchen_log_member_insert on public.kitchen_log for insert with check (is_org_member(org_id));
+drop policy if exists kitchen_log_manager_delete on public.kitchen_log;
+create policy kitchen_log_manager_delete on public.kitchen_log for delete
+  using (has_org_role(org_id,'owner','admin','manager'));
+
+-- Kitchen Ops module: granted to staff and managers by default (owners/admins/partners get every module).
+-- Same function as 0058 with 'kitchenops' added.
+create or replace function public.default_modules_for_role(_role org_role)
+returns text[] language sql immutable as $$
+  select case _role::text
+    when 'owner' then array(select id from public.modules)
+    when 'admin' then array(select id from public.modules)
+    when 'partner' then array(select id from public.modules)
+    when 'manager' then array['dashboard','myday','pos','kitchen','floor','recipes','inventory','procurement','delivery','sales','insights','menu','reports','staff','timeclock','tasks','crm','zreport','till','dailytasks','marketing','kitchenops']
+    when 'staff' then array['myday','pos','preorders','channels','kitchen','floor','timeclock','tasks','dailytasks','kitchenops']
+    when 'accountant' then array['dashboard','myday','finance','accounting','reports','zreport','till','insights']
+    when 'viewer' then array['dashboard','sales','insights']
+  end
+$$;
+
+insert into public.modules (id, name, grouping, sort)
+values ('kitchenops', 'Kitchen Ops', 'Operate', 14)
+on conflict (id) do update set name = excluded.name, grouping = excluded.grouping;
+
+-- Kokoland's production plan. Links each component to the menu recipe of the same name where one exists.
+insert into public.kitchen_dishes
+  (org_id, recipe_id, position, dish, terms, method, bain_marie, open_pct, frozen, station, container,
+   batch_portions, min_portions, reorder_at, prep_minutes, finish_minutes, target_wait_min,
+   hold_temp_c, max_hold_min, notes)
+select o.id,
+       (select r.id from public.recipes r where r.org_id = o.id and lower(r.name) = lower(v.dish) limit 1),
+       v.pos, v.dish, v.terms, v.method, v.bain, v.open_pct, v.frozen, v.station, v.container,
+       v.batch, v.minp, v.reorder, v.prep, v.finish, v.wait, v.hold, v.maxhold, v.notes
+from public.orgs o,
+     (values
+    (1, 'Porotta', 'porotta,parotta', 'hot_hold', 'no', 1, true, 'tawa', 'Covered hot tray', 8, 2, 4, 8, 1, 3, 65, 90, 'Bought frozen: cook from frozen in rolling mini-batches of 8 and count the freezer too. Confirm pieces per serving with the chef.'),
+    (2, 'Chicken Curry', 'chicken curry,chicken mix', 'hot_hold', 'yes', 0.7, false, 'curry', 'GN 1/3', 4, 1, 2, 45, 1, 3, 65, 180, 'Small live batch; chilled backup; rapid reheat before hot holding.'),
+    (3, 'Puttu', 'puttu', 'batch_portion', 'no', 1, false, 'steam', 'Portion cups', 2, 1, 1, 15, 8, 9, 65, 20, 'Pre-portion flour and coconut; steam fresh to order.'),
+    (4, 'Beef Roast', 'beef roast', 'pan_finish', 'no', 1, false, 'pan', 'Portion tray', 4, 1, 2, 75, 4, 8, 65, 30, 'Pre-cook and portion; finish and reduce in the pan for texture.'),
+    (5, 'Chicken Biriyani', 'chicken biriyani,chicken biryani', 'hot_hold', 'limited', 0.85, false, 'rice', 'GN / insulated pot', 4, 1, 2, 75, 2, 4, 65, 120, 'Plan batches; never the whole day at once; protect rice texture.'),
+    (6, 'Gobi Manchurian', 'gobi', 'fresh', 'no', 1, false, 'fryer', 'Prep tray', 3, 1, 1, 20, 6, 8, null, null, 'Pre-prep florets and sauce; fry/toss fresh.'),
+    (7, 'Beef Curry', 'beef curry,beef mix', 'hot_hold', 'yes', 0.7, false, 'curry', 'GN 1/3', 3, 1, 2, 90, 1, 3, 65, 180, 'Good bain-marie candidate; avoid holding the whole day''s batch.'),
+    (8, 'Beef Fry / Dry Fry', 'beef fry,beef dry fry,dry fry', 'pan_finish', 'no', 1, false, 'pan', 'Portion tray', 4, 1, 2, 60, 4, 8, 65, 30, 'Do not bain-marie; finish dry in the pan.'),
+    (9, 'Kadala Curry', 'kadala', 'hot_hold', 'yes', 0.7, false, 'curry', 'GN 1/3', 3, 1, 1, 60, 1, 3, 65, 180, 'Stable small-batch hot-hold candidate. Soak chickpeas the night before.'),
+    (10, 'Paneer Butter Masala', 'paneer butter masala', 'hot_hold', 'yes', 0.65, false, 'curry', 'GN 1/3', 3, 1, 2, 35, 1, 3, 65, 120, 'Smaller live batch to protect paneer texture.'),
+    (11, 'Veg Kurma', 'kurma,kuruma', 'hot_hold', 'yes', 0.65, false, 'curry', 'GN 1/3', 2, 1, 1, 35, 1, 3, 65, 120, 'Keep the batch small because demand is lower.'),
+    (12, 'Pazhampori', 'pazhampori,pazham pori,banana fritters', 'fresh', 'no', 1, false, 'fryer', 'Prep tray', 4, 1, 2, 15, 5, 8, null, null, 'Prep fruit and batter; fry fresh.'),
+    (13, 'Chicken Cutlet', 'cutlet', 'fresh', 'no', 1, false, 'fryer', 'Portion tray', 3, 1, 1, 30, 5, 8, null, null, 'Pre-made; fry or reheat to order. Count ready portions before the rush.'),
+    (14, 'Chicken 65', 'chicken 65', 'fresh', 'no', 1, false, 'fryer', 'Portion tray', 3, 1, 1, 30, 6, 8, null, null, 'Marinate and portion ahead; keep ready-to-fry portions; never hold fried chicken.'),
+    (15, 'Onion Pakoda', 'onion pakoda', 'fresh', 'no', 1, false, 'fryer', 'Prep tray', 3, 1, 1, 15, 6, 8, null, null, 'Prepare enough mix for the next rush; fry to order.'),
+    (16, 'Paneer Biriyani', 'paneer biriyani,paneer biryani', 'hot_hold', 'limited', 0.85, false, 'rice', 'GN 1/2', 3, 1, 1, 60, 2, 4, 65, 120, 'Smaller batch than chicken biriyani.'),
+    (17, 'Rice', 'rice', 'hot_hold', 'limited', 0.8, false, 'rice', 'Rice hot-hold container', 3, 1, 1, 30, 1, 2, 65, 180, 'Cook a fresh pot every couple of hours rather than one huge batch. Set limits in your HACCP plan.'),
+    (18, 'Paneer Chilli', 'paneer chilli', 'fresh', 'no', 1, false, 'pan', 'Prep tray', 2, 1, 1, 20, 5, 8, null, null, 'Finish fresh for texture.'),
+    (19, 'Salad', 'salad', 'assembly', 'no', 1, false, 'cold', 'Cold GN', 2, 1, 1, 10, 2, 3, null, null, 'Keep components cold and portioned.'),
+    (20, 'Chicken 65 Biriyani', 'chicken 65 biriyani', 'hot_hold', 'limited', 0.85, false, 'rice', 'GN + tray', 2, 1, 1, 75, 6, 8, 65, 120, 'Keep the fried component separate until service.'),
+    (21, 'Dessert', 'pudding,payasam', 'batch_portion', 'no', 1, false, 'cold', 'Cold container', 3, 1, 1, 30, 1, 2, null, null, 'Count portions before service.'),
+    (22, 'Fried Chicken Biriyani', 'fried chicken biriyani', 'hot_hold', 'limited', 0.85, false, 'rice', 'GN + tray', 3, 1, 1, 75, 6, 8, 65, 120, 'Control the rice batch; finish the chicken component to order.'),
+    (23, 'Uzhunnuvada', 'uzhunnuvada', 'fresh', 'no', 1, true, 'fryer', 'Freezer tray', 2, 1, 1, 0, 6, 8, null, null, 'Bought frozen: fry from frozen to order — no prep, just keep the freezer stocked.'),
+    (24, 'Parippuvada', 'parippuvada,paripuvada', 'fresh', 'no', 1, true, 'fryer', 'Freezer tray', 2, 1, 1, 0, 6, 8, null, null, 'Bought frozen: fry from frozen to order — no prep, just keep the freezer stocked.'),
+    (25, 'Pathiri', 'pathiri', 'fresh', 'no', 1, true, 'tawa', 'Freezer tray', 4, 1, 2, 0, 4, 6, null, null, 'Bought frozen: heat on the tawa to order.'),
+    (26, 'Chicken Roll', 'chicken roll', 'assembly', 'no', 1, false, 'cold', 'Prep tray', 2, 1, 1, 20, 4, 6, null, null, 'Keep filling and wraps ready; finish to order.')
+     ) as v(pos, dish, terms, method, bain, open_pct, frozen, station, container, batch, minp, reorder, prep, finish, wait, hold, maxhold, notes)
+where o.name ilike 'kokoland%'
+on conflict (org_id, dish) do nothing;
+
+-- ============================================================================
+-- 0060 · Partners can see everyone's availability and manage the schedule
+--
+-- Reported: a partner opening Staff saw only their own availability (one
+-- person's Tuesday) while every other row looked empty. Cause: the
+-- staff_availability policy from 0042 lets only owner/admin/manager see other
+-- people's rows, and shifts (0044) are writable only by those same roles — but
+-- partners (who run the restaurant day to day) get the Staff schedule board in
+-- the UI, which invites them to click a day and assign a shift.
+--
+-- 1. Partners can READ all availability. Writing someone else's availability
+--    stays with owner/admin/manager (0042's policy is unchanged).
+-- 2. Partners can create/edit/delete shifts, like managers.
+--
+-- Idempotent. The 'partner' role literal is safe here: it was added to the
+-- org_role enum back in 0023, in an earlier transaction.
+-- ============================================================================
+
+drop policy if exists staff_availability_partner_select on public.staff_availability;
+create policy staff_availability_partner_select on public.staff_availability
+  for select using (has_org_role(org_id, 'partner'));
+
+drop policy if exists shifts_manager_write on public.shifts;
+create policy shifts_manager_write on public.shifts
+  for all
+  using (has_org_role(org_id, 'owner', 'admin', 'manager', 'partner'))
+  with check (has_org_role(org_id, 'owner', 'admin', 'manager', 'partner'));
 
 -- ============================================================================
 -- 0061 · Catering menu + spend-tier discounts

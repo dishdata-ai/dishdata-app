@@ -15,6 +15,14 @@
 -- Requires 0055 (staff_role / department enums, tasks.assigned_role etc.).
 -- ============================================================================
 
+-- The starter checklists keep their steps in tasks.checklist / tasks.links, which migration
+-- 0024 added. At least one database (production, 2026-09-21) never got 0024 and failed here
+-- with 'column "checklist" of relation "tasks" does not exist', so add them here too.
+-- Harmless where they already exist.
+alter table public.tasks
+  add column if not exists checklist jsonb not null default '[]'::jsonb,
+  add column if not exists links jsonb not null default '[]'::jsonb;
+
 create table if not exists public.duty_assignments (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.orgs(id) on delete cascade,

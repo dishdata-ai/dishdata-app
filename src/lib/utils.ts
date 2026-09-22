@@ -19,6 +19,15 @@ export const fmtNumber = (n: number) => new Intl.NumberFormat("en-US").format(n)
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
+/** "just now" / "5m ago" / "3h ago" / "2d ago". */
+export function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const h = Math.floor(mins / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+}
+
 /** Extracts a human-readable message from any thrown value. Supabase PostgrestError
  *  objects are plain objects (not Error instances), so `instanceof Error` misses them. */
 export function errorMessage(e: unknown, fallback = "Something went wrong"): string {

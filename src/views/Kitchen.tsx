@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Flame, ChefHat, CheckCircle2, Bell, StickyNote, Check, PackageCheck } from "lucide-react";
 import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton } from "@/components/ui";
 import { useOrders, useInvalidate } from "@/lib/hooks/data";
+import BainMarie from "@/components/BainMarie";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { setKitchenStatus, setLineReady } from "@/lib/api/orders";
@@ -255,6 +256,8 @@ export default function Kitchen() {
           </div>
         }
       />
+
+      <BainMarie />
 
       {pickups.length > 0 && (
         <Card className="border-brand-400/30 p-4">

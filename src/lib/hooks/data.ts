@@ -18,6 +18,8 @@ import { listAvailability } from "@/lib/api/availability";
 import { listShifts } from "@/lib/api/shifts";
 import { listTasks } from "@/lib/api/tasks";
 import { listDuties } from "@/lib/api/duties";
+import { listKitchenDishes, listKitchenLog } from "@/lib/api/kitchen";
+import { listPosts, listTargets } from "@/lib/api/social";
 import { listMembers } from "@/lib/api/team";
 import { listPartnerProfiles, listKudos } from "@/lib/api/partners";
 import { listAcctInvoices, listAcctDocuments } from "@/lib/api/accounting";
@@ -25,6 +27,7 @@ import { listPayProfiles, listPayrollRuns } from "@/lib/api/payroll";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import { listChannels, listChannelOrders } from "@/lib/api/channels";
 import { listPreorderEvents, listPreorderOrders } from "@/lib/api/preorders";
+import { listSocialAccounts } from "@/lib/api/socialAccounts";
 import { listCateringInquiries } from "@/lib/api/catering";
 
 function useOrgQuery<T>(domain: string, fn: (orgId: string) => Promise<T>) {
@@ -62,6 +65,10 @@ export const useAvailability = () => useOrgQuery("staff_availability", listAvail
 export const useShifts = () => useOrgQuery("shifts", listShifts);
 export const useTasks = () => useOrgQuery("tasks", listTasks);
 export const useDuties = () => useOrgQuery("duty_assignments", listDuties);
+export const useKitchenDishes = () => useOrgQuery("kitchen_dishes", listKitchenDishes);
+export const useKitchenLog = () => useOrgQuery("kitchen_log", listKitchenLog);
+export const useSocialPosts = () => useOrgQuery("social_posts", listPosts);
+export const useSocialTargets = () => useOrgQuery("social_targets", listTargets);
 export const useMembers = () => useOrgQuery("members", listMembers);
 export const usePartnerProfiles = () => useOrgQuery("partner_profiles", listPartnerProfiles);
 export const useKudos = () => useOrgQuery("kudos", listKudos);
@@ -70,6 +77,7 @@ export const useAcctDocuments = () => useOrgQuery("acct_documents", listAcctDocu
 export const usePayProfiles = () => useOrgQuery("pay_profiles", listPayProfiles);
 export const usePayrollRuns = () => useOrgQuery("payroll_runs", listPayrollRuns);
 export const useChannels = () => useOrgQuery("channels", listChannels);
+export const useSocialAccounts = () => useOrgQuery("social_accounts", listSocialAccounts);
 export const useChannelOrders = () => useOrgQuery("channel_orders", (id) => listChannelOrders(id));
 
 /** Invalidate one or more org-scoped domains after a mutation. */

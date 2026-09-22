@@ -30,6 +30,7 @@ import {
   ScrollText,
   Sun,
   ListChecks,
+  ClipboardList,
   type LucideIcon,
 } from "lucide-react";
 import type { Role } from "@/lib/api/database.types";
@@ -57,6 +58,7 @@ export const MODULES: ModuleDef[] = [
   { id: "preorders", name: "Preorders", path: "/preorders", icon: CalendarClock, group: "Operate", blurb: "Event preorders & seating capacity" },
   { id: "kitchen", name: "Kitchen", path: "/kitchen", icon: Flame, group: "Operate", blurb: "Live ticket board for the line" },
   { id: "dailytasks", name: "Daily Tasks", path: "/daily-tasks", icon: ListChecks, group: "Operate", blurb: "Role-based daily checklists" },
+  { id: "kitchenops", name: "Kitchen Ops", path: "/kitchen-ops", icon: ClipboardList, group: "Operate", blurb: "Batch plan, live stock, prep board and kitchen speed" },
   { id: "floor", name: "Floor & Reservations", path: "/floor", icon: LayoutGrid, group: "Operate", blurb: "Tables, seating and bookings" },
   { id: "recipes", name: "Recipes", path: "/recipes", icon: ChefHat, group: "Operate", blurb: "Plate costing and margins" },
   { id: "inventory", name: "Inventory", path: "/inventory", icon: Boxes, group: "Operate", blurb: "Stock, waste and par levels" },
@@ -67,7 +69,7 @@ export const MODULES: ModuleDef[] = [
   { id: "insights", name: "AI Insights", path: "/insights", icon: Sparkles, group: "Grow", blurb: "Computed recommendations" },
   { id: "menu", name: "Menu Engineering", path: "/menu", icon: SquareMenu, group: "Grow", blurb: "Stars, plowhorses, puzzles, dogs" },
   { id: "crm", name: "Customers", path: "/customers", icon: Users, group: "Grow", blurb: "Member directory and profiles" },
-  { id: "marketing", name: "Marketing", path: "/marketing", icon: Megaphone, group: "Grow", blurb: "Campaigns, segments & sends" },
+  { id: "marketing", name: "Marketing", path: "/marketing", icon: Megaphone, group: "Grow", blurb: "Campaigns, connected social accounts & (soon) one inbox" },
   { id: "loyalty", name: "Loyalty", path: "/loyalty", icon: Gift, group: "Grow", blurb: "Tiers, rewards & ways to earn" },
   { id: "reports", name: "Reports", path: "/reports", icon: FileBarChart, group: "Grow", blurb: "Exports and period reports" },
   { id: "finance", name: "Finance", path: "/finance", icon: Wallet, group: "Money", blurb: "P&L, cash flow, budgets" },
@@ -99,7 +101,7 @@ export const MODULE_GROUPS: ModuleGroup[] = ["Operate", "Grow", "Money", "People
  * modules show as off in Settings before this.
  */
 export const ALWAYS_ENABLED_MODULES = [
-  "dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders", "dailytasks",
+  "dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders", "dailytasks", "kitchenops",
 ] as const;
 
 export const moduleById = (id: string) => MODULES.find((m) => m.id === id);
@@ -109,8 +111,8 @@ export const ROLE_DEFAULT_MODULES: Record<Role, "all" | string[]> = {
   owner: "all",
   admin: "all",
   partner: "all",
-  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till", "dailytasks"],
-  staff: ["myday", "pos", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks", "dailytasks"],
+  manager: ["dashboard", "myday", "pos", "orders", "preorders", "channels", "kitchen", "floor", "recipes", "inventory", "procurement", "delivery", "sales", "insights", "menu", "reports", "staff", "timeclock", "tasks", "crm", "zreport", "till", "dailytasks", "marketing", "kitchenops"],
+  staff: ["myday", "pos", "preorders", "channels", "kitchen", "floor", "timeclock", "tasks", "dailytasks", "kitchenops"],
   accountant: ["dashboard", "myday", "finance", "accounting", "reports", "zreport", "till", "insights"],
   viewer: ["dashboard", "sales", "insights"],
 };

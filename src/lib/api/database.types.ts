@@ -1,3 +1,4 @@
+import type { ProdMethod } from "@/data/kitchen-standards";
 // Hand-maintained row types mirroring supabase/setup.sql.
 // Keep this file and setup.sql in sync when the schema changes.
 
@@ -335,6 +336,10 @@ export interface Order {
   status: OrderStatus;
   kitchen_status: KitchenStatus;
   kitchen_notes: string | null;
+  /** Stamped by the DB when the ticket changes kitchen status (see migration 0057). Absent on older / synced orders. */
+  kitchen_started_at?: string | null;
+  kitchen_ready_at?: string | null;
+  kitchen_served_at?: string | null;
   source: string;
   created_at: string;
   /** Who rang the order up. Null on storefront/platform orders and pre-0033 orders. */
@@ -947,4 +952,240 @@ export interface ChannelOrder {
   received_at: string;
   decided_at: string | null;
   decided_by: string | null;
+}
+
+// ---- Marketing: social accounts, posts, unified inbox (0058) ---------------
+
+export type SocialProvider =
+  | 'google_business' | 'facebook' | 'instagram' | 'tiktok' | 'tiktok_shop' | 'meta_catalog';
+
+/** No secrets here: tokens live in social_credentials, which the browser cannot read. */
+export interface SocialAccount {
+  id: string;
+  org_id: string;
+  provider: SocialProvider;
+  external_id: string;
+  display_name: string;
+  handle: string | null;
+  avatar_url: string | null;
+  scopes: string[];
+  settings: Record<string, unknown>;
+  is_active: boolean;
+  needs_reauth: boolean;
+  token_expires_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export type OutboundPostStatus = 'draft' | 'scheduled' | 'publishing' | 'published' | 'partial' | 'failed';
+export type OutboundTargetStatus = 'pending' | 'publishing' | 'published' | 'failed' | 'skipped';
+
+export interface OutboundMedia {
+  url: string;
+  type: 'image' | 'video';
+  w?: number;
+  h?: number;
+}
+
+export interface OutboundPost {
+  id: string;
+  org_id: string;
+  caption: string;
+  media: OutboundMedia[];
+  recipe_id: string | null;
+  status: OutboundPostStatus;
+  scheduled_at: string | null;
+  published_at: string | null;
+  ai_generated: boolean;
+  utm: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface OutboundPostTarget {
+  id: string;
+  post_id: string;
+  org_id: string;
+  account_id: string;
+  provider: SocialProvider;
+  status: OutboundTargetStatus;
+  external_id: string | null;
+  permalink: string | null;
+  container_id: string | null;
+  publish_id: string | null;
+  attempts: number;
+  next_attempt_at: string | null;
+  error: string | null;
+  metrics: Record<string, number>;
+  metrics_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ConversationChannel =
+  | 'facebook' | 'instagram' | 'whatsapp' | 'sms' | 'email' | 'webchat' | 'google_review';
+export type ConversationKind = 'message' | 'comment' | 'review';
+export type ConversationStatus = 'open' | 'pending' | 'closed';
+
+export interface ConversationContact {
+  name?: string;
+  handle?: string;
+  email?: string;
+  phone?: string;
+  avatar?: string;
+}
+
+export interface Conversation {
+  id: string;
+  org_id: string;
+  channel: ConversationChannel;
+  kind: ConversationKind;
+  account_id: string | null;
+  external_thread_id: string;
+  contact: ConversationContact;
+  customer_id: string | null;
+  rating: number | null;
+  subject: string | null;
+  status: ConversationStatus;
+  assignee_id: string | null;
+  unread_count: number;
+  last_message_at: string;
+  last_inbound_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type MessageStatus = 'received' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export interface Message {
+  id: string;
+  org_id: string;
+  conversation_id: string;
+  direction: 'in' | 'out';
+  body: string;
+  attachments: { url: string; type: string; name?: string }[];
+  external_id: string | null;
+  status: MessageStatus;
+  error: string | null;
+  sent_by: string | null;
+  ai_drafted: boolean;
+  created_at: string;
+}
+
+export interface QuickReply {
+  id: string;
+  org_id: string;
+  title: string;
+  body: string;
+  /** Empty = offered on every channel. */
+  channels: ConversationChannel[];
+  created_at: string;
+  created_by: string | null;
+}
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+
+export interface OrgProfile {
+  org_id: string;
+  description: string | null;
+  phone: string | null;
+  website: string | null;
+  address_line: string | null;
+  postal_code: string | null;
+  city: string | null;
+  country: string;
+  google_place_id: string | null;
+  categories: string[];
+  /** An empty or missing day means closed. */
+  hours: Partial<Record<Weekday, { open: string; close: string }[]>>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KitchenDish {
+  id: string;
+  org_id: string;
+  /** Optional link to the menu recipe (price and food cost come from it). */
+  recipe_id: string | null;
+  dish: string;
+  /** Comma-separated lowercase fragments that mark an order line as this dish. */
+  terms: string;
+  method: ProdMethod;
+  bain_marie: "yes" | "limited" | "no";
+  /** Share of expected demand to have ready at opening. */
+  open_pct: number;
+  portion: string;
+  portion_g: number | null;
+  /** Bought frozen: cooked from frozen; fridge_portions then counts the freezer. */
+  frozen: boolean;
+  station: string;
+  container: string;
+  /** Portions per normal batch / replenishment. */
+  batch_portions: number;
+  min_portions: number;
+  reorder_at: number;
+  prep_minutes: number;
+  finish_minutes: number;
+  target_wait_min: number;
+  hold_temp_c: number | null;
+  max_hold_min: number | null;
+  notes: string;
+  /** Live: portions in the bain-marie / hot box. */
+  hot_portions: number;
+  /** Live: portions (or prepped components) in the fridge. */
+  fridge_portions: number;
+  position: number;
+  is_active: boolean;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export type KitchenLogKind = "cooked" | "wasted" | "stockout";
+
+export interface KitchenLogEntry {
+  id: string;
+  org_id: string;
+  dish: string;
+  kind: KitchenLogKind;
+  portions: number;
+  /** € — food cost of the wasted portions at the time it was logged. */
+  value: number;
+  reason: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+export type SocialPlatform = "instagram" | "tiktok" | "facebook" | "google";
+export type SocialStatus = "idea" | "drafted" | "scheduled" | "posted";
+export type SocialFormat = "post" | "reel" | "story" | "video";
+
+export interface SocialPost {
+  id: string;
+  org_id: string;
+  title: string;
+  caption: string | null;
+  platform: SocialPlatform;
+  format: SocialFormat;
+  status: SocialStatus;
+  /** YYYY-MM-DD; null while it's still an idea/draft without a day. */
+  scheduled_for: string | null;
+  /** Org member responsible for making/posting it. */
+  owner_user_id: string | null;
+  /** URL of the live post, once it's out. */
+  link: string | null;
+  created_at: string;
+}
+
+export interface SocialTarget {
+  id: string;
+  org_id: string;
+  platform: SocialPlatform;
+  posts_per_week: number;
+  followers_now: number | null;
+  followers_goal: number | null;
 }
