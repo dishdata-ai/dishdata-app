@@ -78,7 +78,21 @@ async function eventMenuRecipeIds(orgId: string): Promise<Set<string>> {
   return new Set((data ?? []).map((r) => r.recipe_id as string));
 }
 
-export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> {
+/**
+ * `includeHidden` is the catering catalogue rather than today's menu.
+ *
+ * The QR menu shows what a guest can order right now, so it is limited to
+ * active dishes. Catering is quoted for a date weeks out: a dish hidden today,
+ * or sold out this evening, says nothing about whether the kitchen will cook it
+ * for a party in three weeks — and for Kokoland that filter was hiding 72 of
+ * 113 recipes. Tournament items stay excluded either way; they are priced for
+ * an event and sold at that event only.
+ */
+export async function fetchPublicMenu(
+  slug: string,
+  opts?: { includeHidden?: boolean },
+): Promise<PublicMenu | null> {
+  const includeHidden = opts?.includeHidden ?? false;
   if (!isSupabaseConfigured) {
     await demoDelay();
     const orgRow = dOrgs.list().find((o) => o.slug === slug);
@@ -90,8 +104,9 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
       catering_tiers: publicCateringTiers(settings),
     };
 
-    const websiteMenu = dEventMenus
-      .list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
+    const websiteMenu = includeHidden
+      ? undefined
+      : dEventMenus.list({ org_id: org.id, is_active: true, show_on_website: true } as Partial<EventMenu>)[0];
     if (websiteMenu) {
       const ids = new Set(
         dEventMenuItems.list({ event_menu_id: websiteMenu.id } as Partial<EventMenuItem>).map((i) => i.recipe_id),
@@ -108,7 +123,7 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
     return {
       org,
       recipes: dRecipes
-        .list({ org_id: org.id, is_active: true } as Partial<Recipe>)
+        .list((includeHidden ? { org_id: org.id } : { org_id: org.id, is_active: true }) as Partial<Recipe>)
         .filter((r) => !isTournamentItem(r) && !eventIds.has(r.id)),
     };
   }
@@ -128,14 +143,17 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
   };
 
   // An event menu explicitly shown on the website replaces the catalog with
-  // just its own items (e.g. a tournament-only ordering page).
-  const { data: websiteMenu } = await sb
-    .from("event_menus")
-    .select("id")
-    .eq("org_id", org.id)
-    .eq("is_active", true)
-    .eq("show_on_website", true)
-    .maybeSingle();
+  // just its own items (e.g. a tournament-only ordering page). Catering quotes
+  // the whole kitchen, so it is never narrowed to one event's menu.
+  const { data: websiteMenu } = includeHidden
+    ? { data: null }
+    : await sb
+        .from("event_menus")
+        .select("id")
+        .eq("org_id", org.id)
+        .eq("is_active", true)
+        .eq("show_on_website", true)
+        .maybeSingle();
 
   if (websiteMenu) {
     const { data: items } = await sb
@@ -152,6 +170,15 @@ export async function fetchPublicMenu(slug: string): Promise<PublicMenu | null> 
   // Default: full catalog, minus anything that belongs to an event menu
   // (tournament/event-only) and minus the legacy "(Tournament)"-named items
   // as defense in depth.
+  // Hidden dishes are invisible to an anonymous table read — the recipes
+  // policy is `to anon using (is_active = true)` — so the catering catalogue
+  // comes from a security-definer function instead of a widened policy.
+  if (includeHidden) {
+    const { data, error: rpcError } = await sb.rpc("catering_menu", { _slug: slug });
+    if (rpcError) throw rpcError;
+    return { org, recipes: (data as Recipe[]) ?? [] };
+  }
+
   const eventIds = await eventMenuRecipeIds(org.id);
   let query = sb
     .from("recipes")
@@ -171,7 +198,7 @@ export async function placePublicOrder(
   tableName: string | null,
   notes: string | null,
   opts?: { email?: string | null; code?: string | null; orderType?: "dine_in" | "takeaway" },
-): Promise<{ order_number: string; total: number; discount?: number; order_id: string }> {
+): Promise<{ order_number: string; total: number; discount?: number; order_id: string; appended?: boolean }> {
   const orderType = opts?.orderType ?? "dine_in";
   if (!isSupabaseConfigured) {
     await demoDelay();
@@ -231,7 +258,7 @@ export async function placePublicOrder(
     _order_type: orderType,
   });
   if (error) throw error;
-  return data as { order_number: string; total: number; discount?: number; order_id: string };
+  return data as { order_number: string; total: number; discount?: number; order_id: string; appended?: boolean };
 }
 
 export async function placePublicReservation(

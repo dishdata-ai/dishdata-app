@@ -31,11 +31,24 @@ export const isSoldOut = (r: Pick<Recipe, "sold_out_until">) =>
 export const isSoldOutIndefinitely = (r: Pick<Recipe, "sold_out_until">) =>
   !!r.sold_out_until && new Date(r.sold_out_until).getUTCFullYear() >= 9999;
 
+/**
+ * Whether an order is real money for reporting.
+ *
+ * Void and refunded are the obvious exclusions. `merged_into` is the subtler
+ * one: a QR tab settled on SumUp keeps both rows — the tab for what was
+ * ordered, the SumUp sale for what was paid — and counting both double-counts
+ * the meal (see migration 0063). One predicate rather than the condition
+ * repeated at each call site, so the next place to sum orders can't forget a
+ * case the way every existing one forgot this.
+ */
+export const countsAsRevenue = (o: Order) =>
+  o.status !== "void" && o.status !== "refunded" && !o.merged_into;
+
 /** Units sold per recipe id across orders. */
 export function unitsSold(orders: Order[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const o of orders) {
-    if (o.status === "void" || o.status === "refunded") continue;
+    if (!countsAsRevenue(o)) continue;
     for (const line of o.items) {
       map.set(line.recipe_id, (map.get(line.recipe_id) ?? 0) + line.qty);
     }
@@ -75,7 +88,7 @@ export function revenueByDay(orders: Order[], days: number): SeriesPoint[] {
     out.push(point);
   }
   for (const o of orders) {
-    if (o.status === "void" || o.status === "refunded") continue;
+    if (!countsAsRevenue(o)) continue;
     const b = buckets.get(dayKey(o.created_at));
     if (b) {
       b.revenue += o.total;
@@ -95,7 +108,7 @@ export function revenueByHour(orders: Order[], dayOffset = 0): SeriesPoint[] {
   const points = hours.map((h) => ({ label: `${h}:00`, revenue: 0, orders: 0 }));
   for (const o of orders) {
     if (dayKey(o.created_at) !== key) continue;
-    if (o.status === "void" || o.status === "refunded") continue;
+    if (!countsAsRevenue(o)) continue;
     const h = new Date(o.created_at).getHours();
     const idx = hours.indexOf(h);
     if (idx >= 0) {
@@ -121,7 +134,7 @@ export function ordersInRange(orders: Order[], daysBack: number, daysBackEnd = 0
 }
 
 export const sumRevenue = (orders: Order[]) =>
-  orders.filter((o) => o.status !== "void" && o.status !== "refunded").reduce((s, o) => s + o.total, 0);
+  orders.filter(countsAsRevenue).reduce((s, o) => s + o.total, 0);
 
 /** % change between two values (0 when previous is 0). */
 export const pctChange = (current: number, previous: number) =>

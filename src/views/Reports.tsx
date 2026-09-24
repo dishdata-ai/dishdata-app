@@ -12,7 +12,7 @@ import {
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { downloadCsv } from "@/lib/csv";
-import { ordersInRange, unitsSold, recipeCost } from "@/lib/calc";
+import { ordersInRange, unitsSold, recipeCost, countsAsRevenue } from "@/lib/calc";
 import { workedSeconds } from "@/lib/api/timeclock";
 import { cn } from "@/lib/utils";
 
@@ -41,9 +41,7 @@ export default function Reports() {
   const employeesQ = useEmployees();
 
   const data = useMemo((): { headers: string[]; rows: (string | number)[][] } => {
-    const orders = ordersInRange(ordersQ.data ?? [], range - 1).filter(
-      (o) => o.status !== "void" && o.status !== "refunded",
-    );
+    const orders = ordersInRange(ordersQ.data ?? [], range - 1).filter(countsAsRevenue);
 
     switch (report) {
       case "sales": {

@@ -98,6 +98,26 @@ body {
   animation: sheet-up 0.32s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Category index rows, dealt out one after another rather than appearing as a
+   block. `--i` is the row's position, set inline where the row is rendered. */
+@keyframes index-row-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+[data-index-row] {
+  animation: index-row-in 0.38s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+/* One pass of light across a bar, for the moment a discount tier unlocks. */
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(200%); }
+}
+.animate-shimmer {
+  animation: shimmer 1.1s cubic-bezier(0.32, 0, 0.67, 0);
+}
+
 /* One honest opt-out for every animation in the app, not just this page's:
    a vestibular-disorder reader who asks the OS for less motion should get it
    everywhere, and a blanket rule can't be forgotten on the next component. */
@@ -108,6 +128,10 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    /* Delays too, or a staggered list still makes someone wait out the
+       stagger — half a second of nothing for a twenty-row menu index. */
+    animation-delay: 0ms !important;
+    transition-delay: 0ms !important;
     scroll-behavior: auto !important;
   }
   [data-reveal] {

@@ -10,13 +10,12 @@ import { fetchPublicMenu, placeCateringInquiry, type PublicMenu } from "@/lib/ap
 import { currencyFormatter } from "@/lib/calc";
 import { orderCategories } from "@/lib/category-order";
 import { cn, errorMessage } from "@/lib/utils";
+import { Sheet, prefersReducedMotion } from "@/components/Sheet";
+import { MenuCategoryNav, menuSectionId as categoryId } from "@/components/MenuCategoryNav";
 import type { CateringInquiryItem, CateringTier, Recipe } from "@/lib/api/database.types";
 
 // Same symbols as the recipe editor's dietary toggle and the printed menu sheet.
 const DIET_SYMBOL: Record<"veg" | "vegan", string> = { veg: "🟢", vegan: "🌱" };
-
-const prefersReducedMotion = () =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** Which tier the current subtotal has unlocked, and the next one to reach for. */
 function tierProgress(subtotal: number, tiers: CateringTier[]) {
@@ -78,50 +77,6 @@ function useScrollReveal(deps: unknown[]) {
   }, deps);
 }
 
-/**
- * Keeps Tab inside an open dialog and hands focus back to whatever opened it.
- * Without this a keyboard or screen-reader visitor tabs straight out of the
- * dialog into the menu behind it, which is still rendered and still focusable.
- */
-function useFocusTrap(ref: React.RefObject<HTMLElement | null>, open: boolean, onClose: () => void) {
-  useEffect(() => {
-    if (!open) return;
-    const opener = document.activeElement as HTMLElement | null;
-    const selector =
-      'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
-    const focusables = () => Array.from(ref.current?.querySelectorAll<HTMLElement>(selector) ?? []);
-    focusables()[0]?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-        return;
-      }
-      if (e.key !== "Tab") return;
-      const items = focusables();
-      if (!items.length) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-      opener?.focus?.();
-    };
-  }, [open, onClose, ref]);
-}
-
 type Strings = ReturnType<typeof strings>;
 
 function strings(lang: "en" | "de") {
@@ -167,6 +122,8 @@ function strings(lang: "en" | "de") {
         increase: (dish: string) => `Eine ${dish} mehr`,
         decrease: (dish: string) => `Eine ${dish} weniger`,
         removeAll: (dish: string) => `${dish} entfernen`,
+        dietLabel: { veg: "Vegetarisch", vegan: "Vegan" } as Record<"veg" | "vegan", string>,
+        menu: "Menü",
         jumpTo: "Kategorien",
         skip: "Direkt zur Speisekarte",
         legend: "🟢 Vegetarisch · 🌱 Vegan",
@@ -212,6 +169,8 @@ function strings(lang: "en" | "de") {
         increase: (dish: string) => `One more ${dish}`,
         decrease: (dish: string) => `One fewer ${dish}`,
         removeAll: (dish: string) => `Remove ${dish}`,
+        dietLabel: { veg: "Vegetarian", vegan: "Vegan" } as Record<"veg" | "vegan", string>,
+        menu: "Menu",
         jumpTo: "Categories",
         skip: "Skip to the menu",
         legend: "🟢 Vegetarian · 🌱 Vegan",
@@ -226,8 +185,11 @@ export default function Catering({
   initialMenu?: PublicMenu | null;
 }) {
   const menuQ = useQuery({
-    queryKey: ["public-menu", slug],
-    queryFn: () => fetchPublicMenu(slug),
+    // Its own cache key: this fetch includes dishes hidden from today's menu,
+    // and sharing "public-menu" with the QR ordering page would let them leak
+    // onto the page guests actually order from.
+    queryKey: ["catering-menu", slug],
+    queryFn: () => fetchPublicMenu(slug, { includeHidden: true }),
     initialData: initialMenu ?? undefined,
   });
   const menu = menuQ.data;
@@ -336,35 +298,17 @@ export default function Catering({
     return () => clearTimeout(id);
   }, [itemCount, subtotal, total, next, active, lines.length, fmt, t]);
 
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const categoryId = (cat: string) => `cat-${cat.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`;
-  const scrollToCategory = (cat: string) => {
-    setActiveCategory(cat);
-    document.getElementById(categoryId(cat))?.scrollIntoView({
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-      block: "start",
-    });
-  };
-
-  useEffect(() => {
-    if (!categories.length) return;
-    const labelById = new Map(categories.map((c) => [categoryId(c), c]));
-    const io = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const label = visible[0] && labelById.get(visible[0].target.id);
-        if (label) setActiveCategory(label);
-      },
-      { rootMargin: "-120px 0px -70% 0px" },
-    );
-    categories
-      .map((c) => document.getElementById(categoryId(c)))
-      .filter((el): el is HTMLElement => !!el)
-      .forEach((el) => io.observe(el));
-    return () => io.disconnect();
-  }, [categories]);
+  // Nav owns the scroll-spy and jumping now (see MenuCategoryNav); the page
+  // only has to agree with it on what a section's anchor id is.
+  const countOf = useCallback((cat: string) => (byCategory.get(cat) ?? []).length, [byCategory]);
+  const thumbOf = useCallback(
+    (cat: string) => {
+      const items = byCategory.get(cat) ?? [];
+      const withPhoto = items.find((r) => r.image_url);
+      return { image_url: withPhoto?.image_url ?? null, emoji: items[0]?.emoji ?? "🍽️" };
+    },
+    [byCategory],
+  );
 
   useScrollReveal([menu, categories.length, lang]);
 
@@ -529,34 +473,15 @@ export default function Catering({
         </div>
       </header>
 
-      {/* ------------------------------------------------ Sticky category rail */}
       {categories.length > 1 && (
-        <nav
-          aria-label={t.jumpTo}
-          className="sticky top-0 z-30 border-b border-line bg-base/85 backdrop-blur-xl"
-        >
-          <ul className="mx-auto flex max-w-7xl snap-x gap-1.5 overflow-x-auto px-4 py-2.5 sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {categories.map((cat) => {
-              const current = activeCategory === cat;
-              return (
-                <li key={cat} className="snap-start">
-                  <button
-                    onClick={() => scrollToCategory(cat)}
-                    aria-current={current ? "true" : undefined}
-                    className={cn(
-                      "min-h-[38px] shrink-0 cursor-pointer rounded-full px-3.5 text-xs font-semibold whitespace-nowrap transition-all focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:outline-none",
-                      current
-                        ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
-                        : "border border-line bg-white/[0.03] text-zinc-400 hover:border-zinc-600 hover:text-zinc-200",
-                    )}
-                  >
-                    {categoryDisplay.get(cat) ?? cat}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
+        <MenuCategoryNav
+          categories={categories}
+          labelOf={(c) => categoryDisplay.get(c) ?? c}
+          countOf={countOf}
+          thumbOf={thumbOf}
+          sectionId={categoryId}
+          strings={{ menu: t.menu, categories: t.jumpTo, close: t.close, items: t.items }}
+        />
       )}
 
       {/* --------------------------------------------------------------- Body */}
@@ -577,13 +502,17 @@ export default function Catering({
             celebrating={celebrating}
           />
 
-          {vegCount > 0 && <p className="mt-4 text-xs text-zinc-500">{t.legend}</p>}
-
           {categories.map((cat) => (
-            <section key={cat} id={categoryId(cat)} className="mt-10 scroll-mt-24 first:mt-8">
-              <h2 className="font-display text-xl font-bold text-white sm:text-2xl">
-                {categoryDisplay.get(cat) ?? cat}
-              </h2>
+            <section key={cat} id={categoryId(cat)} className="mt-10 scroll-mt-28 first:mt-8">
+              {/* Sticky under the nav bar, so the course you're reading is
+                  always named even once the bar itself has slid away. */}
+              <div className="sticky top-14 z-20 -mx-4 bg-base/85 px-4 py-2.5 backdrop-blur-xl sm:-mx-6 sm:px-6 lg:static lg:mx-0 lg:bg-transparent lg:px-0 lg:backdrop-blur-none">
+                <h2 className="flex items-baseline gap-2.5 font-display text-xl font-bold text-white sm:text-2xl">
+                  <span className="text-balance">{categoryDisplay.get(cat) ?? cat}</span>
+                  <span className="text-xs font-medium text-zinc-600">{countOf(cat)}</span>
+                </h2>
+                <div className="mt-2 h-px bg-gradient-to-r from-line to-transparent" />
+              </div>
               <ul className="mt-4 grid gap-3 @3xl:grid-cols-2">
                 {(byCategory.get(cat) ?? []).map((r, i) => (
                   <li
@@ -767,7 +696,7 @@ function TierLadder({
           tier labels are variable-width and the last one sits at 100%, so
           pinned labels clip off the card edge on a phone. */}
       <div
-        className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.07]"
+        className="relative mt-5 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.07]"
         role="progressbar"
         aria-valuemin={0}
         aria-valuemax={100}
@@ -778,6 +707,13 @@ function TierLadder({
           className="h-full rounded-full bg-gradient-to-r from-brand-500 to-accent-400 transition-[width] duration-700 ease-out"
           style={{ width: `${fill}%` }}
         />
+        {/* One pass of light the moment a tier lands. */}
+        {celebrating && (
+          <span
+            aria-hidden
+            className="animate-shimmer absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent"
+          />
+        )}
       </div>
 
       <ul className="mt-3 flex flex-wrap gap-2">
@@ -819,6 +755,19 @@ function DishCard({
   setQty: (id: string, qty: number) => void;
 }) {
   const selected = qty > 0;
+  // A brief ring on the card the moment it joins the selection — on a phone
+  // the running total lives at the bottom of the screen, far from the thumb
+  // that just tapped, so without this nothing near the tap acknowledges it.
+  const [justAdded, setJustAdded] = useState(false);
+  const add = () => {
+    setQty(recipe.id, qty + 1);
+    if (qty === 0) {
+      setJustAdded(true);
+      setTimeout(() => setJustAdded(false), 450);
+    }
+    navigator.vibrate?.(8);
+  };
+
   return (
     <div
       className={cn(
@@ -826,37 +775,43 @@ function DishCard({
         selected
           ? "border-brand-400/50 bg-brand-400/[0.06] shadow-lg shadow-brand-500/10"
           : "border-line bg-white/[0.02] hover:-translate-y-0.5 hover:border-zinc-600 hover:bg-white/[0.04]",
+        justAdded && "ring-2 ring-brand-400/70",
       )}
     >
-      {recipe.image_url ? (
-        <img
-          src={recipe.image_url}
-          alt=""
-          loading="lazy"
-          className="h-[72px] w-[72px] shrink-0 rounded-xl object-cover"
-        />
-      ) : (
-        <div
-          aria-hidden
-          className="flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-white/[0.06] to-white/[0.02] text-3xl"
-        >
-          {recipe.emoji}
-        </div>
-      )}
+      <div className="h-[72px] w-[72px] shrink-0 overflow-hidden rounded-xl">
+        {recipe.image_url ? (
+          <img
+            src={recipe.image_url}
+            alt=""
+            loading="lazy"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.08]"
+          />
+        ) : (
+          <div
+            aria-hidden
+            className="flex h-full w-full items-center justify-center bg-gradient-to-br from-white/[0.06] to-white/[0.02] text-3xl transition-transform duration-500 group-hover:scale-[1.08]"
+          >
+            {recipe.emoji}
+          </div>
+        )}
+      </div>
 
       <div className="min-w-0 flex-1">
-        <h3 className="text-sm font-semibold text-balance text-white">
-          {recipe.diet && (
-            <span className="mr-1" title={recipe.diet === "vegan" ? "Vegan" : "Vegetarian"}>
-              {DIET_SYMBOL[recipe.diet]}
-            </span>
-          )}
-          {name}
-        </h3>
+        <h3 className="text-sm font-semibold text-balance text-white">{name}</h3>
         {description && (
           <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-500">{description}</p>
         )}
-        <p className="mt-2 text-sm font-bold text-brand-300">{fmt(recipe.price, 2)}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-bold text-brand-300">{fmt(recipe.price, 2)}</span>
+          {/* Labelled, not a bare emoji — a green dot alone needs the legend
+              to decode, and means nothing at all to a screen reader. */}
+          {recipe.diet && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] font-medium text-zinc-400">
+              <span aria-hidden>{DIET_SYMBOL[recipe.diet]}</span>
+              {t.dietLabel[recipe.diet]}
+            </span>
+          )}
+        </div>
       </div>
 
       {selected ? (
@@ -872,7 +827,7 @@ function DishCard({
             {qty}
           </span>
           <button
-            onClick={() => setQty(recipe.id, qty + 1)}
+            onClick={add}
             aria-label={t.increase(name)}
             className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg text-zinc-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:outline-none"
           >
@@ -881,7 +836,7 @@ function DishCard({
         </div>
       ) : (
         <button
-          onClick={() => setQty(recipe.id, 1)}
+          onClick={add}
           aria-label={t.addTo(name)}
           className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950 transition-all hover:brightness-110 focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none active:scale-90"
         >
@@ -990,34 +945,6 @@ function SummaryPanel({
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-/** Bottom sheet on phones, centred dialog from `sm` up. */
-function Sheet({
-  children, onClose, label, titleId,
-}: {
-  children: React.ReactNode;
-  onClose: () => void;
-  label: string;
-  titleId: string;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  useFocusTrap(ref, true, onClose);
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <div className="animate-fade absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} aria-hidden />
-      <div
-        ref={ref}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-        aria-labelledby={titleId}
-        className="animate-sheet-up relative max-h-[92vh] w-full overflow-y-auto rounded-t-3xl border border-line bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl sm:animate-rise sm:max-w-md sm:rounded-2xl"
-      >
-        {children}
-      </div>
     </div>
   );
 }

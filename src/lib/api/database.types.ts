@@ -336,6 +336,8 @@ export interface Order {
   status: OrderStatus;
   kitchen_status: KitchenStatus;
   kitchen_notes: string | null;
+  /** Set when a QR tab was settled by another order (its SumUp sale). Excluded from revenue — see migration 0063 and countsAsRevenue(). */
+  merged_into?: string | null;
   /** Stamped by the DB when the ticket changes kitchen status (see migration 0057). Absent on older / synced orders. */
   kitchen_started_at?: string | null;
   kitchen_ready_at?: string | null;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Plus, Minus, CircleDot, CheckCircle2, CalendarClock, UtensilsCrossed, Gift, Ticket } from "lucide-react";
@@ -9,6 +9,7 @@ import { fetchPublicMenu, placePublicOrder, placePublicReservation, type PublicM
 import { currencyFormatter, isSoldOut } from "@/lib/calc";
 import { orderCategories } from "@/lib/category-order";
 import { cn, errorMessage, fmtNumber } from "@/lib/utils";
+import { MenuCategoryNav, menuSectionId as categoryId } from "@/components/MenuCategoryNav";
 import { toast } from "@/lib/toast";
 import { getRememberedEmail, rememberEmail } from "@/lib/storefront-identity";
 
@@ -36,7 +37,7 @@ export default function Storefront({
   const [guestName, setGuestName] = useState("");
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
-  const [confirmation, setConfirmation] = useState<{ order_number: string; total?: number; paid?: boolean } | null>(null);
+  const [confirmation, setConfirmation] = useState<{ order_number: string; total?: number; paid?: boolean; appended?: boolean } | null>(null);
   const [reserving, setReserving] = useState(false);
   const [reserved, setReserved] = useState(false);
   const [resForm, setResForm] = useState({
@@ -98,30 +99,26 @@ export default function Storefront({
     return map;
   }, [menu, lang]);
 
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const categoryId = (cat: string) => `cat-${cat.replace(/\s+/g, "-").toLowerCase()}`;
-  const scrollToCategory = (cat: string) => {
-    setActiveCategory(cat);
-    document.getElementById(categoryId(cat))?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  // Tracks whichever section is nearest the top of the viewport, so the pill
-  // bar reflects where the diner actually scrolled to, not only a click.
-  useEffect(() => {
-    if (!categories.length) return;
-    const labelById = new Map(categories.map((c) => [categoryId(c), c]));
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const label = visible[0] && labelById.get(visible[0].target.id);
-        if (label) setActiveCategory(label);
-      },
-      { rootMargin: "-64px 0px -70% 0px" },
-    );
-    const els = categories.map((c) => document.getElementById(categoryId(c))).filter((el): el is HTMLElement => !!el);
-    els.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [categories]);
+  // Scroll-spy and jumping live in MenuCategoryNav now — this page only
+  // supplies the labels, counts and artwork for each category.
+  const byCategory = useMemo(() => {
+    const map = new Map<string, PublicMenu["recipes"]>();
+    for (const r of menu?.recipes ?? []) {
+      const list = map.get(r.category);
+      if (list) list.push(r);
+      else map.set(r.category, [r]);
+    }
+    return map;
+  }, [menu]);
+  const countOf = useCallback((cat: string) => (byCategory.get(cat) ?? []).length, [byCategory]);
+  const thumbOf = useCallback(
+    (cat: string) => {
+      const items = byCategory.get(cat) ?? [];
+      const withPhoto = items.find((r) => r.image_url);
+      return { image_url: withPhoto?.image_url ?? null, emoji: items[0]?.emoji ?? "🍽️" };
+    },
+    [byCategory],
+  );
 
   const setQty = (id: string, qty: number) =>
     setCart((prev) => {
@@ -289,26 +286,20 @@ export default function Storefront({
         </div>
       </header>
 
-      {/* Category quick-jump — sticky so a long menu stays easy to navigate on mobile. */}
       {categories.length > 1 && (
-        <nav className="sticky top-0 z-30 border-b border-line bg-base/90 backdrop-blur-xl">
-          <div className="mx-auto flex max-w-3xl gap-1.5 overflow-x-auto px-4 py-2.5">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => scrollToCategory(cat)}
-                className={cn(
-                  "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap transition-all",
-                  activeCategory === cat
-                    ? "bg-gradient-to-r from-brand-500 to-accent-400 text-zinc-950"
-                    : "border border-line bg-white/[0.03] text-zinc-400",
-                )}
-              >
-                {categoryDisplay.get(cat) ?? cat}
-              </button>
-            ))}
-          </div>
-        </nav>
+        <MenuCategoryNav
+          categories={categories}
+          labelOf={(c) => categoryDisplay.get(c) ?? c}
+          countOf={countOf}
+          thumbOf={thumbOf}
+          sectionId={categoryId}
+          strings={{
+            menu: pick("Menü", "Menu"),
+            categories: pick("Kategorien", "Categories"),
+            close: pick("Schließen", "Close"),
+            items: (n) => (lang === "de" ? (n === 1 ? "1 Gericht" : `${n} Gerichte`) : n === 1 ? "1 dish" : `${n} dishes`),
+          }}
+        />
       )}
 
       {/* Menu */}
@@ -317,7 +308,7 @@ export default function Storefront({
           <p className="-mt-2 text-xs text-zinc-500">{pick("🟢 Vegetarisch · 🌱 Vegan", "🟢 Vegetarian · 🌱 Vegan")}</p>
         )}
         {categories.map((cat) => (
-          <section key={cat} id={categoryId(cat)} className="scroll-mt-16">
+          <section key={cat} id={categoryId(cat)} className="scroll-mt-24">
             <h2 className="mb-3 font-display text-lg font-bold text-white">{categoryDisplay.get(cat) ?? cat}</h2>
             <div className="space-y-2.5">
               {menu.recipes
@@ -417,7 +408,13 @@ export default function Storefront({
       <Modal
         open={!!confirmation}
         onClose={() => setConfirmation(null)}
-        title={confirmation?.paid ? "Payment received!" : "Order sent to the kitchen!"}
+        title={
+          confirmation?.paid
+            ? "Payment received!"
+            : confirmation?.appended
+              ? "Added to your table's order!"
+              : "Order sent to the kitchen!"
+        }
       >
         {confirmation && (
           <div className="space-y-4 text-center">
@@ -426,6 +423,16 @@ export default function Storefront({
             <p className="text-sm text-zinc-400">
               {confirmation.paid ? (
                 <>Thank you — your payment went through and the kitchen has your order!</>
+              ) : confirmation.appended ? (
+                // One bill per table: the guest ordering a second round should
+                // see it joined the tab, not think they started a new order.
+                <>
+                  Added to your table&rsquo;s order — running total{" "}
+                  <span className="font-semibold text-brand-300">
+                    {confirmation.total != null ? fmt(confirmation.total, 2) : ""}
+                  </span>
+                  . Pay it all together at the counter.
+                </>
               ) : (
                 <>
                   Total{" "}

@@ -6,7 +6,7 @@ type Params = Promise<{ slug: string }>;
 
 export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug } = await params;
-  const menu = await fetchPublicMenuServer(slug);
+  const menu = await fetchPublicMenuServer(slug, { includeHidden: true });
   if (!menu) return { title: "Catering — DishData" };
   return {
     title: `${menu.org.name} — Catering`,
@@ -20,6 +20,6 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
 
 export default async function CateringPage({ params }: { params: Params }) {
   const { slug } = await params;
-  const initialMenu = await fetchPublicMenuServer(slug);
+  const initialMenu = await fetchPublicMenuServer(slug, { includeHidden: true });
   return <Catering slug={slug} initialMenu={initialMenu} />;
 }

@@ -7,7 +7,11 @@ import type { Recipe } from "@/lib/api/database.types";
  * Server-side public menu fetch for SSR/SEO on /r/[slug]. Anonymous read.
  * Returns null in demo mode (no Supabase) — the client falls back to demo data.
  */
-export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | null> {
+export async function fetchPublicMenuServer(
+  slug: string,
+  opts?: { includeHidden?: boolean },
+): Promise<PublicMenu | null> {
+  const includeHidden = opts?.includeHidden ?? false;
   const sb = await createSupabaseServerClient();
   if (!sb) return null;
 
@@ -26,13 +30,15 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
 
   // An event menu explicitly shown on the website replaces the catalog with
   // just its own items (e.g. a tournament-only ordering page).
-  const { data: websiteMenu } = await sb
-    .from("event_menus")
-    .select("id")
-    .eq("org_id", org.id)
-    .eq("is_active", true)
-    .eq("show_on_website", true)
-    .maybeSingle();
+  const { data: websiteMenu } = includeHidden
+    ? { data: null }
+    : await sb
+        .from("event_menus")
+        .select("id")
+        .eq("org_id", org.id)
+        .eq("is_active", true)
+        .eq("show_on_website", true)
+        .maybeSingle();
 
   if (websiteMenu) {
     const { data: items } = await sb
@@ -51,6 +57,12 @@ export async function fetchPublicMenuServer(slug: string): Promise<PublicMenu | 
   // signal, "(Tournament)" naming is just defense in depth on top of it.
   const { data: eventRows } = await sb.from("event_menu_items").select("recipe_id").eq("org_id", org.id);
   const eventIds = [...new Set((eventRows ?? []).map((r) => r.recipe_id as string))];
+
+  if (includeHidden) {
+    // See fetchPublicMenu: anon cannot read hidden recipes from the table.
+    const { data } = await sb.rpc("catering_menu", { _slug: slug });
+    return { org, recipes: (data as Recipe[]) ?? [] };
+  }
 
   let query = sb
     .from("recipes")
