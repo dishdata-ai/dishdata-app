@@ -65,7 +65,7 @@ export default function OpsPulse() {
           <Badge tone={pct === 100 ? "green" : pct >= 50 ? "amber" : "neutral"}>{pct}% of checklists done</Badge>
         </div>
         {moduleIds.has("dailytasks") && (
-          <Link href="/daily-tasks" className="inline-flex items-center gap-1 text-sm text-accent-400 hover:underline">
+          <Link href="/tasks?view=daily" className="inline-flex items-center gap-1 text-sm text-accent-400 hover:underline">
             Open checklists <ArrowRight className="h-4 w-4" />
           </Link>
         )}

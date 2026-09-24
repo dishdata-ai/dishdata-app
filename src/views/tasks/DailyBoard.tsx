@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef } from "react";
 import { CheckCircle2, Circle, ChevronDown, Link2, Square, CheckSquare, Plus, Pencil, X, Users, Camera, Loader2 } from "lucide-react";
-import { SectionTitle, Card, Badge, Button, EmptyState, PageSkeleton, Modal, Field, Input, Textarea, Select } from "@/components/ui";
+import { Card, Badge, Button, EmptyState, PageSkeleton, Modal, Field, Input, Textarea, Select } from "@/components/ui";
 import { useTasks, useEmployees, useMembers, useDuties, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
@@ -17,12 +17,24 @@ import type { Task, StaffRole, TaskPriority, DutyAssignment, Employee, OrgMember
 
 type Tone = "green" | "amber" | "rose" | "violet" | "cyan" | "neutral";
 
-const ROLE_ORDER: (StaffRole | null)[] = ["frontend", "kitchen_lead", "commi_kitchen", "manager", "admin", "owner", null];
+const ROLE_ORDER: (StaffRole | null)[] = [
+  "frontend",
+  "frontend_helper",
+  "kitchen_lead",
+  "commi_kitchen",
+  "kitchen_helper",
+  "manager",
+  "admin",
+  "owner",
+  null,
+];
 
 const ROLE_TONES: Record<StaffRole, Tone> = {
   frontend: "cyan",
+  frontend_helper: "green",
   kitchen_lead: "amber",
   commi_kitchen: "violet",
+  kitchen_helper: "rose",
   owner: "rose",
   admin: "rose",
   manager: "amber",
@@ -33,7 +45,8 @@ const roleTone = (r: StaffRole | null): Tone => (r ? ROLE_TONES[r] : "neutral");
 
 const isImageUrl = (url: string) => /\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(url);
 
-export default function DailyTasks() {
+/** Daily-checklists view, mounted as a tab inside Tasks (src/views/Tasks.tsx). */
+export default function DailyBoard() {
   const { org, isManager } = useOrg();
   const { user } = useAuth();
   const tasksQ = useTasks();
@@ -140,35 +153,34 @@ export default function DailyTasks() {
 
   return (
     <div className="space-y-6">
-      <SectionTitle
-        title="Daily Tasks"
-        subtitle="Checklists that reset every day. Everyone starts on their own duties — switch to Everyone to see who needs a hand."
-        action={
-          <div className="flex items-center gap-2">
-            {mine.size > 0 && (
-              <div className="flex rounded-full border border-line bg-white/[0.03] p-0.5 text-xs font-semibold">
-                {(["mine", "all"] as const).map((v) => (
-                  <button
-                    key={v}
-                    onClick={() => setView(v)}
-                    className={cn(
-                      "cursor-pointer rounded-full px-3 py-1 transition-colors",
-                      effectiveView === v ? "bg-brand-400/15 text-brand-300" : "text-zinc-400 hover:text-white",
-                    )}
-                  >
-                    {v === "mine" ? "My duties" : "Everyone"}
-                  </button>
-                ))}
-              </div>
-            )}
-            {isManager && (
-              <Button onClick={() => setAdding(true)}>
-                <Plus className="h-4 w-4" /> New daily task
-              </Button>
-            )}
-          </div>
-        }
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-2xl text-sm text-zinc-400">
+          Checklists that reset every day. Everyone starts on their own duties — switch to Everyone to see who needs a hand.
+        </p>
+        <div className="flex items-center gap-2">
+          {mine.size > 0 && (
+            <div className="flex rounded-full border border-line bg-white/[0.03] p-0.5 text-xs font-semibold">
+              {(["mine", "all"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={cn(
+                    "cursor-pointer rounded-full px-3 py-1 transition-colors",
+                    effectiveView === v ? "bg-brand-400/15 text-brand-300" : "text-zinc-400 hover:text-white",
+                  )}
+                >
+                  {v === "mine" ? "My duties" : "Everyone"}
+                </button>
+              ))}
+            </div>
+          )}
+          {isManager && (
+            <Button onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4" /> New daily task
+            </Button>
+          )}
+        </div>
+      </div>
 
       <DutyBoard
         orgId={org!.id}
@@ -458,7 +470,7 @@ function DutyBoard({
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
         <Users className="h-4 w-4 text-zinc-400" /> Who does what
       </div>
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {DUTY_ROLES.map((duty) => {
           const holders = duties.filter((d) => d.duty === duty);
           const taken = new Set(holders.map((d) => d.employee_id ?? d.user_id));
@@ -530,7 +542,12 @@ function NewDailyForm({ orgId, onDone }: { orgId: string; onDone: () => void }) 
         assigned_role: form.duty || null,
         is_daily: true,
         requires_photo: form.photo,
-        department: form.duty === "kitchen_lead" || form.duty === "commi_kitchen" ? "kitchen" : form.duty === "frontend" ? "front_of_house" : null,
+        department:
+          form.duty === "kitchen_lead" || form.duty === "commi_kitchen" || form.duty === "kitchen_helper"
+            ? "kitchen"
+            : form.duty === "frontend" || form.duty === "frontend_helper"
+              ? "front_of_house"
+              : null,
       });
       invalidate("tasks");
       toast.success("Daily task added", form.title.trim());

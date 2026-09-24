@@ -626,7 +626,7 @@ export function MyDayView() {
 
       {/* Daily checklist for the duties I hold */}
       {duties.size > 0 && moduleIds.has("dailytasks") && (
-        <Link href="/daily-tasks">
+        <Link href="/tasks?view=daily">
           <Card className="flex items-center gap-3 p-4 transition-all hover:border-brand-400/40">
             <div className="rounded-xl bg-gradient-to-br from-brand-500/20 to-accent-400/10 p-2.5">
               <CheckCircle2 className="h-5 w-5 text-brand-300" />

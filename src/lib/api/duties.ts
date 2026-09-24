@@ -6,12 +6,20 @@ import type { DutyAssignment, Employee, StaffRole, Task } from "@/lib/api/databa
 const dDuties = demoTable<DutyAssignment>("duty_assignments");
 
 /** The duties that can be handed to a person (the other StaffRole values are access levels). */
-export const DUTY_ROLES = ["frontend", "kitchen_lead", "commi_kitchen"] as const satisfies readonly StaffRole[];
+export const DUTY_ROLES = [
+  "frontend",
+  "frontend_helper",
+  "kitchen_lead",
+  "commi_kitchen",
+  "kitchen_helper",
+] as const satisfies readonly StaffRole[];
 
 export const DUTY_LABELS: Record<StaffRole, string> = {
   frontend: "Frontend",
+  frontend_helper: "Frontend Helper",
   kitchen_lead: "Head Chef / Kitchen Lead",
-  commi_kitchen: "Commi / Kitchen Helper",
+  commi_kitchen: "Commi",
+  kitchen_helper: "Kitchen Helper",
   owner: "Owner",
   admin: "Admin",
   manager: "Manager",

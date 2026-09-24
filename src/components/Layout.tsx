@@ -160,7 +160,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const navItems = useMemo(() => MODULES.filter((m) => moduleIds.has(m.id)), [moduleIds]);
+  // Modules with `tabOf` render as a tab inside their parent's page instead of their own row.
+  const navItems = useMemo(() => MODULES.filter((m) => moduleIds.has(m.id) && !m.tabOf), [moduleIds]);
 
   // Mobile bottom tabs: the 4 most useful accessible modules + "More"
   const mobileTabs = useMemo(() => {

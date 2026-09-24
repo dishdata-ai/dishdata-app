@@ -1,6 +1,8 @@
+"use client";
+
 import { useEffect, useMemo, useState } from "react";
 import { Flame, ChefHat, CheckCircle2, Bell, StickyNote, Check, PackageCheck } from "lucide-react";
-import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton } from "@/components/ui";
+import { Card, SectionTitle, Badge, Button, EmptyState, PageSkeleton, Select } from "@/components/ui";
 import { useOrders, useInvalidate } from "@/lib/hooks/data";
 import BainMarie from "@/components/BainMarie";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
@@ -9,6 +11,17 @@ import { setKitchenStatus, setLineReady } from "@/lib/api/orders";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import type { Order, KitchenStatus } from "@/lib/api/database.types";
+import { useKitchenOps } from "@/views/kitchenops/useKitchenOps";
+import LiveKitchen from "@/views/kitchenops/LiveKitchen";
+import TodayPrep from "@/views/kitchenops/TodayPrep";
+import MenuMethods from "@/views/kitchenops/MenuMethods";
+import HourlyForecast from "@/views/kitchenops/HourlyForecast";
+import StockReplenishment from "@/views/kitchenops/StockReplenishment";
+import ServiceSpeed from "@/views/kitchenops/ServiceSpeed";
+import Waste from "@/views/kitchenops/Waste";
+import DailyReview from "@/views/kitchenops/DailyReview";
+import WeeklyAnalysis from "@/views/kitchenops/WeeklyAnalysis";
+import Standards from "@/views/kitchenops/Standards";
 
 /** Where the ticket came from, when it was not rung up at the till. */
 const SOURCE_LABEL: Record<string, string> = {
@@ -125,7 +138,8 @@ function Ticket({
   );
 }
 
-export default function Kitchen() {
+/** The live ticket board — everything Kitchen.tsx showed before Kitchen Ops became a second tab here. */
+function Board({ sound, setSound }: { sound: boolean; setSound: (v: boolean | ((s: boolean) => boolean)) => void }) {
   const { org } = useOrg();
   const ordersQ = useOrders();
   const invalidate = useInvalidate();
@@ -138,7 +152,6 @@ export default function Kitchen() {
   }, []);
 
   // Sound cue when a new ticket arrives
-  const [sound, setSound] = useState(true);
   const newCount = (ordersQ.data ?? []).filter((o) => o.kitchen_status === "new").length;
   const [prevNew, setPrevNew] = useState(newCount);
   useEffect(() => {
@@ -171,13 +184,6 @@ export default function Kitchen() {
       ),
     [ordersQ.data],
   );
-
-  const servedToday = useMemo(() => {
-    const todayKey = new Date().toISOString().slice(0, 10);
-    return (ordersQ.data ?? []).filter(
-      (o) => o.kitchen_status === "served" && o.created_at.slice(0, 10) === todayKey,
-    ).length;
-  }, [ordersQ.data]);
 
   const advance = async (order: Order, status: KitchenStatus) => {
     try {
@@ -236,27 +242,6 @@ export default function Kitchen() {
 
   return (
     <div className="space-y-6">
-      <SectionTitle
-        title="Kitchen"
-        subtitle="Live ticket board — orders stream in from POS and online ordering."
-        action={
-          <div className="flex items-center gap-3">
-            <Badge tone="green">
-              <CheckCircle2 className="h-3 w-3" /> {servedToday} served today
-            </Badge>
-            <button
-              onClick={() => setSound((s) => !s)}
-              className={cn(
-                "inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all",
-                sound ? "border-brand-400/30 bg-brand-400/10 text-brand-300" : "border-line text-zinc-500",
-              )}
-            >
-              <Bell className="h-3 w-3" /> {sound ? "Sound on" : "Sound off"}
-            </button>
-          </div>
-        }
-      />
-
       <BainMarie />
 
       {pickups.length > 0 && (
@@ -340,6 +325,159 @@ export default function Kitchen() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+const OPS_TABS = [
+  { id: "live", label: "Live Kitchen" },
+  { id: "prep", label: "Today's Prep" },
+  { id: "methods", label: "Menu & Methods" },
+  { id: "forecast", label: "Hourly Forecast" },
+  { id: "stock", label: "Stock & Replenishment" },
+  { id: "speed", label: "Service Speed" },
+  { id: "waste", label: "Waste" },
+  { id: "review", label: "Daily Review" },
+  { id: "weekly", label: "Weekly Analysis" },
+  { id: "standards", label: "Recipe & Portion Standards" },
+] as const;
+type OpsTabId = (typeof OPS_TABS)[number]["id"];
+
+/** Batch-cook planning: forecast, live stock, prep boards, speed and waste — nested here since it needs the same live orders. */
+function KitchenOps() {
+  const [opsTab, setOpsTab] = useState<OpsTabId>("live");
+  const [multiplier, setMultiplier] = useState(1);
+  const k = useKitchenOps(multiplier);
+
+  if (k.loading) return <PageSkeleton />;
+
+  const learning = k.model.serviceDays < 14;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="-mx-1 flex flex-1 gap-1 overflow-x-auto px-1 pb-1">
+          {OPS_TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setOpsTab(t.id)}
+              className={cn(
+                "shrink-0 cursor-pointer rounded-full px-3.5 py-1.5 text-sm font-semibold whitespace-nowrap transition-colors",
+                opsTab === t.id ? "bg-brand-400/15 text-brand-300 ring-1 ring-brand-400/30" : "bg-white/[0.04] text-zinc-400 hover:text-white",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
+          Busy-day factor
+          <Select value={String(multiplier)} onChange={(e) => setMultiplier(Number(e.target.value))} className="w-28 py-1.5 text-xs">
+            <option value="0.8">Quiet ×0.8</option>
+            <option value="1">Normal ×1</option>
+            <option value="1.25">Busy ×1.25</option>
+            <option value="1.5">Very busy ×1.5</option>
+          </Select>
+        </label>
+      </div>
+
+      {learning && (
+        <p className="rounded-lg border border-line bg-white/[0.02] px-3 py-2 text-xs text-zinc-400">
+          Learning from {k.model.serviceDays} service day{k.model.serviceDays === 1 ? "" : "s"} of sales — forecasts sharpen as more days come in (about 3–4 weeks gives a solid weekday pattern).
+        </p>
+      )}
+
+      {opsTab === "live" && <LiveKitchen k={k} />}
+      {opsTab === "prep" && <TodayPrep k={k} multiplier={multiplier} />}
+      {opsTab === "methods" && <MenuMethods k={k} />}
+      {opsTab === "forecast" && <HourlyForecast k={k} multiplier={multiplier} />}
+      {opsTab === "stock" && <StockReplenishment k={k} />}
+      {opsTab === "speed" && <ServiceSpeed k={k} />}
+      {opsTab === "waste" && <Waste k={k} />}
+      {opsTab === "review" && <DailyReview k={k} />}
+      {opsTab === "weekly" && <WeeklyAnalysis k={k} multiplier={multiplier} />}
+      {opsTab === "standards" && <Standards k={k} />}
+    </div>
+  );
+}
+
+export default function Kitchen() {
+  const { moduleIds } = useOrg();
+  const ordersQ = useOrders();
+  const hasBoard = moduleIds.has("kitchen");
+  const hasOps = moduleIds.has("kitchenops");
+  const [view, setView] = useState<"board" | "ops">(hasBoard ? "board" : "ops");
+  const [sound, setSound] = useState(true);
+
+  // Deep link: /kitchen?view=ops lands on Kitchen Ops (e.g. from the BainMarie widget's "Prep plan" link).
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v === "ops" && hasOps) setView("ops");
+    else if (v === "board" && hasBoard) setView("board");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const servedToday = useMemo(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    return (ordersQ.data ?? []).filter(
+      (o) => o.kitchen_status === "served" && o.created_at.slice(0, 10) === todayKey,
+    ).length;
+  }, [ordersQ.data]);
+
+  return (
+    <div className="space-y-6">
+      <SectionTitle
+        title="Kitchen"
+        subtitle={
+          view === "board"
+            ? "Live ticket board — orders stream in from POS and online ordering."
+            : "What we have, what's running out, what to make next — and how much."
+        }
+        action={
+          view === "board" ? (
+            <div className="flex items-center gap-3">
+              <Badge tone="green">
+                <CheckCircle2 className="h-3 w-3" /> {servedToday} served today
+              </Badge>
+              <button
+                onClick={() => setSound((s) => !s)}
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all",
+                  sound ? "border-brand-400/30 bg-brand-400/10 text-brand-300" : "border-line text-zinc-500",
+                )}
+              >
+                <Bell className="h-3 w-3" /> {sound ? "Sound on" : "Sound off"}
+              </button>
+            </div>
+          ) : undefined
+        }
+      />
+
+      {hasBoard && hasOps && (
+        <div className="flex w-fit rounded-full border border-line bg-white/[0.03] p-0.5">
+          <button
+            onClick={() => setView("board")}
+            className={cn(
+              "inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all",
+              view === "board" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-white",
+            )}
+          >
+            <Flame className="h-3.5 w-3.5" /> Board
+          </button>
+          <button
+            onClick={() => setView("ops")}
+            className={cn(
+              "inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all",
+              view === "ops" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-white",
+            )}
+          >
+            <ChefHat className="h-3.5 w-3.5" /> Kitchen Ops
+          </button>
+        </div>
+      )}
+
+      {view === "board" && hasBoard && <Board sound={sound} setSound={setSound} />}
+      {view === "ops" && hasOps && <KitchenOps />}
     </div>
   );
 }

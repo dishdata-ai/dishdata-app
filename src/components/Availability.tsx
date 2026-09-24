@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { CalendarCheck, Check, Clock, Trash2, X } from "lucide-react";
 import { Card, Badge, Button, Input, Field, Modal, WeekTabs } from "@/components/ui";
-import { useAvailability, useShifts, useInvalidate } from "@/lib/hooks/data";
+import { useAvailability, useShifts, useDuties, useInvalidate } from "@/lib/hooks/data";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import {
@@ -15,9 +15,10 @@ import {
   shortTime,
 } from "@/lib/api/availability";
 import { setShift, removeShift } from "@/lib/api/shifts";
+import { DUTY_ROLES, DUTY_LABELS, addDuty, removeDuty } from "@/lib/api/duties";
 import { toast } from "@/lib/toast";
 import { cn, errorMessage } from "@/lib/utils";
-import type { Employee, StaffAvailability, AvailabilityStatus, Shift } from "@/lib/api/database.types";
+import type { Employee, StaffAvailability, AvailabilityStatus, Shift, DutyAssignment, StaffRole } from "@/lib/api/database.types";
 
 const STATUS_OPTIONS: { id: AvailabilityStatus; label: string; icon: typeof Check; active: string }[] = [
   { id: "available", label: "Available", icon: Check, active: "border-brand-400/40 bg-brand-500/15 text-brand-200" },
@@ -26,6 +27,38 @@ const STATUS_OPTIONS: { id: AvailabilityStatus; label: string; icon: typeof Chec
 ];
 
 const DEFAULT_WINDOW = { from: "16:00", to: "23:00" };
+
+// Common shift windows — reduces the modal to one tap for the usual case.
+const SHIFT_PRESETS: { label: string; from: string; to: string }[] = [
+  { label: "Lunch", from: "11:00", to: "17:00" },
+  { label: "Dinner", from: "17:00", to: "23:00" },
+  { label: "Full day", from: "11:00", to: "23:00" },
+];
+
+// Same colours DailyBoard.tsx uses for these duties, so a duty reads the same everywhere.
+const DUTY_TONE_CLASS: Record<(typeof DUTY_ROLES)[number], string> = {
+  frontend: "border-accent-400/40 bg-accent-400/15 text-accent-400",
+  frontend_helper: "border-brand-400/40 bg-brand-400/15 text-brand-300",
+  kitchen_lead: "border-amber-soft/40 bg-amber-soft/10 text-amber-soft",
+  commi_kitchen: "border-violet-soft/40 bg-violet-soft/10 text-violet-soft",
+  kitchen_helper: "border-rose-soft/40 bg-rose-soft/10 text-rose-soft",
+};
+const DUTY_BADGE_TONE: Record<(typeof DUTY_ROLES)[number], "cyan" | "amber" | "violet" | "green" | "rose"> = {
+  frontend: "cyan",
+  frontend_helper: "green",
+  kitchen_lead: "amber",
+  commi_kitchen: "violet",
+  kitchen_helper: "rose",
+};
+
+/** Decimal hours between two "HH:MM" clock strings; a shorter end than start means an overnight shift. */
+function hoursBetween(start: string, end: string): number {
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  let mins = eh * 60 + em - (sh * 60 + sm);
+  if (mins <= 0) mins += 24 * 60;
+  return mins / 60;
+}
 
 /** Short summary of an availability row for showing next to a shift form. */
 function availabilitySummary(row: StaffAvailability | undefined): string {
@@ -224,28 +257,50 @@ function AvailabilityHint({ row }: { row: StaffAvailability | undefined }) {
   );
 }
 
+/** Small read-only badges for whichever duties (task groups) an employee currently holds. */
+function DutyBadges({ roles }: { roles: StaffRole[] }) {
+  const held = DUTY_ROLES.filter((r) => roles.includes(r));
+  if (held.length === 0) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {held.map((r) => (
+        <Badge key={r} tone={DUTY_BADGE_TONE[r]} className="px-1.5 py-0 text-[10px]">
+          {DUTY_LABELS[r]}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 /** One employee×day cell: the availability hint plus the assigned shift, if any. */
 function ScheduleCell({
   availability,
   shift,
+  today,
   onClick,
 }: {
   availability: StaffAvailability | undefined;
   shift: Shift | undefined;
+  today: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex w-full cursor-pointer flex-col items-center gap-0.5 rounded-lg px-1.5 py-1 text-center transition-colors hover:bg-white/[0.04]"
+      className={cn(
+        "group flex w-full cursor-pointer flex-col items-center gap-0.5 rounded-lg px-1.5 py-1.5 text-center transition-colors hover:bg-white/[0.06]",
+        today && !shift && "bg-white/[0.02]",
+      )}
     >
       {shift ? (
-        <span className="inline-flex flex-col items-center rounded-md bg-brand-400/10 px-1.5 py-1 text-[11px] font-semibold text-brand-200">
+        <span className="inline-flex flex-col items-center rounded-md bg-brand-400/10 px-1.5 py-1 text-[11px] font-semibold text-brand-200 group-hover:bg-brand-400/15">
           <span>{shortTime(shift.start_time)}–{shortTime(shift.end_time)}</span>
           {shift.role_title && <span className="font-normal text-brand-300/80">{shift.role_title}</span>}
         </span>
       ) : (
-        <span className="text-sm text-zinc-700 group-hover:text-zinc-500">+</span>
+        <span className="flex h-6 w-6 items-center justify-center rounded-md border border-dashed border-line text-sm text-zinc-600 transition-colors group-hover:border-accent-400/40 group-hover:text-accent-400">
+          +
+        </span>
       )}
       <span className="text-[10px]">
         <AvailabilityHint row={availability} />
@@ -259,6 +314,7 @@ function ShiftModal({
   date,
   shift,
   availability,
+  duties,
   orgId,
   onClose,
   onSaved,
@@ -267,10 +323,12 @@ function ShiftModal({
   date: Date;
   shift: Shift | undefined;
   availability: StaffAvailability | undefined;
+  duties: DutyAssignment[];
   orgId: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const invalidate = useInvalidate();
   // Default the shift window to the hours they actually said they can work.
   const suggested =
     availability?.status === "partial"
@@ -281,6 +339,23 @@ function ShiftModal({
   const [role, setRole] = useState(shift?.role_title ?? employee.role_title);
   const [note, setNote] = useState(shift?.note ?? "");
   const [saving, setSaving] = useState(false);
+  const [dutyBusy, setDutyBusy] = useState<StaffRole | null>(null);
+
+  const myDuties = duties.filter((d) => d.employee_id === employee.id);
+
+  const toggleDuty = async (duty: StaffRole) => {
+    const existing = myDuties.find((d) => d.duty === duty);
+    setDutyBusy(duty);
+    try {
+      if (existing) await removeDuty(orgId, existing.id);
+      else await addDuty(orgId, duty, { employee_id: employee.id });
+      invalidate("duty_assignments");
+    } catch (e) {
+      toast.error("Could not update duty", errorMessage(e));
+    } finally {
+      setDutyBusy(null);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -342,6 +417,28 @@ function ShiftModal({
             {availabilitySummary(availability)}
           </span>
         </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {SHIFT_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => {
+                setStart(p.from);
+                setEnd(p.to);
+              }}
+              className={cn(
+                "cursor-pointer rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors",
+                start === p.from && end === p.to
+                  ? "border-brand-400/40 bg-brand-500/15 text-brand-200"
+                  : "border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+              )}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="Start">
             <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
@@ -350,12 +447,45 @@ function ShiftModal({
             <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
           </Field>
         </div>
+        {start && end && (
+          <p className="-mt-2 text-xs text-zinc-500">{hoursBetween(start, end).toFixed(1)} hour shift</p>
+        )}
+
         <Field label="Role / station (optional)">
           <Input value={role ?? ""} onChange={(e) => setRole(e.target.value)} placeholder={employee.role_title} />
         </Field>
         <Field label="Note (optional)">
           <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. covering the pass" />
         </Field>
+
+        <div>
+          <p className="mb-1.5 text-xs font-semibold text-zinc-400">
+            Duty — their checklist group on Tasks → Daily
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {DUTY_ROLES.map((d) => {
+              const active = myDuties.some((m) => m.duty === d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  disabled={dutyBusy === d}
+                  onClick={() => toggleDuty(d)}
+                  className={cn(
+                    "inline-flex cursor-pointer items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-all disabled:cursor-wait disabled:opacity-60",
+                    active ? DUTY_TONE_CLASS[d] : "border-line bg-white/[0.03] text-zinc-400 hover:text-white",
+                  )}
+                >
+                  {DUTY_LABELS[d]}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-[11px] text-zinc-600">
+            This is their ongoing duty, not just for this shift — it decides which daily checklist they see every day.
+          </p>
+        </div>
+
         <div className="flex gap-2">
           {shift && (
             <Button variant="danger" disabled={saving} onClick={del}>
@@ -375,18 +505,28 @@ function ShiftModal({
 export function AvailabilityBoard({ employees }: { employees: Employee[] }) {
   useRealtimeInvalidate("staff_availability", ["staff_availability"]);
   useRealtimeInvalidate("shifts", ["shifts"]);
+  useRealtimeInvalidate("duty_assignments", ["duty_assignments"]);
   const { org } = useOrg();
   const availabilityQ = useAvailability();
   const shiftsQ = useShifts();
+  const dutiesQ = useDuties();
   const invalidate = useInvalidate();
   const [offset, setOffset] = useState(1);
   const [editing, setEditing] = useState<{ employee: Employee; date: Date } | null>(null);
 
   const days = weekDays(offset);
   const keys = days.map(dayKey);
+  const todayKey = dayKey(new Date());
+  const duties = dutiesQ.data ?? [];
   const byAvailability = new Map((availabilityQ.data ?? []).map((r) => [`${r.employee_id}|${r.day}`, r]));
   const byShift = new Map((shiftsQ.data ?? []).map((r) => [`${r.employee_id}|${r.day}`, r]));
   const missing = employees.filter((e) => !keys.some((k) => byAvailability.has(`${e.id}|${k}`)));
+
+  const weeklyHours = (employeeId: string) =>
+    keys.reduce((sum, k) => {
+      const s = byShift.get(`${employeeId}|${k}`);
+      return s ? sum + hoursBetween(shortTime(s.start_time), shortTime(s.end_time)) : sum;
+    }, 0);
 
   return (
     <Card>
@@ -403,43 +543,56 @@ export function AvailabilityBoard({ employees }: { employees: Employee[] }) {
         <WeekTabs offsets={[0, 1, 2, 3, 4]} value={offset} onChange={setOffset} label={weekTabLabel} />
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[820px] text-sm">
           <thead>
             <tr className="border-b border-line text-xs text-zinc-500">
-              <th className="px-4 py-2 text-left font-medium">Employee</th>
-              {days.map((d) => (
-                <th key={dayKey(d)} className="px-2 py-2 text-center font-medium">
-                  {d.toLocaleDateString(undefined, { weekday: "short" })}{" "}
-                  <span className="text-zinc-600">{d.getDate()}</span>
-                </th>
-              ))}
+              <th className="sticky left-0 z-10 bg-base px-4 py-2 text-left font-medium">Employee</th>
+              {days.map((d) => {
+                const k = dayKey(d);
+                return (
+                  <th key={k} className={cn("px-2 py-2 text-center font-medium", k === todayKey && "text-accent-400")}>
+                    {d.toLocaleDateString(undefined, { weekday: "short" })}{" "}
+                    <span className={k === todayKey ? "text-accent-400/70" : "text-zinc-600"}>{d.getDate()}</span>
+                  </th>
+                );
+              })}
+              <th className="px-3 py-2 text-right font-medium">This week</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line/60">
-            {employees.map((e) => (
-              <tr key={e.id}>
-                <td className="px-4 py-2">
-                  <p className="truncate font-medium text-white">{e.name}</p>
-                  <p className="text-xs text-zinc-500">{e.role_title}</p>
-                </td>
-                {days.map((d, i) => {
-                  const k = keys[i];
-                  return (
-                    <td key={k} className="px-1 py-1 text-center">
-                      <ScheduleCell
-                        availability={byAvailability.get(`${e.id}|${k}`)}
-                        shift={byShift.get(`${e.id}|${k}`)}
-                        onClick={() => setEditing({ employee: e, date: d })}
-                      />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
+            {employees.map((e) => {
+              const roles = duties.filter((d) => d.employee_id === e.id).map((d) => d.duty);
+              const hours = weeklyHours(e.id);
+              return (
+                <tr key={e.id}>
+                  <td className="sticky left-0 z-10 bg-base px-4 py-2">
+                    <p className="truncate font-medium text-white">{e.name}</p>
+                    <p className="text-xs text-zinc-500">{e.role_title}</p>
+                    <DutyBadges roles={roles} />
+                  </td>
+                  {days.map((d, i) => {
+                    const k = keys[i];
+                    return (
+                      <td key={k} className="px-1 py-1 text-center">
+                        <ScheduleCell
+                          availability={byAvailability.get(`${e.id}|${k}`)}
+                          shift={byShift.get(`${e.id}|${k}`)}
+                          today={k === todayKey}
+                          onClick={() => setEditing({ employee: e, date: d })}
+                        />
+                      </td>
+                    );
+                  })}
+                  <td className={cn("px-3 py-2 text-right text-xs font-semibold tabular-nums", hours > 0 ? "text-zinc-300" : "text-zinc-600")}>
+                    {hours > 0 ? `${hours.toFixed(1)}h` : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
           <tfoot>
             <tr className="border-t border-line text-xs">
-              <td className="px-4 py-2 font-semibold text-zinc-400">Scheduled</td>
+              <td className="sticky left-0 z-10 bg-base px-4 py-2 font-semibold text-zinc-400">Scheduled</td>
               {keys.map((k) => {
                 const n = employees.filter((e) => byShift.has(`${e.id}|${k}`)).length;
                 return (
@@ -448,6 +601,9 @@ export function AvailabilityBoard({ employees }: { employees: Employee[] }) {
                   </td>
                 );
               })}
+              <td className="px-3 py-2 text-right font-semibold text-brand-300">
+                {employees.reduce((s, e) => s + weeklyHours(e.id), 0).toFixed(1)}h
+              </td>
             </tr>
           </tfoot>
         </table>
@@ -475,6 +631,7 @@ export function AvailabilityBoard({ employees }: { employees: Employee[] }) {
           date={editing.date}
           shift={byShift.get(`${editing.employee.id}|${dayKey(editing.date)}`)}
           availability={byAvailability.get(`${editing.employee.id}|${dayKey(editing.date)}`)}
+          duties={duties}
           orgId={org!.id}
           onClose={() => setEditing(null)}
           onSaved={() => invalidate("shifts")}

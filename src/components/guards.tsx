@@ -36,11 +36,16 @@ export function RequireOrg({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Per-module access gate. Wrap page elements: <RequireModule id="kitchen"><Kitchen/></RequireModule> */
-export function RequireModule({ id, children }: { id: string; children: ReactNode }) {
+/**
+ * Per-module access gate. Wrap page elements: <RequireModule id="kitchen"><Kitchen/></RequireModule>
+ * `id` can be an array to mean "any of these" — for a page that folds in a tab gated by a
+ * different module (e.g. Kitchen holds both "kitchen" and "kitchenops" content).
+ */
+export function RequireModule({ id, children }: { id: string | string[]; children: ReactNode }) {
   const { moduleIds, loading } = useOrg();
   if (loading) return <FullScreenSpinner />;
-  if (!moduleIds.has(id)) {
+  const ok = Array.isArray(id) ? id.some((i) => moduleIds.has(i)) : moduleIds.has(id);
+  if (!ok) {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-center">
         <p className="font-display text-2xl font-bold text-white">No access</p>

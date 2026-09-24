@@ -24,7 +24,7 @@ export default function BainMarie() {
           {low > 0 ? <Badge tone="rose">{low} need attention</Badge> : <Badge tone="green">all stocked</Badge>}
         </div>
         {moduleIds.has("kitchenops") && (
-          <Link href="/kitchen-ops" className="inline-flex items-center gap-1 text-xs text-accent-400 hover:underline">
+          <Link href="/kitchen?view=ops" className="inline-flex items-center gap-1 text-xs text-accent-400 hover:underline">
             Prep plan &amp; forecast <ArrowRight className="h-3 w-3" />
           </Link>
         )}

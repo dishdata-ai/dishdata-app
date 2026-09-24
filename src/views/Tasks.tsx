@@ -13,6 +13,7 @@ import {
   Link2,
   AlignLeft,
 } from "lucide-react";
+import DailyBoard from "@/views/tasks/DailyBoard";
 import {
   Card,
   SectionTitle,
@@ -143,28 +144,32 @@ function NewTaskForm({ onDone }: { onDone: () => void }) {
 }
 
 export default function Tasks() {
-  const { org, isPartner } = useOrg();
+  const { org, isPartner, moduleIds } = useOrg();
   const tasksQ = useTasks();
   const employeesQ = useEmployees();
   const invalidate = useInvalidate();
   useRealtimeInvalidate("tasks", ["tasks"]);
 
+  const hasDaily = moduleIds.has("dailytasks");
   const [adding, setAdding] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<TaskStatus | null>(null);
   const [showPartnerOnly, setShowPartnerOnly] = useState(false);
-  const [view, setView] = useState<"board" | "list">("board");
+  const [view, setView] = useState<"board" | "list" | "daily">("board");
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   // Partners land on their own space; employees only ever have "team".
   const [space, setSpace] = useState<"team" | "partners">(isPartner ? "partners" : "team");
 
-  // Deep link: /tasks?task=<id> opens that task (shared via "Copy task link").
+  // Deep links: /tasks?task=<id> opens that task; /tasks?view=daily lands on the Daily tab.
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("task");
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get("task");
     if (id) setOpenTaskId(id);
+    if (params.get("view") === "daily" && hasDaily) setView("daily");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Daily checklists have their own page (Daily Tasks); keep the board for one-off work.
+  // Daily checklists render in their own "Daily" view (see DailyBoard); Board/List stay for one-off work.
   const teamTasks = useMemo(() => (tasksQ.data ?? []).filter((t) => !t.is_partner_task && !t.is_daily), [tasksQ.data]);
   const tasks = useMemo(
     () => teamTasks.filter((t) => !showPartnerOnly || t.partner_email),
@@ -218,7 +223,7 @@ export default function Tasks() {
             : "Drag cards between columns. Assign to staff or delegate to contractors."
         }
         action={
-          space === "team" ? (
+          space === "team" && view !== "daily" ? (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowPartnerOnly((v) => !v)}
@@ -262,7 +267,7 @@ export default function Tasks() {
         </div>
       )}
 
-      {space === "team" && teamTasks.length > 0 && (
+      {space === "team" && (teamTasks.length > 0 || hasDaily) && (
         <div className="flex w-fit rounded-full border border-line bg-white/[0.03] p-0.5">
           <button
             onClick={() => setView("board")}
@@ -282,11 +287,24 @@ export default function Tasks() {
           >
             <LayoutList className="h-3.5 w-3.5" /> List
           </button>
+          {hasDaily && (
+            <button
+              onClick={() => setView("daily")}
+              className={cn(
+                "inline-flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all",
+                view === "daily" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-white",
+              )}
+            >
+              <ListChecks className="h-3.5 w-3.5" /> Daily
+            </button>
+          )}
         </div>
       )}
 
       {space === "partners" && isPartner ? (
         <PartnerBoard />
+      ) : space === "team" && view === "daily" && hasDaily ? (
+        <DailyBoard />
       ) : teamTasks.length === 0 ? (
         <Card>
           <EmptyState

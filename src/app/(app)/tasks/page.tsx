@@ -5,7 +5,7 @@ import Tasks from "@/views/Tasks";
 
 export default function Page() {
   return (
-    <RequireModule id="tasks">
+    <RequireModule id={["tasks", "dailytasks"]}>
       <Tasks />
     </RequireModule>
   );

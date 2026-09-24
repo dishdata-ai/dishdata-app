@@ -5,7 +5,7 @@ import Kitchen from "@/views/Kitchen";
 
 export default function Page() {
   return (
-    <RequireModule id="kitchen">
+    <RequireModule id={["kitchen", "kitchenops"]}>
       <Kitchen />
     </RequireModule>
   );

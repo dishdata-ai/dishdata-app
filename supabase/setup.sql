@@ -4003,3 +4003,569 @@ do $$ begin
   alter publication supabase_realtime add table public.catering_inquiries;
 exception when duplicate_object then null;
 end $$;
+
+-- ============================================================================
+-- 0062 · One running tab per table for QR orders
+--
+-- Every QR submission inserted its own order, and never set orders.table_id —
+-- the table survived only as free text inside kitchen_notes ("Table: T1."). So
+-- one table ordering three times produced three bills (really happened:
+-- ORD-0485/0486/0487, all T1, within two minutes), and nothing downstream —
+-- Floor, POS, reporting — could group by table at all.
+--
+-- Now a dine-in QR order looks for an unpaid order already open at that table
+-- from this sitting and adds its items to it, and every new order records a
+-- real table_id.
+--
+-- Deliberately NOT tabbed:
+--   * takeaway and delivery — each is its own collection, and "Takeaway" is a
+--     real row in restaurant_tables, so it is excluded by name as well as by
+--     order_type in case a client ever sends the wrong one;
+--   * any order carrying a loyalty voucher — a discount is priced against one
+--     order's subtotal, and folding a discounted submission into an existing
+--     tab would silently re-apply it across the whole bill.
+--
+-- The six-hour window is what separates "this sitting" from the 73 stale open
+-- orders already in the table; those also all have table_id null, so they can
+-- never be matched by the lookup below.
+-- ============================================================================
+
+create or replace function public.place_public_order(
+  _slug text, _items jsonb, _guest_name text default 'Guest',
+  _table_name text default null, _notes text default null,
+  _email text default null, _code text default null,
+  _order_type text default 'dine_in', _address text default null,
+  _postcode text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  _org uuid; _rate numeric; _subtotal numeric := 0; _tax numeric := 0; _total numeric; _discount numeric := 0;
+  _no int; _order_number text; _order_id uuid; _full_items jsonb := '[]'::jsonb;
+  _cust uuid; _voucher jsonb; _prog record; _mult numeric := 1; _earn int := 0;
+  _delivery_fee numeric := 0; _zone record; grp record; _grp_net numeric;
+  it jsonb; r record;
+  _table_id uuid; _tab record; _merged jsonb; _idx int; i int; _appended boolean := false; _tab_total numeric;
+begin
+  select id, tax_rate into _org, _rate from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  if jsonb_array_length(_items) = 0 or jsonb_array_length(_items) > 50 then raise exception 'invalid order'; end if;
+
+  for it in select * from jsonb_array_elements(_items) loop
+    select id, name, price, tax_rate into r from recipes
+      where id = (it->>'recipe_id')::uuid and org_id = _org and is_active = true
+        and (sold_out_until is null or sold_out_until <= now())
+        and name not ilike '%(Tournament)%'
+        and (
+          not exists (select 1 from event_menu_items emi where emi.recipe_id = recipes.id)
+          or exists (
+            select 1 from event_menu_items emi
+            join event_menus em on em.id = emi.event_menu_id
+            where emi.recipe_id = recipes.id
+              and em.org_id = _org and em.is_active = true and em.show_on_website = true
+          )
+        );
+    if not found then raise exception 'item unavailable'; end if;
+    _subtotal := _subtotal + r.price * (it->>'qty')::numeric;
+    _full_items := _full_items || jsonb_build_object(
+      'recipe_id', r.id, 'name', r.name, 'qty', (it->>'qty')::numeric, 'price', r.price,
+      'tax_rate', coalesce(r.tax_rate, _rate)
+    );
+  end loop;
+
+  if _code is not null and length(trim(_code)) > 0 then
+    _voucher := loyalty_voucher_value(_org, _code, _subtotal);
+    if (_voucher->>'valid')::boolean then _discount := coalesce((_voucher->>'discount')::numeric,0); end if;
+  end if;
+
+  -- Delivery: server-computed fee, never trust a client-submitted amount.
+  if _order_type = 'delivery' then
+    select * into _zone from delivery_zones
+      where org_id = _org and is_active = true
+        and lower(regexp_replace(postcode, '\s', '', 'g')) = lower(regexp_replace(coalesce(_postcode, ''), '\s', '', 'g'))
+      limit 1;
+    if not found then raise exception 'we do not deliver to this postcode yet'; end if;
+    if _subtotal < _zone.min_order then
+      raise exception 'minimum order for delivery to this postcode is %', _zone.min_order;
+    end if;
+    _delivery_fee := _zone.delivery_fee;
+  end if;
+
+  -- VAT extracted per rate group (see checkout_order) — the delivery fee is
+  -- added to the total as its own gross line, not re-taxed here.
+  for grp in
+    select rate, sum(gross) as gross from (
+      select coalesce((item.value->>'tax_rate')::numeric, _rate) as rate,
+             (item.value->>'price')::numeric * (item.value->>'qty')::numeric as gross
+      from jsonb_array_elements(_full_items) item
+    ) lines
+    group by rate
+  loop
+    _grp_net := greatest(
+      grp.gross - (case when _subtotal > 0 then _discount * grp.gross / _subtotal else 0 end),
+      0
+    );
+    _tax := _tax + round(_grp_net * grp.rate / (100 + grp.rate), 2);
+  end loop;
+
+  _total    := round(greatest(_subtotal - _discount, 0) + _delivery_fee, 2);
+  _subtotal := round(greatest(_subtotal - _discount, 0) - _tax, 2);  -- store NET
+
+  if _email is not null and length(trim(_email)) > 0 then
+    select id into _cust from customers where org_id = _org and lower(email) = lower(_email) limit 1;
+    if _cust is null then
+      insert into customers (org_id, name, email) values (_org, coalesce(nullif(trim(_guest_name),''),'Guest'), lower(_email)) returning id into _cust;
+    end if;
+  end if;
+
+  -- The QR code carries a table NAME; everything downstream wants the id.
+  if _order_type = 'dine_in' and _table_name is not null and length(trim(_table_name)) > 0 then
+    select id into _table_id from restaurant_tables
+     where org_id = _org
+       and lower(name) = lower(trim(_table_name))
+       and lower(name) <> 'takeaway'
+     limit 1;
+  end if;
+
+  -- An unpaid order already open at this table, from this sitting.
+  if _table_id is not null and _discount = 0 then
+    select o.id, o.order_number, o.items into _tab
+      from orders o
+     where o.org_id = _org and o.table_id = _table_id and o.source = 'storefront'
+       and o.status = 'open' and o.created_at > now() - interval '6 hours'
+     order by o.created_at desc
+     limit 1;
+    _appended := found;
+  end if;
+
+  if _appended then
+    -- Fold the new lines into the tab: same dish at the same price bumps its
+    -- quantity, anything else joins as a new line. A bumped line loses its
+    -- `ready` tick, because the extra portions still have to be cooked.
+    _merged := _tab.items;
+    for it in select * from jsonb_array_elements(_full_items) loop
+      _idx := null;
+      for i in 0 .. jsonb_array_length(_merged) - 1 loop
+        if _merged->i->>'recipe_id' = it->>'recipe_id'
+           and coalesce((_merged->i->>'price')::numeric, 0) = coalesce((it->>'price')::numeric, 0) then
+          _idx := i; exit;
+        end if;
+      end loop;
+      if _idx is null then
+        _merged := _merged || it;
+      else
+        _merged := jsonb_set(
+          _merged, array[_idx::text],
+          (_merged->_idx) - 'ready'
+            || jsonb_build_object('qty', (_merged->_idx->>'qty')::numeric + (it->>'qty')::numeric)
+        );
+      end if;
+    end loop;
+
+    update orders set
+      items          = _merged,
+      subtotal       = subtotal + _subtotal,
+      tax            = tax + _tax,
+      total          = total + _total,
+      -- Food just arrived on a tab the kitchen had finished, so it goes back
+      -- on the board rather than sitting silently as ready/served.
+      kitchen_status = case when kitchen_status in ('ready','served')
+                            then 'preparing'::kitchen_status else kitchen_status end,
+      kitchen_notes  = coalesce(kitchen_notes, '') || coalesce(' + ' || nullif(trim(_notes), ''), ''),
+      customer_id    = coalesce(customer_id, _cust)
+    where id = _tab.id
+    returning total into _tab_total;
+
+    _order_id := _tab.id;
+    _order_number := _tab.order_number;
+  else
+    update orgs set next_order_no = next_order_no + 1 where id = _org returning next_order_no - 1 into _no;
+    _order_number := 'ORD-' || lpad(_no::text, 4, '0');
+
+    insert into orders (org_id, order_number, order_type, guest_name, customer_id, table_id, items, subtotal, tax, total, status, kitchen_status, kitchen_notes, source)
+    values (_org, _order_number, _order_type::order_type, _guest_name, _cust, _table_id, _full_items, _subtotal, _tax, _total, 'open', 'new',
+            coalesce('Table: ' || _table_name || '. ', '') || coalesce(_notes, ''), 'storefront')
+    returning id into _order_id;
+  end if;
+
+  if _order_type = 'delivery' then
+    insert into deliveries (org_id, order_id, address, postcode, delivery_fee, status)
+    values (_org, _order_id, coalesce(_address, ''), _postcode, _delivery_fee, 'pending');
+  end if;
+
+  if _voucher is not null and (_voucher->>'valid')::boolean then
+    update loyalty_redemptions set status = 'applied', applied_order_id = _order_id where id = (_voucher->>'redemption_id')::uuid;
+  end if;
+
+  if _cust is not null then
+    update customers set visits = visits + 1, total_spend = total_spend + _total, last_visit_at = now() where id = _cust;
+    select * into _prog from loyalty_programs where org_id = _org;
+    if found and _prog.enabled then
+      select coalesce((t.perks->>'earn_multiplier')::numeric,1) into _mult
+        from customers c left join loyalty_tiers t on t.id = c.tier_id where c.id = _cust;
+      _earn := floor(_total * coalesce(_prog.earn_rate,1) * coalesce(_mult,1))::int;
+      if _earn > 0 then
+        update customers set points = points + _earn, status_points = status_points + _earn where id = _cust;
+        insert into loyalty_transactions (org_id, customer_id, points_delta, reason, order_id, action_type)
+          values (_org, _cust, _earn, 'Order ' || _order_number, _order_id, 'purchase');
+      end if;
+      perform loyalty_recompute_tier(_org, _cust);
+    end if;
+  end if;
+
+  insert into notifications (org_id, type, title, body, ref)
+  values (_org, 'public_order',
+          case when _appended then 'Added to ' || _order_number else 'Online order ' || _order_number end,
+          _guest_name || coalesce(' at table ' || _table_name, '')
+            || case when _appended then ' — more items on the tab' else ' — pay at counter' end,
+          'kitchen');
+
+  return jsonb_build_object(
+    'order_number', _order_number,
+    -- What the whole table now owes, so a second round doesn't show the guest
+    -- only that round's price. Loyalty above still earns on _total, which is
+    -- the amount actually added.
+    'total', case when _appended then _tab_total else _total end,
+    'discount', _discount,
+    'order_id', _order_id, 'delivery_fee', _delivery_fee, 'appended', _appended
+  );
+end $$;
+
+grant execute on function public.place_public_order(text,jsonb,text,text,text,text,text,text,text,text) to anon;
+
+-- ============================================================================
+
+-- ============================================================================
+-- 0063 · Reconcile QR tabs against the SumUp sale that paid for them
+--
+-- A guest orders on the QR menu, then pays at the counter on SumUp. That
+-- produced two rows for one meal: an open 'storefront' order that nobody ever
+-- closed, and a paid 'sumup' order. Revenue counts everything that is not void
+-- or refunded, so every QR order was being counted twice — 73 orders and
+-- €1,589 of a €10,150 total at the time this was written, about 16%.
+--
+-- Matching is exact rather than fuzzy, because SumUp's sync already separates
+-- the tip into its own column: the food total is (total - tip), and that equals
+-- the tab total to the cent. Item names only confirm, and only matter when two
+-- tabs happen to share a total.
+--
+-- The tab is linked, not voided. Void means cancelled, and this food was very
+-- much cooked and sold; the SumUp sale is the fiscal record and the tab is the
+-- ordering record, so the tab keeps its items and points at the sale that
+-- settled it. Anything carrying merged_into is excluded from revenue in the app
+-- (see calc.ts / Reports.tsx), and the link can simply be cleared to undo.
+-- ============================================================================
+
+alter table public.orders
+  add column if not exists merged_into uuid references public.orders(id) on delete set null;
+
+comment on column public.orders.merged_into is
+  'Set when this order was settled by another order (a QR tab paid on SumUp). Excluded from revenue; the target order is the financial record.';
+
+create index if not exists orders_merged_into_idx
+  on public.orders (merged_into) where merged_into is not null;
+
+-- How much two orders' item lists agree, 0..1, comparing lower-cased names.
+-- SumUp's names differ from the menu's only in casing ("Paneer biriyani"),
+-- which is exactly what this is meant to see through.
+create or replace function public.order_items_overlap(_a jsonb, _b jsonb)
+returns numeric language sql immutable set search_path = public as $$
+  with a as (select distinct lower(trim(value->>'name')) as n from jsonb_array_elements(coalesce(_a, '[]'::jsonb))),
+       b as (select distinct lower(trim(value->>'name')) as n from jsonb_array_elements(coalesce(_b, '[]'::jsonb))),
+       hits as (select count(*)::numeric c from a join b using (n)),
+       sizes as (select greatest((select count(*) from a), (select count(*) from b), 1)::numeric c)
+  select (select c from hits) / (select c from sizes);
+$$;
+
+/**
+ * Link one SumUp sale to the QR tab it paid for, if exactly one fits.
+ *
+ * Conservative on purpose: a wrong link silently moves money between days, so
+ * anything ambiguous is left alone for a human rather than guessed at.
+ */
+create or replace function public.match_sumup_order(_sale_id uuid)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare _sale record; _food numeric; _n int; _tab uuid; _best numeric; _ties int;
+begin
+  select * into _sale from orders where id = _sale_id;
+  if not found or _sale.source <> 'sumup' or _sale.status in ('void', 'refunded') then return null; end if;
+
+  _food := round(_sale.total - coalesce(_sale.tip, 0), 2);
+  if _food <= 0 then return null; end if;
+
+  -- Candidates: unsettled QR tabs for the same money, from around this sale.
+  -- One statement rather than a temp table: this runs inside a trigger on
+  -- every SumUp insert, and a temp table there is both slower and fussier
+  -- (it outlives the call within a transaction, so the backfill loop below
+  -- would have to keep clearing it).
+  with cand as (
+    select o.id, order_items_overlap(o.items, _sale.items) as score
+      from orders o
+     where o.org_id = _sale.org_id
+       and o.source = 'storefront'
+       and o.status = 'open'
+       and o.merged_into is null
+       and o.id <> _sale.id
+       and round(o.total, 2) = _food
+       and o.created_at between _sale.created_at - interval '8 hours'
+                            and _sale.created_at + interval '30 minutes'
+  ), agg as (select count(*) as n, coalesce(max(score), 0) as best from cand)
+  select c.id, a.n, a.best, (select count(*) from cand where score >= a.best - 0.01)
+    into _tab, _n, _best, _ties
+    from cand c cross join agg a
+   order by c.score desc, c.id
+   limit 1;
+
+  if coalesce(_n, 0) = 0 then return null; end if;
+
+  -- Same total on two tabs: let the item names break the tie, and only when
+  -- one is clearly better. Otherwise leave both for someone to look at.
+  if _n > 1 and (_ties > 1 or _best < 0.5) then return null; end if;
+
+  update orders
+     set merged_into = _sale.id,
+         status = 'paid',
+         kitchen_status = case when kitchen_status = 'served' then kitchen_status else 'served'::kitchen_status end
+   where id = _tab;
+
+  return _tab;
+end $$;
+
+-- Match on the way in, so a sale synced by cron or accepted by hand both land
+-- here without the sync code having to remember to call it.
+create or replace function public.trg_match_sumup_order()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.source = 'sumup' and new.status not in ('void', 'refunded') then
+    perform match_sumup_order(new.id);
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists orders_match_sumup on public.orders;
+create trigger orders_match_sumup
+  after insert on public.orders
+  for each row execute function public.trg_match_sumup_order();
+
+-- ---------------------------------------------------------------------------
+-- Backfill: settle the tabs already sitting open against sales already synced.
+-- Same conservative rule, so ambiguous pairs stay untouched and visible.
+-- ---------------------------------------------------------------------------
+do $$
+declare s record;
+begin
+  for s in
+    select id from orders
+     where source = 'sumup' and status not in ('void', 'refunded')
+     order by created_at
+  loop
+    perform match_sumup_order(s.id);
+  end loop;
+end $$;
+
+-- ============================================================================
+-- 0065 · Backfill org.settings.enabled_modules for kitchenops/dailytasks
+--
+-- kitchenops and dailytasks are staying on ALWAYS_ENABLED_MODULES in most
+-- respects, but that frontend list is being trimmed so their Settings pill
+-- stops being locked "(core)" — i.e. an owner can genuinely turn either off
+-- per org, like almost every other module.
+--
+-- Confirmed live: both real orgs (Kokoland Berlin, Big Brewsky) have an
+-- EXPLICIT settings.enabled_modules array that predates these two module ids
+-- (added earlier today) — neither array contains them. Without this backfill,
+-- removing the ALWAYS_ENABLED_MODULES bypass would immediately hide both
+-- features for every existing org, the exact failure mode that constant
+-- exists to prevent in the first place.
+--
+-- Only touches orgs with an explicit array (missing the key already means
+-- "every module", so there's nothing to add). Idempotent — re-running just
+-- re-confirms membership, dedup via array_agg(distinct ...).
+-- ============================================================================
+
+update public.orgs
+set settings = jsonb_set(
+  settings,
+  '{enabled_modules}',
+  (
+    select to_jsonb(array_agg(distinct m))
+    from jsonb_array_elements_text(settings->'enabled_modules' || '["kitchenops","dailytasks"]'::jsonb) as m
+  )
+)
+where settings ? 'enabled_modules'
+  and not (
+    settings->'enabled_modules' @> '["kitchenops"]'
+    and settings->'enabled_modules' @> '["dailytasks"]'
+  );
+
+-- ============================================================================
+-- 0064 · Make SumUp↔tab matching reliable for new orders
+--
+-- 0063's backfill linked 16 of 73 historical tabs. Reviewing the misses showed
+-- the rule was right to refuse most of them (21 had a same-total sale a median
+-- of 48 hours away — coincidence, not the same meal), but it also refused at
+-- least one obvious pair: a tab at 17:21 and a sale at 17:20, same total, same
+-- "Paneer Biriyani" on both sides, rejected only because a sibling tab shared
+-- the total and the tie-break gave up.
+--
+-- Two changes, both aimed at orders placed from here on:
+--
+-- 1. Anchor on the tab's LAST ACTIVITY, not when it was opened. Now that a
+--    table builds one running tab (0062), a party may open at 18:00, add a
+--    round at 19:30 and pay at 19:40 — ten minutes after the last thing they
+--    ordered, but nearly two hours after the tab began. updated_at is
+--    maintained by the set_updated_at trigger, so it tracks the last round.
+--
+-- 2. Break ties on time proximity before giving up. Two tabs with the same
+--    total is common (€13.50 is a popular bill); two tabs with the same total
+--    *within a couple of minutes of the same payment* is not. Only genuinely
+--    indistinguishable pairs — alike on both name overlap and timing — are
+--    still left for a human.
+--
+-- The window also tightens from -8h/+30m to -30m/+4h around last activity,
+-- because payment follows the last round rather than preceding the first. That
+-- alone removes most of the coincidental candidates that caused the ties.
+-- ============================================================================
+
+create or replace function public.match_sumup_order(_sale_id uuid)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare
+  _sale record; _food numeric;
+  _n int; _tab uuid; _best numeric; _best_gap numeric; _ties int;
+begin
+  select * into _sale from orders where id = _sale_id;
+  if not found or _sale.source <> 'sumup' or _sale.status in ('void', 'refunded') then return null; end if;
+
+  _food := round(_sale.total - coalesce(_sale.tip, 0), 2);
+  if _food <= 0 then return null; end if;
+
+  with cand as (
+    select o.id,
+           order_items_overlap(o.items, _sale.items) as score,
+           -- Minutes between the sale and the last time anything was added to
+           -- the tab; the real pair is normally single digits.
+           abs(extract(epoch from (_sale.created_at - greatest(o.created_at, o.updated_at))) / 60) as gap
+      from orders o
+     where o.org_id = _sale.org_id
+       and o.source = 'storefront'
+       and o.status = 'open'
+       and o.merged_into is null
+       and o.id <> _sale.id
+       and round(o.total, 2) = _food
+       and greatest(o.created_at, o.updated_at)
+             between _sale.created_at - interval '4 hours'
+                 and _sale.created_at + interval '30 minutes'
+  ), ranked as (
+    select c.*, row_number() over (order by c.score desc, c.gap asc) as rn from cand c
+  )
+  select r.id, (select count(*) from cand), r.score, r.gap,
+         -- Rivals that are just as good on BOTH signals: same name overlap and
+         -- within two minutes of the same distance from the payment.
+         (select count(*) from ranked x
+           where x.score >= r.score - 0.01 and abs(x.gap - r.gap) <= 2)
+    into _tab, _n, _best, _best_gap, _ties
+    from ranked r
+   where r.rn = 1;
+
+  if coalesce(_n, 0) = 0 then return null; end if;
+
+  -- Evidence, not coincidence. Being the only candidate is NOT enough on its
+  -- own: tested against real history, that alone would have linked a tab to a
+  -- sale 71 minutes away with no item name in common. So the names have to
+  -- agree — unless payment landed within five minutes of the last round and at
+  -- least one item still matches, which is compelling even when SumUp spells
+  -- things differently ("Water 0,5lr" against "Water Bottle Small").
+  if not (_best >= 0.34 or (_best_gap <= 5 and _best > 0)) then return null; end if;
+
+  -- Rivals alike on both signals stay for a human.
+  if _n > 1 and _ties > 1 then return null; end if;
+
+  update orders
+     set merged_into = _sale.id,
+         status = 'paid',
+         kitchen_status = 'served'::kitchen_status
+   where id = _tab;
+
+  return _tab;
+end $$;
+
+-- ============================================================================
+-- 0065 · The catering catalogue, readable by an anonymous visitor
+--
+-- The catering page is meant to list everything the kitchen can cook for an
+-- event, not just what happens to be on today's menu — a dish hidden this week,
+-- or sold out this evening, says nothing about a party three weeks out. For
+-- Kokoland that is 98 dishes rather than 40.
+--
+-- The app asked for them and silently got 40 anyway, because anon reads of
+-- `recipes` are policy-limited to active rows:
+--     recipes_public_read ... for select to anon using (is_active = true)
+--
+-- That policy is not the thing to relax. It guards every anonymous read of the
+-- table, so opening it to `using (true)` would publish every retired and
+-- unreleased dish — and its price — to anyone querying the API, for the sake of
+-- one page. Instead this is a narrow security-definer view of exactly the
+-- catering catalogue, the same approach place_public_order and
+-- place_catering_inquiry already take: the broad table policy stays shut and
+-- one specific question gets a specific answer.
+--
+-- Tournament items are still excluded, by name and by event-menu membership —
+-- they are priced for an event and sold only at it.
+-- ============================================================================
+
+create or replace function public.catering_menu(_slug text)
+returns setof public.recipes
+language sql stable security definer set search_path = public as $$
+  select r.*
+    from recipes r
+    join orgs o on o.id = r.org_id
+   where o.slug = _slug
+     and r.name not ilike '%(Tournament)%'
+     and not exists (
+       select 1 from event_menu_items emi where emi.recipe_id = r.id
+     )
+   order by r.category, r.name;
+$$;
+
+grant execute on function public.catering_menu(text) to anon, authenticated;
+
+-- ============================================================================
+-- 0066 · Backfill missing modules rows (till, payroll)
+--
+-- 0061_backfill_new_module_access.sql failed live with:
+--   insert or update on table "member_module_access" violates foreign key
+--   constraint "member_module_access_module_id_fkey"
+--   DETAIL: Key (module_id)=(till) is not present in table "modules".
+--
+-- Confirmed by diffing the live `modules` table against src/lib/modules.ts:
+-- 'till' (from an early setup.sql seed block) and 'payroll' (from 0014) were
+-- never actually inserted on this database, even though both are referenced
+-- by default_modules_for_role() and by the frontend module registry. This
+-- database's migration history has gaps from being applied piecemeal rather
+-- than as one full ordered replay — this patches the specific gap blocking
+-- 0061. Idempotent; safe to re-run.
+-- ============================================================================
+
+insert into public.modules (id, name, grouping, sort)
+values
+  ('till', 'Till & Cash', 'Money', 15),
+  ('payroll', 'Payroll', 'People', 23)
+on conflict (id) do update set name = excluded.name, grouping = excluded.grouping;
+
+-- ============================================================================
+-- 0067 · Split "helper" out as its own duty, on both sides
+--
+-- Commi / Kitchen Helper was one duty. The user wants Commi and Kitchen
+-- Helper as separate duties (different skill level), plus a mirrored
+-- Frontend Helper duty for the front-of-house side — not staffed yet, but
+-- available for when it gets busier.
+--
+-- IMPORTANT: run this file ALONE, in its own "Run". Postgres won't let a new
+-- enum value be used in the same transaction that adds it — pasting this
+-- together with anything that references 'kitchen_helper'/'frontend_helper'
+-- (e.g. inserting a duty_assignments row) would fail with "unsafe use of new
+-- value of enum type". This file only extends the enum; nothing else needs
+-- to change on the database side — duty_assignments.duty and
+-- tasks.assigned_role already accept any staff_role value.
+-- ============================================================================
+
+alter type public.staff_role add value if not exists 'kitchen_helper';
+alter type public.staff_role add value if not exists 'frontend_helper';
