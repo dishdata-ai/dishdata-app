@@ -10,8 +10,9 @@
 -- answers are genuinely independent: a dish can be off today's menu and still
 -- perfectly good for catering, and vice versa.
 --
--- Beverages, Extras and single portions are the likely candidates, but that is
--- the kitchen's call to make per dish, so nothing is pre-set here.
+-- Kokoland's first three calls are set below: the Porotta rolls, the Loaded
+-- Fries and the Pork Biriyani. Everything else stays in the catalogue until
+-- someone hides it from the recipe panel.
 -- ============================================================================
 
 alter table public.recipes
@@ -39,5 +40,15 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 grant execute on function public.catering_menu(text) to anon, authenticated;
+
+-- Kokoland's own picks. Matched by category where the whole category goes, by
+-- name for the single dish, and scoped to the org so this stays a data change
+-- for one restaurant rather than a default anybody else inherits.
+update public.recipes r
+   set hide_from_catering = true
+  from public.orgs o
+ where o.id = r.org_id
+   and o.slug = 'kokoland-berlin'
+   and (r.category in ('Rolls', 'Loaded Fries') or r.name = 'Pork Biriyani');
 
 notify pgrst, 'reload schema';
