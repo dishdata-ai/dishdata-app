@@ -107,7 +107,8 @@ export async function createRecipe(orgId: string, input: NewRecipeInput): Promis
       description: input.description,
       name_de: input.name_de ?? null, description_de: input.description_de ?? null,
       category_de: input.category_de ?? null,
-      image_url: null, is_active: true, sold_out_until: null, tax_rate: input.tax_rate,
+      image_url: null, is_active: true, sold_out_until: null, hide_from_catering: false,
+      tax_rate: input.tax_rate,
       diet: input.diet ?? null,
     };
     dRecipes.insert(recipe);

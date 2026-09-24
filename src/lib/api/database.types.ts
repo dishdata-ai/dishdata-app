@@ -188,6 +188,8 @@ export interface Recipe {
   is_active: boolean;
   /** null = available. In the future = sold out until then (today's cutoff or a far-future "indefinitely" date). */
   sold_out_until: string | null;
+  /** Keeps the dish off the public catering catalogue, independently of is_active and sold_out_until. */
+  hide_from_catering: boolean;
   /** null = inherit the org's default tax_rate. Set explicitly for e.g. drinks (19%) on an org whose default is the reduced food rate. */
   tax_rate: number | null;
   /** null = regular (no dietary tag/symbol shown). */

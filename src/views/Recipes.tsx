@@ -906,6 +906,23 @@ export default function Recipes() {
     }
   };
 
+  // Separate from toggleVisible on purpose: a dish can be off today's menu and
+  // still fine to quote for an event three weeks out, and the other way round.
+  const toggleCatering = async (r: RecipeWithIngredients) => {
+    try {
+      const next = !r.hide_from_catering;
+      await updateRecipe(org!.id, r.id, { hide_from_catering: next });
+      invalidate("recipes");
+      setSelected((s) => (s && s.id === r.id ? { ...s, hide_from_catering: next } : s));
+      toast.success(
+        next ? `${r.name} hidden from catering` : `${r.name} is back in the catering catalogue`,
+        next ? "Still on the day-to-day menu — this only affects the catering page" : "",
+      );
+    } catch (e) {
+      toast.error("Could not update", e instanceof Error ? e.message : "");
+    }
+  };
+
   const removeRecipe = async (r: RecipeWithIngredients) => {
     try {
       await deleteRecipe(org!.id, r.id);
@@ -1036,6 +1053,7 @@ export default function Recipes() {
                       {!r.image_url && <span className="text-4xl">{r.emoji}</span>}
                       <div className={cn("flex items-center gap-1.5", r.image_url && "ml-auto")}>
                         {!r.is_active && <Badge tone="neutral">Hidden</Badge>}
+                        {r.hide_from_catering && <Badge tone="neutral">No catering</Badge>}
                         {soldOut && (
                           <Badge tone="rose">
                             {isSoldOutIndefinitely(r) ? "Sold out" : "Sold out today"}
@@ -1171,7 +1189,10 @@ export default function Recipes() {
             <div className="rounded-xl border border-line bg-white/[0.02] p-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold tracking-wide text-zinc-400 uppercase">Visibility</p>
-                {!selected.is_active && <Badge tone="neutral">Hidden from menu</Badge>}
+                <span className="flex gap-1.5">
+                  {!selected.is_active && <Badge tone="neutral">Hidden from menu</Badge>}
+                  {selected.hide_from_catering && <Badge tone="neutral">Not in catering</Badge>}
+                </span>
               </div>
               <p className="mt-1 text-xs text-zinc-500">
                 Hiding removes it from POS and the public menu entirely — no badge, it just disappears.
@@ -1189,6 +1210,26 @@ export default function Recipes() {
                 ) : (
                   <>
                     <Eye className="h-3.5 w-3.5" /> Show on menu
+                  </>
+                )}
+              </Button>
+
+              <p className="mt-3 border-t border-line pt-3 text-xs text-zinc-500">
+                The catering page lists everything the kitchen can cook, so it ignores both of the
+                above. Hide a dish here if it shouldn't be quoted for an event at all.
+              </p>
+              <Button
+                variant="ghost"
+                className="mt-2 w-full py-2 text-xs"
+                onClick={() => toggleCatering(selected)}
+              >
+                {selected.hide_from_catering ? (
+                  <>
+                    <Eye className="h-3.5 w-3.5" /> Show in catering
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="h-3.5 w-3.5" /> Hide from catering
                   </>
                 )}
               </Button>

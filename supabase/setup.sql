@@ -312,6 +312,9 @@ create table if not exists public.recipes (
   tax_rate numeric,
   is_active boolean not null default true,
   sold_out_until timestamptz,
+  -- Keeps the dish off the public catering catalogue, independently of
+  -- is_active (the day-to-day menu) and sold_out_until (tonight).
+  hide_from_catering boolean not null default false,
   -- null = regular (no symbol shown on the printed menu or public storefront).
   diet text check (diet in ('veg', 'vegan')),
   created_at timestamptz not null default now(),
@@ -4518,6 +4521,7 @@ language sql stable security definer set search_path = public as $$
     from recipes r
     join orgs o on o.id = r.org_id
    where o.slug = _slug
+     and not r.hide_from_catering
      and r.name not ilike '%(Tournament)%'
      and not exists (
        select 1 from event_menu_items emi where emi.recipe_id = r.id
