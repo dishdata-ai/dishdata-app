@@ -50,6 +50,10 @@ export interface MenuCategoryNavProps {
 
 /** Height of the bar in px — also the offset the scroll-spy allows for. */
 const BAR_H = 56;
+/** Sustained downward travel, in px, before the bar gets out of the way. */
+const HIDE_AFTER = 28;
+/** Upward travel before it comes back — smaller, so reaching up feels instant. */
+const SHOW_AFTER = 10;
 
 export function MenuCategoryNav({
   categories, labelOf, countOf, thumbOf, sectionId, strings,
@@ -86,8 +90,15 @@ export function MenuCategoryNav({
   // Give the dishes the screen while reading down, bring the bar back the
   // moment they scroll up. Throttled to one frame and only committed when the
   // boolean actually flips, so this doesn't re-render on every scroll event.
+  //
+  // The direction is taken from accumulated travel rather than a single
+  // frame's delta. Reading a per-frame delta against a 6px deadband made the
+  // bar flicker: trackpad glide, phone momentum and the browser's own scroll
+  // anchoring all produce the odd frame that moves the other way, and each one
+  // flipped the bar. Travel has to reverse by a deliberate amount to count.
   useEffect(() => {
     let lastY = window.scrollY;
+    let travel = 0;
     let frame = 0;
     const onScroll = () => {
       if (frame) return;
@@ -95,9 +106,24 @@ export function MenuCategoryNav({
         frame = 0;
         const y = window.scrollY;
         const delta = y - lastY;
-        if (Math.abs(delta) > 6) {
-          setHidden(delta > 0 && y > 220);
-          lastY = y;
+        lastY = y;
+        if (delta === 0) return;
+        // A change of direction starts the budget over, so a stray pixel back
+        // can't spend what was built up going the other way.
+        if ((travel > 0) !== (delta > 0)) travel = 0;
+        travel += delta;
+        if (y <= 220) {
+          // Near the top the bar always shows, and travel starts fresh so it
+          // takes a deliberate scroll past 220 to hide it — not the momentum
+          // that carried the reader over the line.
+          travel = 0;
+          setHidden(false);
+        } else if (travel > HIDE_AFTER) {
+          setHidden(true);
+          travel = 0;
+        } else if (travel < -SHOW_AFTER) {
+          setHidden(false);
+          travel = 0;
         }
       });
     };
@@ -110,14 +136,22 @@ export function MenuCategoryNav({
 
   // Keep the active pill in view on the rail — without this the highlight
   // regularly sat off-screen, which is what made the old bar feel broken.
+  //
+  // Scrolling the rail by hand rather than with pill.scrollIntoView(), which
+  // scrolls every scrollable ancestor including the document. Once the bar has
+  // hidden itself the pill sits above the viewport, so scrollIntoView pulled
+  // the whole page back down to reveal it; the scroll handler read that as an
+  // upward scroll and showed the bar, the reader's own downward scroll hid it
+  // again, and the bar juddered open and shut the whole way down the menu.
   useEffect(() => {
     if (!active || indexOpen) return;
+    const rail = railRef.current;
     const pill = pillRefs.current.get(active);
-    if (!pill || !railRef.current) return;
-    pill.scrollIntoView({
+    if (!rail || !pill || pill.offsetParent === null) return;
+    const left = pill.offsetLeft - (rail.clientWidth - pill.clientWidth) / 2;
+    rail.scrollTo({
+      left: Math.max(0, left),
       behavior: prefersReducedMotion() ? "auto" : "smooth",
-      inline: "center",
-      block: "nearest",
     });
   }, [active, indexOpen]);
 
