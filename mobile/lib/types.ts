@@ -1,3 +1,4 @@
+import type { ProdMethod } from "@/lib/kitchen-standards";
 // Hand-maintained row types mirroring supabase/setup.sql.
 // Keep this file and setup.sql in sync when the schema changes.
 
@@ -291,6 +292,8 @@ export interface OrderLine {
   name: string;
   qty: number;
   price: number;
+  /** Kitchen marked this line ready (item-by-item hand-over). Absent = not yet. */
+  ready?: boolean;
 }
 
 export interface Order {
@@ -311,6 +314,10 @@ export interface Order {
   kitchen_notes: string | null;
   source: string;
   created_at: string;
+  /** Stamped by the database when the ticket changes kitchen status (web migration 0057). */
+  kitchen_started_at?: string | null;
+  kitchen_ready_at?: string | null;
+  kitchen_served_at?: string | null;
   // Discounts and meal claims (web migrations 0033 / 0048 / 0070). Optional so older rows and demo data still fit.
   discount?: number;
   employee_id?: string | null;
@@ -656,4 +663,53 @@ export interface Shift {
   role_title: string | null;
   note: string | null;
   updated_at: string;
+}
+
+// Kitchen Ops (web migration 0059): one row per production component and a log of cooked / wasted / stock-out events.
+export interface KitchenDish {
+  id: string;
+  org_id: string;
+  recipe_id: string | null;
+  dish: string;
+  /** Comma-separated lowercase fragments that mark an order line as this dish. */
+  terms: string;
+  method: ProdMethod;
+  bain_marie: "yes" | "limited" | "no";
+  open_pct: number;
+  portion: string;
+  portion_g: number | null;
+  frozen: boolean;
+  station: string;
+  container: string;
+  batch_portions: number;
+  min_portions: number;
+  reorder_at: number;
+  prep_minutes: number;
+  finish_minutes: number;
+  target_wait_min: number;
+  hold_temp_c: number | null;
+  max_hold_min: number | null;
+  notes: string;
+  /** Live: portions in the bain-marie / hot box. */
+  hot_portions: number;
+  /** Live: portions (or prepped components) in the fridge — the freezer for frozen items. */
+  fridge_portions: number;
+  position: number;
+  is_active: boolean;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export type KitchenLogKind = "cooked" | "wasted" | "stockout";
+
+export interface KitchenLogEntry {
+  id: string;
+  org_id: string;
+  dish: string;
+  kind: KitchenLogKind;
+  portions: number;
+  value: number;
+  reason: string | null;
+  created_at: string;
+  created_by: string | null;
 }

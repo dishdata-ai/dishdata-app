@@ -19,6 +19,15 @@ import {
   listMyTimeEntries,
   type ClockInGeo,
 } from "@/lib/api/timeclock";
+import {
+  listKitchenDishes,
+  updateKitchenDish,
+  listKitchenLog,
+  logKitchen,
+  listKitchenHistory,
+} from "@/lib/api/kitchen";
+import { buildDemand, liveRows, waitingByDish, OPEN_HOUR, LAST_HOUR, nextServiceDay } from "@/lib/kitchen-ops";
+import { useMemo, useEffect, useState } from "react";
 import { listMenu } from "@/lib/api/menu";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import {
@@ -27,6 +36,7 @@ import {
   checkoutOrder,
   markOrderPaid,
   setKitchenStatus,
+  setLineReady,
   type CheckoutPayload,
   type PaymentInput,
 } from "@/lib/api/orders";
@@ -35,7 +45,7 @@ import { listTables } from "@/lib/api/tables";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
 import { listMyDeliveries, listOrgDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
 import { listTiers, listEarnRules, listRewards, awardPoints, redeemReward } from "@/lib/api/loyalty";
-import type { TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType } from "@/lib/types";
+import type { TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType, Order, KitchenDish } from "@/lib/types";
 
 function useIds() {
   const { ctx } = useOrg();
@@ -337,6 +347,19 @@ export function useSettle() {
   });
 }
 
+export function useKitchenLineMutation() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ order, index, ready }: { order: Order; index: number; ready: boolean }) =>
+      setLineReady(orgId, order, index, ready),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["kitchen", orgId] });
+      qc.invalidateQueries({ queryKey: ["kitchen-history", orgId] });
+    },
+  });
+}
+
 export function useKitchenMutation() {
   const { orgId } = useIds();
   const qc = useQueryClient();
@@ -385,3 +408,103 @@ export function useStockAdjust() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["inventory", orgId] }),
   });
 }
+
+export function useKitchenDishes() {
+  const { orgId, enabled } = useIds();
+  // Other people change the counts on their phones, so look again every 30 s.
+  return useQuery({
+    queryKey: ["kitchen-dishes", orgId],
+    queryFn: () => listKitchenDishes(orgId),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useKitchenLog() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["kitchen-log", orgId], queryFn: () => listKitchenLog(orgId), enabled });
+}
+
+export function useKitchenHistory(enabledExtra = true) {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["kitchen-history", orgId],
+    queryFn: () => listKitchenHistory(orgId),
+    enabled: enabled && enabledExtra,
+    refetchInterval: 60_000,
+  });
+}
+
+/**
+ * Everything the Kitchen Ops screens share: dishes, 90 days of orders, the demand model and the live rows — the
+ * phone twin of the website's useKitchenOps, on the same maths (lib/kitchen-ops.ts).
+ */
+export function useKitchenOps(multiplier: number) {
+  const { ctx } = useOrg();
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  const dishesQ = useKitchenDishes();
+  const historyQ = useKitchenHistory();
+
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const dishes = useMemo(() => dishesQ.data ?? [], [dishesQ.data]);
+  const orders = useMemo(() => historyQ.data ?? [], [historyQ.data]);
+  const model = useMemo(() => buildDemand(orders, dishes, now), [orders, dishes, now]);
+  const waiting = useMemo(() => waitingByDish(orders, dishes, now.getTime()), [orders, dishes, now]);
+  const rows = useMemo(
+    () => liveRows(model, dishes, waiting, now, multiplier),
+    [model, dishes, waiting, now, multiplier],
+  );
+
+  const me = ctx?.me.name ?? null;
+  const key = ["kitchen-dishes", orgId];
+  const inService = now.getHours() >= OPEN_HOUR && now.getHours() <= LAST_HOUR;
+
+  /** Change a live count. The screen updates at once so quick taps stack; the save happens in the background. */
+  const adjust = (dish: KitchenDish, field: "hot_portions" | "fridge_portions", delta: number) => {
+    const current = qc.getQueryData<KitchenDish[]>(key)?.find((d) => d.id === dish.id) ?? dish;
+    const next = Math.max(0, current[field] + delta);
+    if (next === current[field]) return;
+    const patch = { [field]: next, updated_by: me };
+    qc.setQueryData<KitchenDish[]>(key, (old) =>
+      old?.map((d) => (d.id === dish.id ? { ...d, ...patch, updated_at: new Date().toISOString() } : d)),
+    );
+    updateKitchenDish(orgId, dish.id, patch).catch(() => qc.invalidateQueries({ queryKey: key }));
+    const before = current.hot_portions + current.fridge_portions;
+    const after = before - current[field] + next;
+    if (before > 0 && after === 0 && inService) {
+      logKitchen(orgId, { dish: dish.dish, kind: "stockout", portions: 0, by: me })
+        .then(() => qc.invalidateQueries({ queryKey: ["kitchen-log", orgId] }))
+        .catch(() => undefined);
+    }
+  };
+
+  /** Record freshly cooked portions: adds to the hot count and to the log. */
+  const cooked = (dish: KitchenDish, n: number) => {
+    if (n <= 0) return;
+    adjust(dish, "hot_portions", n);
+    logKitchen(orgId, { dish: dish.dish, kind: "cooked", portions: n, by: me })
+      .then(() => qc.invalidateQueries({ queryKey: ["kitchen-log", orgId] }))
+      .catch(() => undefined);
+  };
+
+  return {
+    now,
+    dishes,
+    orders,
+    model,
+    rows,
+    adjust,
+    cooked,
+    loading: dishesQ.isLoading || historyQ.isLoading,
+    error: dishesQ.error ?? historyQ.error,
+    defaultDay: now.getDay() === 1 ? nextServiceDay(now) : now.getDay(),
+  };
+}
+
+export type KitchenOpsCtx = ReturnType<typeof useKitchenOps>;

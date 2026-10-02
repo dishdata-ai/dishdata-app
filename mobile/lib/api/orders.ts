@@ -264,6 +264,38 @@ export async function markOrderPaid(
   if (error) throw error;
 }
 
+/**
+ * Mark one line of a ticket ready (or undo it). The ticket follows its lines: all ready → ready, some ready on a
+ * new ticket → preparing, an un-ready line on a ready ticket → back to preparing. Returns the ticket's new status.
+ */
+export async function setLineReady(
+  orgId: string,
+  order: Order,
+  lineIndex: number,
+  ready: boolean,
+): Promise<KitchenStatus> {
+  const items = order.items.map((l, i) => (i === lineIndex ? { ...l, ready } : l));
+  let status = order.kitchen_status;
+  if (items.every((l) => l.ready)) status = "ready";
+  else if (status === "ready") status = "preparing";
+  else if (items.some((l) => l.ready) && status === "new") status = "preparing";
+  if (!isSupabaseConfigured) {
+    const o = demo.orders.find((x) => x.id === order.id);
+    if (o) {
+      o.items = items;
+      o.kitchen_status = status;
+    }
+    return status;
+  }
+  const { error } = await getSupabase()
+    .from("orders")
+    .update({ items, kitchen_status: status })
+    .eq("id", order.id)
+    .eq("org_id", orgId);
+  if (error) throw error;
+  return status;
+}
+
 export async function setKitchenStatus(
   orgId: string,
   orderId: string,

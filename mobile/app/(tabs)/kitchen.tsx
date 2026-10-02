@@ -1,82 +1,53 @@
-import { ScrollView, View, Text } from "react-native";
-import { Screen, Card, Button, Badge, Muted } from "@/components/ui";
-import { useKitchenOrders, useKitchenMutation } from "@/lib/hooks";
-import { agoMins } from "@/lib/format";
-import type { Order, KitchenStatus } from "@/lib/types";
+import { useEffect, useState } from "react";
+import { View, Text, Pressable } from "react-native";
+import { useLocalSearchParams } from "expo-router";
+import { Screen } from "@/components/ui";
+import Board from "@/components/kitchen/Board";
+import KitchenOps from "@/components/kitchen/KitchenOps";
+import { useOrg } from "@/lib/org-context";
+import { hasModule } from "@/lib/api/session";
 
-const NEXT: Record<KitchenStatus, KitchenStatus | null> = {
-  new: "preparing",
-  preparing: "ready",
-  ready: "served",
-  served: null,
-};
-const ACTION: Record<KitchenStatus, string> = {
-  new: "Start cooking",
-  preparing: "Mark ready",
-  ready: "Mark served",
-  served: "Done",
-};
-const TONE: Record<KitchenStatus, "rose" | "amber" | "green" | "neutral"> = {
-  new: "rose",
-  preparing: "amber",
-  ready: "green",
-  served: "neutral",
-};
-
-function Ticket({ order }: { order: Order }) {
-  const mutate = useKitchenMutation();
-  const next = NEXT[order.kitchen_status];
-  const mins = agoMins(order.created_at);
-  return (
-    <Card className="mb-3">
-      <View className="flex-row items-center justify-between">
-        <Text className="text-lg font-bold text-white">#{order.order_number}</Text>
-        <Badge tone={TONE[order.kitchen_status]}>{order.kitchen_status.toUpperCase()}</Badge>
-      </View>
-      <Muted className="mt-0.5">
-        {order.table_id ? `Table ${order.table_id} · ` : ""}
-        {mins}m ago
-      </Muted>
-      <View className="mt-3 gap-1.5">
-        {order.items.map((l, i) => (
-          <View key={i} className="flex-row items-center gap-2">
-            <Text className="text-base font-bold text-brand-300">{l.qty}×</Text>
-            <Text className="text-base text-white">{l.name}</Text>
-          </View>
-        ))}
-      </View>
-      {next ? (
-        <Button
-          title={ACTION[order.kitchen_status]}
-          className="mt-4"
-          variant={order.kitchen_status === "ready" ? "primary" : "ghost"}
-          loading={mutate.isPending}
-          onPress={() => mutate.mutate({ id: order.id, status: next })}
-        />
-      ) : null}
-    </Card>
-  );
-}
-
+/**
+ * Kitchen is two things on the website — the live ticket board and Kitchen Ops (counts and prep) — each with its
+ * own access switch, so each is its own view here. With only one of them switched on, there's no switcher at all.
+ */
 export default function Kitchen() {
-  const ordersQ = useKitchenOrders();
-  const orders = ordersQ.data ?? [];
+  const { ctx } = useOrg();
+  const hasBoard = hasModule(ctx, "kitchen");
+  const hasOps = hasModule(ctx, "kitchenops");
+  const { view: viewParam } = useLocalSearchParams<{ view?: string }>();
+  const [view, setView] = useState<"board" | "ops">(hasBoard ? "board" : "ops");
+
+  useEffect(() => {
+    if (viewParam === "ops" && hasOps) setView("ops");
+    else if (viewParam === "board" && hasBoard) setView("board");
+  }, [viewParam, hasBoard, hasOps]);
+
+  const showBoard = hasBoard && (view === "board" || !hasOps);
 
   return (
     <Screen>
-      <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="py-3 pb-6">
-        <View className="mb-3 flex-row items-center justify-between">
-          <Text className="text-lg font-bold text-white">Live tickets</Text>
-          <Badge tone="accent">{orders.length} active</Badge>
+      {hasBoard && hasOps ? (
+        <View className="flex-row gap-2 pt-3">
+          {(
+            [
+              ["board", "Board"],
+              ["ops", "Kitchen Ops"],
+            ] as const
+          ).map(([key, label]) => (
+            <Pressable
+              key={key}
+              onPress={() => setView(key)}
+              className={`flex-1 items-center rounded-xl border py-2.5 ${
+                view === key ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+              }`}
+            >
+              <Text className={`text-sm font-semibold ${view === key ? "text-brand-300" : "text-zinc-400"}`}>{label}</Text>
+            </Pressable>
+          ))}
         </View>
-        {orders.length === 0 ? (
-          <Card>
-            <Muted className="py-6 text-center">All caught up — no open tickets. 🎉</Muted>
-          </Card>
-        ) : (
-          orders.map((o) => <Ticket key={o.id} order={o} />)
-        )}
-      </ScrollView>
+      ) : null}
+      {showBoard ? <Board /> : <KitchenOps />}
     </Screen>
   );
 }

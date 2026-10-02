@@ -37,7 +37,7 @@ Which screens appear follows the website's access switches (Settings → modules
 | **My hours** | Your shifts from the last four weeks, by week, with break and worked hours (no pay shown) |
 | **More** | Anything that doesn't fit the tab bar, who you're signed in as, and Sign out |
 | **POS** | Menu grid by category, cart bottom-sheet, send order to kitchen. **Staff / partner meal** in the order sheet: *My meal* (your own staff allowance, confirmed with your own PIN — free credit, free-drink cap, day-off rate) and, for partners only, *Partner meal* (one of your free meals this month). The price shown is worked out by the same rules the database applies, and checkout errors (wrong PIN, no partner meals left) are shown in the sheet |
-| **Kitchen** | Live ticket board (new → preparing → ready → served), auto-refreshes |
+| **Kitchen** | **Board** (people with the Kitchen module): live tickets with per-line "ready" taps, a Ready-to-pick-up strip, Still-to-make totals and stage filters. **Kitchen Ops** (people with the Kitchen Ops module): Live Kitchen hot/fridge counters, "cooked +batch" and what to prepare next, plus Today's Prep by weekday — same maths as the website. With only one of the two switched on there's no switcher |
 | **Inventory** | Stock levels vs par, low-stock flags, one-tap waste / count |
 | **Tasks** | Filterable task list, tap to cycle todo → doing → done. A **Daily** switch (only for people with the Daily Tasks module) shows today's checklists by duty — My duties / Everyone, tick items and steps |
 
@@ -60,4 +60,4 @@ The website now works well on a phone and installs to the home screen (iPhone: S
 
 - Claiming a meal **for someone else** (a manager helping a colleague). The mobile till only does *your own* meal; use the website till to claim for another person.
 - Taking and uploading the proof photo for a Daily task (the app tells you to add it on the website; items that need one can't be ticked here until then).
-- Kitchen Ops (stock counts, prep board), Floor, Preorders, Sales Channels, Settings and Team & Access.
+- Kitchen Ops' deeper tabs (menu & methods, hourly forecast, service speed, waste, daily/weekly review, standards), Floor, Preorders, Sales Channels, Settings and Team & Access.

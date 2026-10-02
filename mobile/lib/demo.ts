@@ -21,7 +21,10 @@ import type {
   StaffRole,
   Shift,
   StaffAvailability,
+  KitchenDish,
+  KitchenLogEntry,
 } from "@/lib/types";
+import { KITCHEN_STANDARDS } from "@/lib/kitchen-standards";
 
 export function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -235,6 +238,40 @@ function seedTimeHistory(): TimeEntry[] {
     });
   }
   return out;
+}
+
+/** Kokoland's real production components (the same list the website seeds) with some live counts to play with. */
+function seedKitchenDishes(): KitchenDish[] {
+  return KITCHEN_STANDARDS.map((s, i) => ({
+    id: uid(),
+    org_id: DEMO_ORG.id,
+    recipe_id: null,
+    dish: s.dish,
+    terms: s.terms,
+    method: s.method,
+    bain_marie: s.bain_marie,
+    open_pct: s.open_pct,
+    portion: s.portion,
+    portion_g: s.portion_g,
+    frozen: s.frozen,
+    station: s.station,
+    container: s.container,
+    batch_portions: s.batch_portions,
+    min_portions: s.min_portions,
+    reorder_at: s.reorder_at,
+    prep_minutes: s.prep_minutes,
+    finish_minutes: s.finish_minutes,
+    target_wait_min: s.target_wait_min,
+    hold_temp_c: s.hold_temp_c,
+    max_hold_min: s.max_hold_min,
+    notes: s.notes,
+    hot_portions: i % 3 === 0 ? 4 : i % 3 === 1 ? 1 : 0,
+    fridge_portions: i % 2 === 0 ? 3 : 0,
+    position: i,
+    is_active: true,
+    updated_at: new Date().toISOString(),
+    updated_by: null,
+  }));
 }
 
 function seedOrders(menu: Recipe[]): Order[] {
@@ -453,6 +490,8 @@ export interface DemoState {
   /** Finished shifts, newest first — the open one (if any) is `timeEntry`. */
   timeHistory: TimeEntry[];
   orders: Order[];
+  kitchenDishes: KitchenDish[];
+  kitchenLog: KitchenLogEntry[];
   payments: Payment[];
   customers: Customer[];
   tables: RestaurantTable[];
@@ -477,6 +516,8 @@ function build(): DemoState {
     timeHistory: seedTimeHistory(),
     duties: [{ id: uid(), org_id: DEMO_ORG.id, duty: "frontend", employee_id: DEMO_ME.id, user_id: null }],
     orders,
+    kitchenDishes: seedKitchenDishes(),
+    kitchenLog: [],
     payments: [],
     customers: seedCustomers(),
     tables: seedTables(),
