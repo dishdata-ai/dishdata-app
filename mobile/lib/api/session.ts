@@ -9,6 +9,19 @@ export interface OrgContext {
   // e.g. "Floor Lead"). Gates admin/manager-only UI (e.g. the org-wide
   // delivery view on My Day).
   role: Role;
+  // Modules this person may use (org-enabled AND granted to them), mirroring the web app's per-module access
+  // (Settings and Team & Access). Undefined = unknown (demo mode, no grants recorded, or the lookup failed),
+  // which hasModule() treats as "allowed" so a hiccup never hides a screen.
+  moduleIds?: string[];
+}
+
+// Modules the web app forces on for every org regardless of what the org saved (src/lib/modules.ts).
+const ALWAYS_ENABLED = ["dashboard", "settings", "myday", "loyalty", "marketing", "orders", "preorders"];
+
+/** Whether this person may use a module. Unknown access counts as allowed — see OrgContext.moduleIds. */
+export function hasModule(ctx: OrgContext | null | undefined, id: string): boolean {
+  if (!ctx?.moduleIds) return true;
+  return ctx.moduleIds.includes(id);
 }
 
 /** Resolve the signed-in user's active org, employee record, and org role. */
@@ -63,6 +76,22 @@ export async function getOrgContext(): Promise<OrgContext | null> {
     .maybeSingle();
   if (!org) return null;
 
+  // Per-module access. Best effort: a failure here must not stop the app opening.
+  let moduleIds: string[] | undefined;
+  try {
+    const { data: access } = await sb
+      .from("member_module_access")
+      .select("module_id, can_access")
+      .eq("org_id", orgId)
+      .eq("user_id", user.id);
+    const granted = (access ?? []).filter((a) => a.can_access).map((a) => a.module_id as string);
+    const saved = (org.settings as { enabled_modules?: string[] } | null)?.enabled_modules;
+    const enabled = saved ? new Set([...saved, ...ALWAYS_ENABLED]) : null;
+    if (granted.length > 0) moduleIds = granted.filter((m) => !enabled || enabled.has(m));
+  } catch {
+    moduleIds = undefined;
+  }
+
   return {
     org: org as Org,
     me: (emp as Employee) ?? {
@@ -78,6 +107,7 @@ export async function getOrgContext(): Promise<OrgContext | null> {
       is_active: true,
     },
     role: (member?.role as Role) ?? "staff",
+    moduleIds,
   };
 }
 

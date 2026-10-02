@@ -17,6 +17,8 @@ import type {
   LoyaltyTier,
   LoyaltyEarnRule,
   LoyaltyReward,
+  DutyAssignment,
+  StaffRole,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -38,6 +40,12 @@ export const DEMO_ORG: Org = {
   target_food_cost_pct: 28,
   onboarding_completed: true,
   settings: {},
+  // Meal rules switched on so the demo shows the My Day allowance cards (see migration 0070).
+  staff_meal_daily_limit: 10,
+  staff_meal_pct_working: 40,
+  staff_meal_pct_off: 30,
+  staff_meal_free_drinks: 2,
+  partner_meal_monthly_count: 2,
 };
 
 export const DEMO_ME: Employee = {
@@ -150,6 +158,45 @@ function seedTasks(): Task[] {
     t("Wipe down POS terminals", "low", "in_progress", 3),
     t("Count walk-in cooler", "medium", "todo", 4),
     t("Brief new server on Section 3", "high", "done", 5),
+  ];
+}
+
+/** A few daily checklist items, one per duty, so the Daily tab has something to show in demo mode. */
+function seedDailyTasks(): Task[] {
+  const d = (
+    title: string,
+    duty: StaffRole,
+    pos: number,
+    extra: Partial<Task> = {},
+  ): Task => ({
+    id: uid(),
+    org_id: DEMO_ORG.id,
+    title,
+    description: null,
+    status: "todo",
+    priority: "medium",
+    assignee_employee_id: null,
+    partner_email: null,
+    due_date: null,
+    position: 100 + pos,
+    completed_at: null,
+    created_at: hoursAgo(48),
+    is_daily: true,
+    assigned_role: duty,
+    ...extra,
+  });
+  return [
+    d("Front-of-house open check", "frontend", 1, { description: "Lights, music, card terminal and till float ready", priority: "high" }),
+    d("Guest area setup", "frontend", 2, {
+      checklist: [
+        { id: "s1", text: "Wipe tables", done: false },
+        { id: "s2", text: "Set cutlery caddies", done: false },
+        { id: "s3", text: "Check takeaway boxes and bags", done: false },
+      ],
+    }),
+    d("Clean guest toilets", "frontend", 3, { requires_photo: true, priority: "high" }),
+    d("Chiller temperature log", "kitchen_lead", 4, { priority: "high" }),
+    d("Wash dishes", "kitchen_helper", 5),
   ];
 }
 
@@ -363,6 +410,7 @@ export interface DemoState {
   recipes: Recipe[];
   inventory: InventoryItem[];
   tasks: Task[];
+  duties: DutyAssignment[];
   orders: Order[];
   payments: Payment[];
   customers: Customer[];
@@ -382,7 +430,8 @@ function build(): DemoState {
     me: DEMO_ME,
     recipes,
     inventory: seedInventory(),
-    tasks: seedTasks(),
+    tasks: [...seedTasks(), ...seedDailyTasks()],
+    duties: [{ id: uid(), org_id: DEMO_ORG.id, duty: "frontend", employee_id: DEMO_ME.id, user_id: null }],
     orders,
     payments: [],
     customers: seedCustomers(),

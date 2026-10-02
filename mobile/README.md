@@ -31,11 +31,11 @@ When those are set, the data layer (`lib/api/*`) talks to Supabase with RLS and 
 
 | Tab | What it does |
 | --- | --- |
-| **My Day** | Shift status, clock in/out, break toggle, hours + earnings, your tasks |
+| **My Day** | Shift status, clock in/out, break toggle, hours + earnings, your tasks, and your meal allowance (today's free credit and free drinks, or the day-off rate; partners also see their free meals left this month) |
 | **POS** | Menu grid by category, cart bottom-sheet, send order to kitchen |
 | **Kitchen** | Live ticket board (new → preparing → ready → served), auto-refreshes |
 | **Inventory** | Stock levels vs par, low-stock flags, one-tap waste / count |
-| **Tasks** | Filterable task list, tap to cycle todo → doing → done |
+| **Tasks** | Filterable task list, tap to cycle todo → doing → done. A **Daily** switch (only for people with the Daily Tasks module) shows today's checklists by duty — My duties / Everyone, tick items and steps |
 
 ## Architecture notes
 
@@ -49,3 +49,11 @@ When those are set, the data layer (`lib/api/*`) talks to Supabase with RLS and 
 - AI bill-capture photo flow (reuses the web `/api/bills/extract` endpoint)
 - Push notifications (low stock, new kitchen tickets)
 - Offline mutation queue + biometric quick-switch
+
+### Not on mobile yet
+
+The website now works well on a phone and installs to the home screen (iPhone: Safari → Share → Add to Home Screen), and it has everything below. Use it for these until they're built natively:
+
+- **Claiming a staff meal or partner meal at the till.** The mobile POS has no discount path at all today, so this means changing the payment flow — better done with a real Android device to test on.
+- Taking and uploading the proof photo for a Daily task (the app tells you to add it on the website; items that need one can't be ticked here until then).
+- Kitchen Ops (stock counts, prep board), shifts / availability, Settings and Team & Access.

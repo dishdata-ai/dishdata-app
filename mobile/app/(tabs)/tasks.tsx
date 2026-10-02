@@ -2,6 +2,9 @@ import { useState } from "react";
 import { ScrollView, View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen, Card, Badge, Muted, Divider } from "@/components/ui";
+import DailyChecklist from "@/components/DailyChecklist";
+import { useOrg } from "@/lib/org-context";
+import { hasModule } from "@/lib/api/session";
 import { useTasks, useTaskMutations } from "@/lib/hooks";
 import { colors } from "@/lib/theme";
 import type { Task, TaskStatus } from "@/lib/types";
@@ -62,14 +65,15 @@ function Row({ task }: { task: Task }) {
   );
 }
 
-export default function Tasks() {
+/** One-off tasks (the board). Daily checklists live in their own view — see DailyChecklist. */
+function TaskList() {
   const tasksQ = useTasks();
   const [filter, setFilter] = useState<"all" | TaskStatus>("all");
-  const tasks = tasksQ.data ?? [];
+  const tasks = (tasksQ.data ?? []).filter((t) => !t.is_daily);
   const shown = filter === "all" ? tasks : tasks.filter((t) => t.status === filter);
 
   return (
-    <Screen>
+    <>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -108,6 +112,46 @@ export default function Tasks() {
           </Card>
         )}
       </ScrollView>
+    </>
+  );
+}
+
+export default function Tasks() {
+  const { ctx } = useOrg();
+  // Daily is its own module on the web (Settings / Team & Access can switch it off per person), so it is here too.
+  const hasDaily = hasModule(ctx, "dailytasks");
+  const [mode, setMode] = useState<"tasks" | "daily">("tasks");
+  const showDaily = hasDaily && mode === "daily";
+
+  return (
+    <Screen>
+      {hasDaily ? (
+        <View className="flex-row gap-2 pt-3">
+          {(
+            [
+              ["tasks", "Tasks"],
+              ["daily", "Daily"],
+            ] as const
+          ).map(([key, label]) => (
+            <Pressable
+              key={key}
+              onPress={() => setMode(key)}
+              className={`flex-1 items-center rounded-xl border py-2.5 ${
+                mode === key ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+              }`}
+            >
+              <Text className={`text-sm font-semibold ${mode === key ? "text-brand-300" : "text-zinc-400"}`}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {showDaily ? (
+        <View className="flex-1 pt-3">
+          <DailyChecklist />
+        </View>
+      ) : (
+        <TaskList />
+      )}
     </Screen>
   );
 }

@@ -36,3 +36,21 @@ export async function setTaskStatus(
     .eq("org_id", orgId);
   if (error) throw error;
 }
+
+/** Fields a daily-checklist tick can change: the status, when it was last touched, and the steps. */
+export interface DailyTaskPatch {
+  status?: TaskStatus;
+  completed_at?: string | null;
+  checklist?: Task["checklist"];
+}
+
+/** Update a daily checklist item. completed_at is "last touched", which is how daily tasks reset each day. */
+export async function patchTask(orgId: string, taskId: string, patch: DailyTaskPatch): Promise<void> {
+  if (!isSupabaseConfigured) {
+    const t = demo.tasks.find((x) => x.id === taskId);
+    if (t) Object.assign(t, patch);
+    return;
+  }
+  const { error } = await getSupabase().from("tasks").update(patch).eq("id", taskId).eq("org_id", orgId);
+  if (error) throw error;
+}

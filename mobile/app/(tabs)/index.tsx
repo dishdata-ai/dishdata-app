@@ -8,12 +8,16 @@ import {
   useTasks,
   useTaskMutations,
   useOrgDeliveries,
+  useStaffMealUsage,
+  usePartnerMealUsage,
 } from "@/lib/hooks";
 import { elapsed, clockTime, money } from "@/lib/format";
 import { colors } from "@/lib/theme";
 import type { DeliveryStatus } from "@/lib/types";
 
 const MANAGER_ROLES = new Set(["owner", "admin", "manager"]);
+// Same people the web app calls partners (can see the Partner Hub): owner, admin and partner logins.
+const PARTNER_ROLES = new Set(["owner", "admin", "partner"]);
 
 const DELIVERY_STATUS_TONE: Record<DeliveryStatus, "neutral" | "amber" | "green" | "accent" | "rose"> = {
   pending: "neutral",
@@ -32,6 +36,13 @@ export default function MyDay() {
   const tasksQ = useTasks();
   const taskMut = useTaskMutations();
   const orgDeliveriesQ = useOrgDeliveries(isManager);
+
+  // Meal allowances. The staff one shows for everyone once the restaurant has switched it on; partner meals only
+  // ever show to partners. Both quietly disappear if the database can't answer (e.g. before migration 0070).
+  const staffMealOn = (ctx?.org.staff_meal_daily_limit ?? 0) > 0;
+  const partnerMealOn = Boolean(ctx?.role && PARTNER_ROLES.has(ctx.role)) && (ctx?.org.partner_meal_monthly_count ?? 0) > 0;
+  const staffMeal = useStaffMealUsage(staffMealOn).data ?? null;
+  const partnerMeal = usePartnerMealUsage(partnerMealOn).data ?? null;
 
   const shift = shiftQ.data ?? null;
   const onBreak = Boolean(shift?.break_started_at);
@@ -121,6 +132,39 @@ export default function MyDay() {
           />
           <StatTile label="Open tasks" value={String(openTasks.length)} hint="assigned to you" tone="violet" />
         </View>
+
+        {/* Meal allowances */}
+        {(staffMealOn && staffMeal) || (partnerMealOn && partnerMeal?.eligible) ? (
+          <View className="flex-row gap-3">
+            {staffMealOn && staffMeal ? (
+              staffMeal.working_today === false ? (
+                <StatTile
+                  label="Staff meals"
+                  value={`${staffMeal.pct ?? 0}% off`}
+                  hint={`Clock in to get your free ${money(staffMeal.limit ?? 0)}`}
+                />
+              ) : (
+                <StatTile
+                  label="Meal allowance"
+                  value={money(staffMeal.remaining)}
+                  hint={
+                    staffMeal.drinks_remaining != null
+                      ? `left today · ${staffMeal.drinks_remaining} free drink${staffMeal.drinks_remaining === 1 ? "" : "s"}`
+                      : "left today"
+                  }
+                />
+              )
+            ) : null}
+            {partnerMealOn && partnerMeal?.eligible ? (
+              <StatTile
+                label="Partner meals"
+                value={`${partnerMeal.remaining} of ${partnerMeal.count ?? 0}`}
+                hint="free, left this month"
+                tone="accent"
+              />
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Today's tasks */}
         <View>

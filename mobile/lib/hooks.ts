@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useOrg } from "@/lib/org-context";
-import { listTasks, setTaskStatus } from "@/lib/api/tasks";
+import { listTasks, setTaskStatus, patchTask, type DailyTaskPatch } from "@/lib/api/tasks";
+import { listDuties } from "@/lib/api/duties";
+import { getStaffMealUsage, getPartnerMealUsage } from "@/lib/api/meals";
 import { getOpenShift, clockIn, clockOut, toggleBreak } from "@/lib/api/timeclock";
 import { listMenu } from "@/lib/api/menu";
 import { listEventMenus } from "@/lib/api/eventMenus";
@@ -28,6 +30,33 @@ function useIds() {
 export function useTasks() {
   const { orgId, enabled } = useIds();
   return useQuery({ queryKey: ["tasks", orgId], queryFn: () => listTasks(orgId), enabled });
+}
+
+export function useDuties() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["duties", orgId], queryFn: () => listDuties(orgId), enabled });
+}
+
+/** Today's staff-meal allowance for the signed-in employee. Null when the server can't say. */
+export function useStaffMealUsage(active: boolean) {
+  const { orgId, empId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["staffMealUsage", orgId, empId],
+    queryFn: () => getStaffMealUsage(orgId, empId),
+    enabled: enabled && active,
+    retry: false,
+  });
+}
+
+/** This month's free partner meals for the signed-in partner. Null when the server can't say. */
+export function usePartnerMealUsage(active: boolean) {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["partnerMealUsage", orgId],
+    queryFn: () => getPartnerMealUsage(orgId),
+    enabled: enabled && active,
+    retry: false,
+  });
 }
 
 export function useShift() {
@@ -166,6 +195,16 @@ export function useTaskMutations() {
     mutationFn: ({ id, status }: { id: string; status: TaskStatus }) =>
       setTaskStatus(orgId, id, status),
     onSuccess: invalidate,
+  });
+}
+
+/** Tick a daily checklist item (or one of its steps). */
+export function useDailyTaskMutation() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: DailyTaskPatch }) => patchTask(orgId, id, patch),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", orgId] }),
   });
 }
 

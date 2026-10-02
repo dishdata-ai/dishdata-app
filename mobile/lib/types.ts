@@ -1,7 +1,7 @@
 // Hand-maintained row types mirroring supabase/setup.sql.
 // Keep this file and setup.sql in sync when the schema changes.
 
-export type Role = "owner" | "admin" | "manager" | "staff" | "accountant" | "viewer";
+export type Role = "owner" | "admin" | "partner" | "manager" | "staff" | "accountant" | "viewer";
 export type OrderType = "dine_in" | "takeaway" | "delivery";
 export type OrderStatus = "open" | "paid" | "void" | "refunded";
 export type KitchenStatus = "new" | "preparing" | "ready" | "served";
@@ -36,6 +36,17 @@ export interface Org {
   target_food_cost_pct: number;
   onboarding_completed: boolean;
   settings: Record<string, unknown>;
+  /** € of free staff meal per employee per day. null/0 = staff meals off. */
+  staff_meal_daily_limit?: number | null;
+  /** % off the rest of a staff meal on a day the employee clocked in. */
+  staff_meal_pct_working?: number | null;
+  /** % off a staff meal on a day they did not clock in (no free credit that day). */
+  staff_meal_pct_off?: number | null;
+  /** Most drinks the free credit may cover per day. null = no cap. */
+  staff_meal_free_drinks?: number | null;
+  /** Free meals per partner per month. null/0 = partner meals off. */
+  partner_meal_monthly_count?: number | null;
+  partner_meal_max_value?: number | null;
 }
 
 export interface Profile {
@@ -383,6 +394,68 @@ export interface Task {
   position: number;
   completed_at: string | null;
   created_at: string;
+  // Daily checklists (web migrations 0055/0056). All optional so older rows and demo data still type-check.
+  is_daily?: boolean;
+  is_partner_task?: boolean;
+  assigned_role?: StaffRole | null;
+  requires_photo?: boolean;
+  example_photo_url?: string | null;
+  proof_photos?: TaskPhoto[];
+  checklist?: ChecklistItem[];
+}
+
+export type StaffRole =
+  | "frontend"
+  | "frontend_helper"
+  | "kitchen_lead"
+  | "commi_kitchen"
+  | "kitchen_helper"
+  | "owner"
+  | "admin"
+  | "manager";
+
+export interface ChecklistItem {
+  id: string;
+  text: string;
+  done: boolean;
+}
+
+export interface TaskPhoto {
+  id: string;
+  url: string;
+  by: string | null;
+  at: string;
+}
+
+/** Who holds a duty (a person is either a staff record or a login, never both). */
+export interface DutyAssignment {
+  id: string;
+  org_id: string;
+  duty: StaffRole;
+  employee_id: string | null;
+  user_id: string | null;
+}
+
+/** Today's staff-meal allowance for one employee (staff_meal_usage RPC, migration 0070). */
+export interface StaffMealUsage {
+  used: number;
+  orders: number;
+  limit: number | null;
+  /** Free € left today; 0 on a day the employee hasn't clocked in. */
+  remaining: number;
+  working_today?: boolean;
+  /** % off whatever the free credit doesn't cover, today. */
+  pct?: number;
+  drinks_remaining?: number | null;
+}
+
+/** This calendar month's free partner meals (partner_meal_usage RPC, migration 0070). */
+export interface PartnerMealUsage {
+  eligible: boolean;
+  count: number | null;
+  max_value: number | null;
+  used: number;
+  remaining: number;
 }
 
 export interface Campaign {
