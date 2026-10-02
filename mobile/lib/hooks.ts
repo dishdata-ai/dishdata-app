@@ -2,8 +2,23 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useOrg } from "@/lib/org-context";
 import { listTasks, setTaskStatus, patchTask, type DailyTaskPatch } from "@/lib/api/tasks";
 import { listDuties } from "@/lib/api/duties";
+import { listMyShifts } from "@/lib/api/shifts";
+import {
+  listMyAvailability,
+  setAvailability,
+  clearAvailability,
+  type AvailabilityInput,
+} from "@/lib/api/availability";
+import { listUnclaimedEmployees, claimEmployee, setMyPin } from "@/lib/api/employees";
 import { getStaffMealUsage, getPartnerMealUsage } from "@/lib/api/meals";
-import { getOpenShift, clockIn, clockOut, toggleBreak } from "@/lib/api/timeclock";
+import {
+  getOpenShift,
+  clockIn,
+  clockOut,
+  toggleBreak,
+  listMyTimeEntries,
+  type ClockInGeo,
+} from "@/lib/api/timeclock";
 import { listMenu } from "@/lib/api/menu";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import {
@@ -57,6 +72,62 @@ export function usePartnerMealUsage(active: boolean) {
     enabled: enabled && active,
     retry: false,
   });
+}
+
+export function useMyTimeEntries() {
+  const { orgId, empId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["myTimeEntries", orgId, empId],
+    queryFn: () => listMyTimeEntries(orgId, empId),
+    enabled,
+  });
+}
+
+export function useMyShifts() {
+  const { orgId, empId, enabled } = useIds();
+  return useQuery({ queryKey: ["myShifts", orgId, empId], queryFn: () => listMyShifts(orgId, empId), enabled });
+}
+
+export function useMyAvailability() {
+  const { orgId, empId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["myAvailability", orgId, empId],
+    queryFn: () => listMyAvailability(orgId, empId),
+    enabled,
+  });
+}
+
+export function useAvailabilityMutations() {
+  const { orgId, empId } = useIds();
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["myAvailability", orgId, empId] });
+  return {
+    set: useMutation({
+      mutationFn: (v: { day: string; input: AvailabilityInput }) => setAvailability(orgId, empId, v.day, v.input),
+      onSuccess: invalidate,
+    }),
+    clear: useMutation({ mutationFn: (day: string) => clearAvailability(orgId, empId, day), onSuccess: invalidate }),
+  };
+}
+
+/** Staff records still waiting to be claimed — for the "Who are you?" step. */
+export function useUnclaimedEmployees(active: boolean) {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["unclaimedEmployees", orgId],
+    queryFn: () => listUnclaimedEmployees(orgId),
+    enabled: enabled && active,
+  });
+}
+
+export function useClaimEmployee() {
+  const { orgId } = useIds();
+  return useMutation({ mutationFn: (employeeId: string) => claimEmployee(orgId, employeeId) });
+}
+
+export function useSetMyPin() {
+  const { orgId } = useIds();
+  return useMutation({ mutationFn: (pin: string) => setMyPin(orgId, pin) });
 }
 
 export function useShift() {
@@ -213,9 +284,12 @@ export function useShiftMutations() {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: ["shift", orgId, empId] });
   return {
-    clockIn: useMutation({ mutationFn: () => clockIn(orgId, empId), onSuccess: invalidate }),
+    clockIn: useMutation({
+      mutationFn: (geo?: ClockInGeo) => clockIn(orgId, empId, geo),
+      onSuccess: invalidate,
+    }),
     clockOut: useMutation({
-      mutationFn: (entryId: string) => clockOut(orgId, entryId),
+      mutationFn: (entry: TimeEntry) => clockOut(orgId, entry),
       onSuccess: invalidate,
     }),
     toggleBreak: useMutation({

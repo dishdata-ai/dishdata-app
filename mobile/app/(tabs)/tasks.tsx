@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
 import { ScrollView, View, Text, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen, Card, Badge, Muted, Divider } from "@/components/ui";
@@ -120,7 +121,12 @@ export default function Tasks() {
   const { ctx } = useOrg();
   // Daily is its own module on the web (Settings / Team & Access can switch it off per person), so it is here too.
   const hasDaily = hasModule(ctx, "dailytasks");
+  const { view } = useLocalSearchParams<{ view?: string }>();
   const [mode, setMode] = useState<"tasks" | "daily">("tasks");
+  // Deep link from My Day ("Today's checklist") lands straight on the Daily view.
+  useEffect(() => {
+    if (view === "daily" && hasDaily) setMode("daily");
+  }, [view, hasDaily]);
   const showDaily = hasDaily && mode === "daily";
 
   return (

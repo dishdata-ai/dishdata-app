@@ -19,6 +19,8 @@ import type {
   LoyaltyReward,
   DutyAssignment,
   StaffRole,
+  Shift,
+  StaffAvailability,
 } from "@/lib/types";
 
 export function uid(): string {
@@ -198,6 +200,41 @@ function seedDailyTasks(): Task[] {
     d("Chiller temperature log", "kitchen_lead", 4, { priority: "high" }),
     d("Wash dishes", "kitchen_helper", 5),
   ];
+}
+
+/** A few upcoming shifts for the demo employee so My Shifts has something to show. */
+function seedShifts(): Shift[] {
+  const day = (offset: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const s = (offset: number, start: string, end: string, role: string | null, note: string | null): Shift => ({
+    id: uid(), org_id: DEMO_ORG.id, employee_id: DEMO_ME.id, day: day(offset),
+    start_time: `${start}:00`, end_time: `${end}:00`, role_title: role, note, updated_at: nowISO(),
+  });
+  return [
+    s(0, "16:00", "23:00", "Floor Lead", "Section 3 + bar pickup"),
+    s(2, "11:00", "17:00", "Floor Lead", null),
+    s(3, "17:00", "23:00", null, "Covering the pass"),
+  ];
+}
+
+/** A couple of weeks of finished shifts for the demo employee, for the My hours screen. */
+function seedTimeHistory(): TimeEntry[] {
+  const out: TimeEntry[] = [];
+  for (const daysBack of [1, 2, 4, 5, 8, 9, 11]) {
+    const start = new Date();
+    start.setDate(start.getDate() - daysBack);
+    start.setHours(16, 0, 0, 0);
+    const end = new Date(start.getTime() + 7 * 3600_000);
+    out.push({
+      id: uid(), org_id: DEMO_ORG.id, employee_id: DEMO_ME.id,
+      clock_in: start.toISOString(), clock_out: end.toISOString(),
+      break_seconds: 30 * 60, break_started_at: null, note: null,
+    });
+  }
+  return out;
 }
 
 function seedOrders(menu: Recipe[]): Order[] {
@@ -411,6 +448,10 @@ export interface DemoState {
   inventory: InventoryItem[];
   tasks: Task[];
   duties: DutyAssignment[];
+  shifts: Shift[];
+  availability: StaffAvailability[];
+  /** Finished shifts, newest first — the open one (if any) is `timeEntry`. */
+  timeHistory: TimeEntry[];
   orders: Order[];
   payments: Payment[];
   customers: Customer[];
@@ -431,6 +472,9 @@ function build(): DemoState {
     recipes,
     inventory: seedInventory(),
     tasks: [...seedTasks(), ...seedDailyTasks()],
+    shifts: seedShifts(),
+    availability: [],
+    timeHistory: seedTimeHistory(),
     duties: [{ id: uid(), org_id: DEMO_ORG.id, duty: "frontend", employee_id: DEMO_ME.id, user_id: null }],
     orders,
     payments: [],

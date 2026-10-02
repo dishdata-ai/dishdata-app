@@ -29,9 +29,13 @@ When those are set, the data layer (`lib/api/*`) talks to Supabase with RLS and 
 
 ## Screens (staff persona MVP)
 
+Which screens appear follows the website's access switches (Settings → modules, Team & Access): the first four a person can use get a tab, the rest are under **More**.
+
 | Tab | What it does |
 | --- | --- |
-| **My Day** | Shift status, clock in/out, break toggle, hours + earnings, your tasks, and your meal allowance (today's free credit and free drinks, or the day-off rate; partners also see their free meals left this month) |
+| **My Day** | Shift status, clock in/out (with the café's location check when one is set) and break toggle, your tasks, your upcoming shifts, your availability for the week, your meal allowance, and your clock-in PIN. First sign-in asks "Who are you?" to link you to your staff record. Hours and earnings show for owners/admins only |
+| **My hours** | Your shifts from the last four weeks, by week, with break and worked hours (no pay shown) |
+| **More** | Anything that doesn't fit the tab bar, who you're signed in as, and Sign out |
 | **POS** | Menu grid by category, cart bottom-sheet, send order to kitchen. **Staff / partner meal** in the order sheet: *My meal* (your own staff allowance, confirmed with your own PIN — free credit, free-drink cap, day-off rate) and, for partners only, *Partner meal* (one of your free meals this month). The price shown is worked out by the same rules the database applies, and checkout errors (wrong PIN, no partner meals left) are shown in the sheet |
 | **Kitchen** | Live ticket board (new → preparing → ready → served), auto-refreshes |
 | **Inventory** | Stock levels vs par, low-stock flags, one-tap waste / count |
@@ -56,4 +60,4 @@ The website now works well on a phone and installs to the home screen (iPhone: S
 
 - Claiming a meal **for someone else** (a manager helping a colleague). The mobile till only does *your own* meal; use the website till to claim for another person.
 - Taking and uploading the proof photo for a Daily task (the app tells you to add it on the website; items that need one can't be ticked here until then).
-- Kitchen Ops (stock counts, prep board), shifts / availability, Settings and Team & Access.
+- Kitchen Ops (stock counts, prep board), Floor, Preorders, Sales Channels, Settings and Team & Access.

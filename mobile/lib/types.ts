@@ -44,6 +44,10 @@ export interface Org {
   staff_meal_pct_off?: number | null;
   /** Most drinks the free credit may cover per day. null = no cap. */
   staff_meal_free_drinks?: number | null;
+  /** Where people may clock in from. All three set = a geofence; any missing = no location check. */
+  clockin_lat?: number | null;
+  clockin_lng?: number | null;
+  clockin_radius_m?: number | null;
   /** Free meals per partner per month. null/0 = partner meals off. */
   partner_meal_monthly_count?: number | null;
   partner_meal_max_value?: number | null;
@@ -621,4 +625,35 @@ export interface EventMenuItem {
   event_menu_id: string;
   recipe_id: string;
   created_at: string;
+}
+
+export type AvailabilityStatus = "available" | "partial" | "unavailable";
+
+/** One person's say-so about one day. No row means "hasn't said", which is not the same as unavailable. */
+export interface StaffAvailability {
+  id: string;
+  org_id: string;
+  employee_id: string;
+  /** YYYY-MM-DD */
+  day: string;
+  status: AvailabilityStatus;
+  from_time: string | null;
+  to_time: string | null;
+  note: string | null;
+  updated_at: string;
+}
+
+/** A shift a manager assigned. end_time may be earlier than start_time for an overnight shift. */
+export interface Shift {
+  id: string;
+  org_id: string;
+  employee_id: string;
+  /** YYYY-MM-DD */
+  day: string;
+  /** "HH:MM:SS" (Postgres time) */
+  start_time: string;
+  end_time: string;
+  role_title: string | null;
+  note: string | null;
+  updated_at: string;
 }

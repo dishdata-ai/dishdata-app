@@ -4,9 +4,11 @@ import { Tabs, Redirect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useOrg } from "@/lib/org-context";
 import { colors } from "@/lib/theme";
+import { SCREENS, useScreens } from "@/lib/screens";
 
 export default function TabsLayout() {
   const { ctx, loading, refresh } = useOrg();
+  const { bar } = useScreens();
 
   // Escape hatch: if the loading state ever lingers (a wedged network call),
   // surface a retry after a few seconds instead of an endless spinner.
@@ -42,6 +44,8 @@ export default function TabsLayout() {
   }
   if (!ctx) return <Redirect href="/sign-in" />;
 
+  const inBar = new Set(bar.map((s) => s.name));
+
   return (
     <Tabs
       screenOptions={{
@@ -60,57 +64,24 @@ export default function TabsLayout() {
         tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
       }}
     >
+      {/* Every screen is registered so it can still be opened from More; only the ones in `bar` get a tab. */}
+      {SCREENS.map((s) => (
+        <Tabs.Screen
+          key={s.name}
+          name={s.name}
+          options={{
+            title: s.title,
+            href: inBar.has(s.name) ? undefined : null,
+            tabBarIcon: ({ color, size }) => <Ionicons name={s.icon} color={color} size={size} />,
+          }}
+        />
+      ))}
       <Tabs.Screen
-        name="index"
+        name="more"
         options={{
-          title: "My Day",
-          tabBarIcon: ({ color, size }) => <Ionicons name="sunny" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="pos"
-        options={{
-          title: "POS",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cart" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="kitchen"
-        options={{
-          title: "Kitchen",
-          tabBarIcon: ({ color, size }) => <Ionicons name="flame" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="delivery"
-        options={{
-          title: "Delivery",
-          tabBarIcon: ({ color, size }) => <Ionicons name="bicycle" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="inventory"
-        options={{
-          title: "Inventory",
-          tabBarIcon: ({ color, size }) => <Ionicons name="cube" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="tasks"
-        options={{
-          title: "Tasks",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="checkbox" color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="loyalty"
-        options={{
-          title: "Loyalty",
-          tabBarIcon: ({ color, size }) => <Ionicons name="gift" color={color} size={size} />,
+          title: "More",
+          href: undefined,
+          tabBarIcon: ({ color, size }) => <Ionicons name="ellipsis-horizontal-circle" color={color} size={size} />,
         }}
       />
     </Tabs>

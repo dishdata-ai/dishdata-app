@@ -1,7 +1,13 @@
-import { ScrollView, View, Text } from "react-native";
+import { useState } from "react";
+import { ScrollView, View, Text, Pressable } from "react-native";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Screen, Card, Button, Badge, StatTile, Muted, Divider } from "@/components/ui";
+import ClaimEmployee from "@/components/ClaimEmployee";
+import MyPinCard from "@/components/MyPinCard";
+import MyShifts from "@/components/MyShifts";
 import { useOrg } from "@/lib/org-context";
+import { hasModule } from "@/lib/api/session";
 import {
   useShift,
   useShiftMutations,
@@ -10,13 +16,22 @@ import {
   useOrgDeliveries,
   useStaffMealUsage,
   usePartnerMealUsage,
+  useDuties,
+  useMyAvailability,
+  useKitchenOrders,
 } from "@/lib/hooks";
+import { myDuties } from "@/lib/duties";
+import { dayKey, weekDays } from "@/lib/dates";
+import { distanceMeters, geofenceOf, getCurrentPosition } from "@/lib/geo";
+import { errorMessage } from "@/lib/errors";
 import { elapsed, clockTime, money } from "@/lib/format";
 import { PARTNER_ROLES } from "@/lib/staff-meal";
 import { colors } from "@/lib/theme";
 import type { DeliveryStatus } from "@/lib/types";
 
 const MANAGER_ROLES = new Set(["owner", "admin", "manager"]);
+// Pay and hours are for owners and admins only — regular staff don't see them on My Day (same as the website).
+const PAY_ROLES = new Set(["owner", "admin"]);
 
 const DELIVERY_STATUS_TONE: Record<DeliveryStatus, "neutral" | "amber" | "green" | "accent" | "rose"> = {
   pending: "neutral",
@@ -27,14 +42,48 @@ const DELIVERY_STATUS_TONE: Record<DeliveryStatus, "neutral" | "amber" | "green"
 };
 
 export default function MyDay() {
-  const { ctx } = useOrg();
+  const { ctx, isDemo } = useOrg();
+  const router = useRouter();
   const me = ctx?.me;
   const isManager = Boolean(ctx?.role && MANAGER_ROLES.has(ctx.role));
+  const canSeePay = Boolean(ctx?.role && PAY_ROLES.has(ctx.role));
+  // A login with no staff record gets a stand-in whose id is the user's own id; the database has no such employee.
+  const linked = isDemo || (!!me && me.user_id != null && me.id !== me.user_id);
   const shiftQ = useShift();
   const { clockIn, clockOut, toggleBreak } = useShiftMutations();
   const tasksQ = useTasks();
   const taskMut = useTaskMutations();
   const orgDeliveriesQ = useOrgDeliveries(isManager);
+  const dutiesQ = useDuties();
+  const availabilityQ = useMyAvailability();
+  const kitchenQ = useKitchenOrders();
+
+  // Clock-in: if the restaurant set a location, check you're there first, then clock in through the secured function.
+  const geofence = ctx ? geofenceOf(ctx.org) : null;
+  const [clockBusy, setClockBusy] = useState(false);
+  const [clockError, setClockError] = useState<string | null>(null);
+  const onClockIn = async () => {
+    setClockError(null);
+    setClockBusy(true);
+    try {
+      if (geofence) {
+        const pos = await getCurrentPosition();
+        const distanceM = distanceMeters(pos, geofence);
+        if (distanceM > geofence.radiusM) {
+          setClockError(`You're not at the restaurant — ${Math.round(distanceM)}m away. Ask a manager to clock you in.`);
+          return;
+        }
+        await clockIn.mutateAsync({ lat: pos.lat, lng: pos.lng, distanceM });
+      } else {
+        await clockIn.mutateAsync(undefined);
+      }
+    } catch (e) {
+      setClockError(errorMessage(e, "Clock-in failed — please try again."));
+    } finally {
+      setClockBusy(false);
+    }
+  };
+  const shiftActionError = clockOut.error ?? toggleBreak.error;
 
   // Meal allowances. The staff one shows for everyone once the restaurant has switched it on; partner meals only
   // ever show to partners. Both quietly disappear if the database can't answer (e.g. before migration 0070).
@@ -48,6 +97,11 @@ export default function MyDay() {
   const tasks = tasksQ.data ?? [];
   const myTasks = tasks.filter((t) => t.assignee_employee_id === me?.id);
   const openTasks = myTasks.filter((t) => t.status !== "done");
+  const holdsDuty = myDuties(dutiesQ.data ?? [], me ?? null, me?.user_id ?? undefined).size > 0;
+  const nextWeekFilled = weekDays(1).filter((d) =>
+    (availabilityQ.data ?? []).some((r) => r.day === dayKey(d)),
+  ).length;
+  const kitchenOpen = (kitchenQ.data ?? []).length;
 
   // Earnings estimate from elapsed worked minutes (minus banked break seconds).
   const workedMs = shift
@@ -55,6 +109,17 @@ export default function MyDay() {
     : 0;
   const workedHrs = Math.max(0, workedMs / 3_600_000);
   const earnings = workedHrs * (me?.hourly_rate ?? 0);
+
+  if (!linked) {
+    return (
+      <Screen>
+        <ScrollView showsVerticalScrollIndicator={false} className="flex-1" contentContainerClassName="gap-4 pb-6 pt-2">
+          <Text className="text-2xl font-bold text-white">My Day</Text>
+          <ClaimEmployee />
+        </ScrollView>
+      </Screen>
+    );
+  }
 
   return (
     <Screen>
@@ -105,32 +170,56 @@ export default function MyDay() {
                   variant="danger"
                   className="flex-1"
                   loading={clockOut.isPending}
-                  onPress={() => clockOut.mutate(shift.id)}
+                  onPress={() => clockOut.mutate(shift)}
                 />
               </View>
             </>
           ) : (
             <View className="mt-4">
-              <Button
-                title="Clock in"
-                loading={clockIn.isPending}
-                onPress={() => clockIn.mutate()}
-              />
+              <Button title="Clock in" loading={clockBusy} onPress={onClockIn} />
+              {geofence ? (
+                <Muted className="mt-1.5 text-center">Checks you&apos;re at the restaurant</Muted>
+              ) : null}
             </View>
           )}
+          {clockError ? <Text className="mt-3 text-sm font-semibold text-rose-soft">{clockError}</Text> : null}
+          {shiftActionError ? (
+            <Text className="mt-3 text-sm font-semibold text-rose-soft">{errorMessage(shiftActionError)}</Text>
+          ) : null}
         </Card>
 
         {/* Stats */}
         <View className="flex-row gap-3">
-          <StatTile label="Hours today" value={workedHrs.toFixed(1)} hint="incl. current shift" />
-          <StatTile
-            label="Est. earnings"
-            value={money(earnings)}
-            hint={`@ ${money(me?.hourly_rate ?? 0)}/hr`}
-            tone="accent"
-          />
+          {canSeePay ? (
+            <>
+              <StatTile label="Hours today" value={workedHrs.toFixed(1)} hint="incl. current shift" />
+              <StatTile
+                label="Est. earnings"
+                value={money(earnings)}
+                hint={`@ ${money(me?.hourly_rate ?? 0)}/hr`}
+                tone="accent"
+              />
+            </>
+          ) : null}
           <StatTile label="Open tasks" value={String(openTasks.length)} hint="assigned to you" tone="violet" />
         </View>
+
+        {/* Next week's availability */}
+        <Pressable onPress={() => router.push("/availability")} className="active:opacity-80">
+          <Card className="flex-row items-center gap-3">
+            <Ionicons name="calendar-outline" size={22} color={colors.accent400} />
+            <View className="flex-1">
+              <Text className="text-base font-semibold text-white">My availability</Text>
+              <Muted>
+                {nextWeekFilled === 7
+                  ? "Next week is all filled in"
+                  : `Next week: ${nextWeekFilled}/7 days — tell your manager when you can work`}
+              </Muted>
+            </View>
+            <Badge tone={nextWeekFilled === 7 ? "green" : "amber"}>{nextWeekFilled}/7</Badge>
+            <Ionicons name="chevron-forward" size={18} color={colors.zinc500} />
+          </Card>
+        </Pressable>
 
         {/* Meal allowances */}
         {(staffMealOn && staffMeal) || (partnerMealOn && partnerMeal?.eligible) ? (
@@ -163,6 +252,27 @@ export default function MyDay() {
               />
             ) : null}
           </View>
+        ) : null}
+
+        <MyShifts />
+
+        <MyPinCard hasPin={Boolean(me?.pin)} />
+
+        {/* Daily checklist for the duties I hold */}
+        {holdsDuty && hasModule(ctx, "dailytasks") ? (
+          <Pressable
+            onPress={() => router.push({ pathname: "/tasks", params: { view: "daily" } })}
+            className="active:opacity-80"
+          >
+            <Card className="flex-row items-center gap-3">
+              <Ionicons name="checkmark-done-circle-outline" size={24} color={colors.brand300} />
+              <View className="flex-1">
+                <Text className="text-base font-semibold text-white">Today&apos;s checklist</Text>
+                <Muted>The daily tasks for your duties</Muted>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.zinc500} />
+            </Card>
+          </Pressable>
         ) : null}
 
         {/* Today's tasks */}
@@ -207,6 +317,22 @@ export default function MyDay() {
             )}
           </Card>
         </View>
+
+        {/* Today at the restaurant */}
+        {hasModule(ctx, "kitchen") ? (
+          <Pressable onPress={() => router.push("/kitchen")} className="active:opacity-80">
+            <Card className="flex-row items-center gap-3">
+              <Ionicons name="flame-outline" size={24} color={colors.brand300} />
+              <View className="flex-1">
+                <Text className="text-base font-semibold text-white">Kitchen queue</Text>
+                <Muted>
+                  {kitchenOpen === 0 ? "Line is clear" : `${kitchenOpen} open ticket${kitchenOpen > 1 ? "s" : ""}`}
+                </Muted>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.zinc500} />
+            </Card>
+          </Pressable>
+        ) : null}
 
         {/* Manager view — all active deliveries org-wide, not just your own */}
         {isManager ? (
