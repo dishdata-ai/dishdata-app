@@ -23,6 +23,10 @@ import type {
   StaffAvailability,
   KitchenDish,
   KitchenLogEntry,
+  Reservation,
+  ChannelOrder,
+  PreorderEvent,
+  PreorderOrder,
 } from "@/lib/types";
 import { KITCHEN_STANDARDS } from "@/lib/kitchen-standards";
 
@@ -241,6 +245,66 @@ function seedTimeHistory(): TimeEntry[] {
 }
 
 /** Kokoland's real production components (the same list the website seeds) with some live counts to play with. */
+function seedReservations(tables: RestaurantTable[]): Reservation[] {
+  const at = (hoursFromNow: number) => new Date(Date.now() + hoursFromNow * 3600_000).toISOString();
+  const mk = (guest: string, party: number, hours: number, table: RestaurantTable | undefined, note: string | null): Reservation => ({
+    id: uid(), org_id: DEMO_ORG.id, table_id: table?.id ?? null, customer_id: null, guest_name: guest,
+    phone: "+49 30 5550100", party_size: party, starts_at: at(hours), duration_min: 90, status: "booked", note, source: "staff",
+  });
+  return [
+    mk("Meyer", 4, 2, tables[0], "Birthday"),
+    mk("Okafor", 2, 4, undefined, null),
+    mk("Rossi", 6, 26, tables[1], "Window seat"),
+  ];
+}
+
+function seedChannelOrders(menu: Recipe[]): ChannelOrder[] {
+  const line = (r: Recipe | undefined, qty: number) => ({
+    name: r?.name ?? "Item", qty, price: r?.price ?? 10, recipe_id: r?.id ?? null, notes: null,
+  });
+  const mk = (provider: ChannelOrder["provider"], code: string, customer: string, minsAgo: number, lines: ReturnType<typeof line>[], notes: string | null): ChannelOrder => ({
+    id: uid(), org_id: DEMO_ORG.id, channel_id: `ch-${provider}`, provider, external_id: `ext-${code}`,
+    external_display_id: code, status: "pending", order_id: null, items: lines,
+    gross: lines.reduce((s, l) => s + l.price * l.qty, 0), customer_name: customer, order_type: "delivery",
+    notes, reject_reason: null, received_at: new Date(Date.now() - minsAgo * 60_000).toISOString(), decided_at: null,
+  });
+  return [
+    mk("ubereats", "A1B2", "Jonas K.", 3, [line(menu[0], 2), line(menu[1], 1)], "No onions please"),
+    mk("wolt", "W-904", "Lea M.", 6, [line(menu[2], 1)], null),
+  ];
+}
+
+function seedPreorders(): { preorderEvents: PreorderEvent[]; preorderOrders: PreorderOrder[] } {
+  const today = new Date();
+  const key = (offset: number) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + offset);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const event: PreorderEvent = {
+    id: "demo-event", org_id: DEMO_ORG.id, name: "Harvest Feast", is_active: true,
+    service_dates: [key(1), key(2)], slot_minutes: 60, day_start_hour: 11, day_end_hour: 20, dine_in_capacity: 20,
+    webhook_secret: "", created_at: nowISO(), updated_at: nowISO(), created_by: null,
+  };
+  const order = (name: string, qty: number, date: string, type: PreorderOrder["fulfillment_type"], start: string | null, total: number): PreorderOrder => ({
+    id: uid(), org_id: DEMO_ORG.id, event_id: event.id, external_id: null, customer_name: name, customer_email: null,
+    customer_phone: "+49 30 5550111", requested_date: date, quantity: qty, fulfillment_type: type, timeslot_start: start,
+    timeslot_end: start ? `${String(Number(start.slice(0, 2)) + 1).padStart(2, "0")}:00:00` : null,
+    address_street: null, address_apartment: null, address_city: null, address_zip: null, addon_qty: 0,
+    special_requests: null, order_total: total, status: "confirmed", raw: {}, created_at: nowISO(), updated_at: nowISO(), created_by: null,
+  });
+  return {
+    preorderEvents: [event],
+    preorderOrders: [
+      order("Party A", 12, key(1), "dine_in", "13:00:00", 300),
+      order("Party B", 6, key(1), "dine_in", "13:00:00", 150),
+      order("Party C", 4, key(1), "dine_in", null, 100),
+      order("Takeaway D", 3, key(1), "takeaway", "12:00:00", 72),
+      order("Party E", 8, key(2), "dine_in", null, 200),
+    ],
+  };
+}
+
 function seedKitchenDishes(): KitchenDish[] {
   return KITCHEN_STANDARDS.map((s, i) => ({
     id: uid(),
@@ -495,6 +559,10 @@ export interface DemoState {
   payments: Payment[];
   customers: Customer[];
   tables: RestaurantTable[];
+  reservations: Reservation[];
+  channelOrders: ChannelOrder[];
+  preorderEvents: PreorderEvent[];
+  preorderOrders: PreorderOrder[];
   deliveries: Delivery[];
   loyaltyTiers: LoyaltyTier[];
   loyaltyEarnRules: LoyaltyEarnRule[];
@@ -503,6 +571,7 @@ export interface DemoState {
 }
 
 function build(): DemoState {
+  const demoTables = seedTables();
   const recipes = seedRecipes();
   const orders = seedOrders(recipes);
   return {
@@ -520,7 +589,10 @@ function build(): DemoState {
     kitchenLog: [],
     payments: [],
     customers: seedCustomers(),
-    tables: seedTables(),
+    tables: demoTables,
+    reservations: seedReservations(demoTables),
+    channelOrders: seedChannelOrders(recipes),
+    ...seedPreorders(),
     deliveries: seedDeliveries(orders),
     loyaltyTiers: seedLoyaltyTiers(),
     loyaltyEarnRules: seedLoyaltyEarnRules(),

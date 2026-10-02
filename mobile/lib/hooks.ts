@@ -42,10 +42,25 @@ import {
 } from "@/lib/api/orders";
 import { listCustomers } from "@/lib/api/customers";
 import { listTables } from "@/lib/api/tables";
+import {
+  listPreorderEvents,
+  listPreorderOrders,
+  assignTimeslot,
+  cancelPreorderOrder,
+  restorePreorderOrder,
+} from "@/lib/api/preorders";
+import { listChannelOrders, acceptChannelOrder, rejectChannelOrder, ackChannelOrder } from "@/lib/api/channels";
+import {
+  listReservations,
+  createReservation,
+  setReservationStatus,
+  setTableStatus,
+  type NewReservation,
+} from "@/lib/api/reservations";
 import { listInventory, adjustStock } from "@/lib/api/inventory";
 import { listMyDeliveries, listOrgDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
 import { listTiers, listEarnRules, listRewards, awardPoints, redeemReward } from "@/lib/api/loyalty";
-import type { TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType, Order, KitchenDish } from "@/lib/types";
+import type { Reservation, ReservationStatus, TableStatus, TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType, Order, KitchenDish } from "@/lib/types";
 
 function useIds() {
   const { ctx } = useOrg();
@@ -508,3 +523,93 @@ export function useKitchenOps(multiplier: number) {
 }
 
 export type KitchenOpsCtx = ReturnType<typeof useKitchenOps>;
+
+export function useReservations() {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["reservations", orgId],
+    queryFn: () => listReservations(orgId),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useFloorMutations() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["tables", orgId] });
+    qc.invalidateQueries({ queryKey: ["reservations", orgId] });
+  };
+  return {
+    setTable: useMutation({
+      mutationFn: ({ id, status }: { id: string; status: TableStatus }) => setTableStatus(orgId, id, status),
+      onSuccess: refresh,
+    }),
+    book: useMutation({ mutationFn: (r: NewReservation) => createReservation(orgId, r), onSuccess: refresh }),
+    setReservation: useMutation({
+      mutationFn: ({ reservation, status }: { reservation: Reservation; status: ReservationStatus }) =>
+        setReservationStatus(orgId, reservation, status),
+      onSuccess: refresh,
+    }),
+  };
+}
+
+export function useChannelOrders() {
+  const { orgId, enabled } = useIds();
+  // New platform orders land while the screen is open, and Uber's accept window is short — look often.
+  return useQuery({
+    queryKey: ["channel-orders", orgId],
+    queryFn: () => listChannelOrders(orgId),
+    enabled,
+    refetchInterval: 10_000,
+  });
+}
+
+/** Accept or reject an inbound order; resolves to a warning when the platform itself couldn't be told. */
+export function useDecideChannelOrder() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (v: { id: string; accept: boolean }) => {
+      if (v.accept) await acceptChannelOrder(orgId, v.id);
+      else await rejectChannelOrder(orgId, v.id, "Rejected by staff");
+      return ackChannelOrder(v.id, v.accept ? "accept" : "deny", "Unable to fulfill");
+    },
+    onSuccess: () => {
+      for (const k of ["channel-orders", "kitchen", "kitchen-history", "inventory"]) {
+        qc.invalidateQueries({ queryKey: [k, orgId] });
+      }
+    },
+  });
+}
+
+export function usePreorderEvents() {
+  const { orgId, enabled } = useIds();
+  return useQuery({ queryKey: ["preorder-events", orgId], queryFn: () => listPreorderEvents(orgId), enabled });
+}
+
+export function usePreorderOrders(eventId: string | undefined) {
+  const { orgId, enabled } = useIds();
+  return useQuery({
+    queryKey: ["preorder-orders", orgId, eventId],
+    queryFn: () => listPreorderOrders(orgId, eventId!),
+    enabled: enabled && !!eventId,
+    refetchInterval: 30_000,
+  });
+}
+
+export function usePreorderMutations() {
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  const refresh = () => qc.invalidateQueries({ queryKey: ["preorder-orders", orgId] });
+  return {
+    seat: useMutation({
+      mutationFn: (v: { id: string; startMin: number | null; slotMinutes: number }) =>
+        assignTimeslot(orgId, v.id, v.startMin, v.slotMinutes),
+      onSuccess: refresh,
+    }),
+    cancel: useMutation({ mutationFn: (id: string) => cancelPreorderOrder(orgId, id), onSuccess: refresh }),
+    restore: useMutation({ mutationFn: (id: string) => restorePreorderOrder(orgId, id), onSuccess: refresh }),
+  };
+}

@@ -13,7 +13,7 @@ export interface AppScreen {
 }
 
 /**
- * Every staff screen, in the order they claim a tab. A phone's tab bar holds five (four plus More), so the first few a person has
+ * Every staff screen, in the order they claim a tab (the daily-driver screens first, so Tasks isn't pushed under More). A phone's tab bar holds five (four plus More), so the first few a person has
  * access to get tabs and the rest live under More — the same idea as the website's mobile bottom bar. Access
  * follows the website's per-person switches (Settings → modules, Team & Access), so a screen someone has been
  * switched off from simply isn't offered.
@@ -23,6 +23,9 @@ export const SCREENS: AppScreen[] = [
   { name: "pos", title: "POS", icon: "cart", modules: ["pos"], blurb: "Take orders and payments" },
   { name: "kitchen", title: "Kitchen", icon: "flame", modules: ["kitchen", "kitchenops"], blurb: "Tickets, stock and prep" },
   { name: "tasks", title: "Tasks", icon: "checkbox", modules: ["tasks", "dailytasks"], blurb: "To-dos and daily checklists" },
+  { name: "floor", title: "Floor", icon: "grid", modules: ["floor"], blurb: "Tables and reservations" },
+  { name: "preorders", title: "Preorders", icon: "calendar", modules: ["preorders"], blurb: "Event preorders and seating" },
+  { name: "channels", title: "Channels", icon: "storefront", modules: ["channels"], blurb: "Wolt, Uber Eats and Lieferando orders" },
   { name: "delivery", title: "Delivery", icon: "bicycle", modules: ["delivery"], blurb: "Deliveries and riders" },
   { name: "inventory", title: "Inventory", icon: "cube", modules: ["inventory"], blurb: "Stock levels, waste and counts" },
   { name: "loyalty", title: "Loyalty", icon: "gift", modules: ["loyalty"], blurb: "Points and rewards" },

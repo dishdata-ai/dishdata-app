@@ -713,3 +713,93 @@ export interface KitchenLogEntry {
   created_at: string;
   created_by: string | null;
 }
+
+// Sales Channels inbox (web migrations for channel_orders): orders pushed in by Wolt / Uber Eats / Lieferando / SumUp.
+export type ChannelProvider = "ubereats" | "wolt" | "lieferando" | "sumup";
+export type ChannelOrderStatus = "pending" | "accepted" | "rejected" | "failed";
+
+export interface ChannelOrderLine {
+  name: string;
+  qty: number;
+  price: number;
+  recipe_id: string | null;
+  notes?: string | null;
+}
+
+export interface ChannelOrder {
+  id: string;
+  org_id: string;
+  channel_id: string;
+  provider: ChannelProvider;
+  external_id: string;
+  external_display_id: string;
+  status: ChannelOrderStatus;
+  order_id: string | null;
+  items: ChannelOrderLine[];
+  gross: number;
+  customer_name: string;
+  order_type: OrderType;
+  notes: string | null;
+  reject_reason: string | null;
+  received_at: string;
+  decided_at: string | null;
+}
+
+// Event preorders (web migrations for preorder_events / preorder_orders).
+export type PreorderStatus = "confirmed" | "cancelled";
+
+export interface PreorderEvent {
+  id: string;
+  org_id: string;
+  name: string;
+  is_active: boolean;
+  /** The days this event serves, as YYYY-MM-DD. Drives the date tabs, so an empty service date still shows. */
+  service_dates: string[];
+  slot_minutes: number;
+  day_start_hour: number;
+  /** Exclusive — 11..22 means eleven hourly slots, the last starting at 21:00. */
+  day_end_hour: number;
+  /** Covers seatable in any one slot. */
+  dine_in_capacity: number;
+  /** Shared secret for this event's website-form webhook. */
+  webhook_secret: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface PreorderOrder {
+  id: string;
+  org_id: string;
+  event_id: string;
+  /** Form submission id, or a hash for CSV rows. Null on staff-entered orders. */
+  external_id: string | null;
+  customer_name: string;
+  customer_email: string | null;
+  customer_phone: string | null;
+  /** YYYY-MM-DD */
+  requested_date: string;
+  /** Sadhyas ordered — one per cover. */
+  quantity: number;
+  fulfillment_type: OrderType;
+  /** "HH:MM:SS". Null = not yet placed. On takeaway this is the pickup time. */
+  timeslot_start: string | null;
+  /** Null on takeaway — a pickup consumes no seating window. */
+  timeslot_end: string | null;
+  address_street: string | null;
+  address_apartment: string | null;
+  address_city: string | null;
+  address_zip: string | null;
+  /** "Real Leaf" addon count. */
+  addon_qty: number;
+  special_requests: string | null;
+  /** As submitted by the website form. Display-only — the form does not
+   *  recalculate it when an order is later edited, so never derive from it. */
+  order_total: number;
+  status: PreorderStatus;
+  /** Original payload, kept for audit. */
+  raw: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
