@@ -50,6 +50,23 @@ body {
     radial-gradient(900px 500px at 85% -10%, rgba(16, 185, 129, 0.08), transparent 60%),
     radial-gradient(700px 400px at -10% 20%, rgba(34, 211, 238, 0.06), transparent 60%);
   background-attachment: fixed;
+  /* No double-tap-to-zoom delay on buttons, and no grey flash when something is tapped. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+/* iOS Safari zooms the whole page into any text box smaller than 16px when you tap it — and in a
+   home-screen app it never zooms back out. Phones and tablets get 16px fields; desktops are untouched. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 ::-webkit-scrollbar {

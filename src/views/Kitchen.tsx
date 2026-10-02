@@ -356,7 +356,7 @@ function KitchenOps() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="-mx-1 flex flex-1 gap-1 overflow-x-auto px-1 pb-1">
+        <div className="-mx-1 flex w-full gap-1 overflow-x-auto px-1 pb-1 sm:w-auto sm:min-w-0 sm:flex-1">
           {OPS_TABS.map((t) => (
             <button
               key={t.id}
@@ -372,7 +372,7 @@ function KitchenOps() {
         </div>
         <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
           Busy-day factor
-          <Select value={String(multiplier)} onChange={(e) => setMultiplier(Number(e.target.value))} className="w-28 py-1.5 text-xs">
+          <Select value={String(multiplier)} onChange={(e) => setMultiplier(Number(e.target.value))} className="w-40 py-1.5 text-xs">
             <option value="0.8">Quiet ×0.8</option>
             <option value="1">Normal ×1</option>
             <option value="1.25">Busy ×1.25</option>

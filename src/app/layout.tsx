@@ -22,7 +22,17 @@ export const metadata: Metadata = {
   description:
     "DishData: AI-powered restaurant management. Lower food costs, streamline operations, grow profit.",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/favicon.svg" },
+  icons: {
+    icon: [{ url: "/favicon.svg", type: "image/svg+xml" }, { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+    // iPhones ignore SVG and the manifest icons for the home screen; this PNG is what "Add to Home Screen" uses.
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+  // Lets the site launch like an app from an iPhone's home screen: no Safari bars, its own name. "black"
+  // keeps the page below the status bar, so nothing slides under the notch.
+  appleWebApp: { capable: true, title: "DishData", statusBarStyle: "black" },
+  formatDetection: { telephone: false },
+  // Next only writes the generic mobile-web-app-capable tag; iPhones before iOS 16.4 look for Apple's own.
+  other: { "apple-mobile-web-app-capable": "yes" },
 };
 
 export const viewport: Viewport = {

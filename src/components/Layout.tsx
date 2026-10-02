@@ -6,6 +6,7 @@ import NavLink from "@/components/NavLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Menu as MenuIcon, X, Bell, CircleDot, LogOut, ChevronDown, Compass, ExternalLink, Search } from "lucide-react";
 import TourOverlay from "@/components/TourOverlay";
+import InstallHint from "@/components/InstallHint";
 import CommandPalette from "@/components/CommandPalette";
 import { listNotifications, markAllRead } from "@/lib/api/notifications";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
@@ -325,6 +326,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-24 md:px-6 md:py-8 lg:pb-8">
+          <InstallHint />
           {children}
         </main>
       </div>
