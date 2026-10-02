@@ -12,12 +12,11 @@ import {
   usePartnerMealUsage,
 } from "@/lib/hooks";
 import { elapsed, clockTime, money } from "@/lib/format";
+import { PARTNER_ROLES } from "@/lib/staff-meal";
 import { colors } from "@/lib/theme";
 import type { DeliveryStatus } from "@/lib/types";
 
 const MANAGER_ROLES = new Set(["owner", "admin", "manager"]);
-// Same people the web app calls partners (can see the Partner Hub): owner, admin and partner logins.
-const PARTNER_ROLES = new Set(["owner", "admin", "partner"]);
 
 const DELIVERY_STATUS_TONE: Record<DeliveryStatus, "neutral" | "amber" | "green" | "accent" | "rose"> = {
   pending: "neutral",

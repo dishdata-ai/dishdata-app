@@ -240,9 +240,16 @@ function useOrderInvalidate() {
 export function useCheckout() {
   const { orgId } = useIds();
   const invalidate = useOrderInvalidate();
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: CheckoutPayload) => checkoutOrder(orgId, payload),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      // A meal claim just spent some allowance — drop the cached balances so the next claim (and My Day) read
+      // the real remainder, not the pre-sale figure.
+      qc.invalidateQueries({ queryKey: ["staffMealUsage", orgId] });
+      qc.invalidateQueries({ queryKey: ["partnerMealUsage", orgId] });
+    },
   });
 }
 

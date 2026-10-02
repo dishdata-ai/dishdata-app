@@ -1,5 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from "@/lib/supabase";
 import { demo, uid } from "@/lib/demo";
+import { demoPartnerMealUsage, demoStaffMealUsage } from "@/lib/api/meals";
+import { priceClaim, type MealClaim } from "@/lib/staff-meal";
 import type { Order, OrderLine, KitchenStatus, OrderType, PaymentMethod } from "@/lib/types";
 
 export async function listOpenOrders(orgId: string): Promise<Order[]> {
@@ -51,6 +53,14 @@ export interface CheckoutPayload {
   tip?: number;
   /** Delivery address — used when orderType is "delivery". */
   address?: string | null;
+  /**
+   * Charge this order to the employee's staff-meal allowance (migration 0048/0070). Needs mealPin — the employee's
+   * OWN PIN, confirming it's really them. The server works out the discount; this is only who is claiming.
+   */
+  staffDiscountEmployeeId?: string | null;
+  mealPin?: string | null;
+  /** Take one of the signed-in partner's free meals this month. The server checks they are a partner. */
+  partnerMeal?: boolean;
   /** Empty array = open a tab (pay later); one or more = paid now. */
   payments: PaymentInput[];
 }
@@ -70,16 +80,48 @@ export async function checkoutOrder(
   orgId: string,
   payload: CheckoutPayload,
 ): Promise<CheckoutResult> {
-  // VAT-included (gross) pricing: menu prices already include VAT. Break it out
-  // of the price rather than adding on top; store subtotal NET (see 0017 migration).
-  const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
-  const taxRate = demo.org.tax_rate ?? 8.5;
-  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
   const tip = payload.tip ?? 0;
-  const total = +(gross + tip).toFixed(2);
-  const subtotal = +(gross - tax).toFixed(2);
 
   if (!isSupabaseConfigured) {
+    // VAT-included (gross) pricing: menu prices already include VAT. Break it out
+    // of the price rather than adding on top; store subtotal NET (see 0017 migration).
+    const gross = payload.items.reduce((s, l) => s + l.price * l.qty, 0);
+    const taxRate = demo.org.tax_rate ?? 8.5;
+
+    // Meal claims, with the same checks the database makes (the demo has no server to enforce them).
+    const claim: MealClaim = payload.partnerMeal ? "partner" : payload.staffDiscountEmployeeId ? "meal" : "none";
+    let discount = 0;
+    let mealAmount = 0;
+    let mealDrinks = 0;
+    let partnerAmount = 0;
+    if (claim !== "none") {
+      const lines = payload.items.map((l) => ({
+        price: l.price,
+        qty: l.qty,
+        category: demo.recipes.find((r) => r.id === l.recipe_id)?.category,
+      }));
+      if (claim === "meal") {
+        if (payload.staffDiscountEmployeeId !== demo.me.id) throw new Error("staff discount: employee not found or inactive");
+        if (demo.me.pin == null || demo.me.pin !== payload.mealPin) {
+          throw new Error("PIN doesn't match — enter your own PIN to confirm it's you");
+        }
+        if ((demo.org.staff_meal_daily_limit ?? 0) <= 0) throw new Error("staff meals are not enabled for this restaurant");
+        const priced = priceClaim("meal", lines, demoStaffMealUsage(demo.me.id), null);
+        discount = priced.discount;
+        mealAmount = priced.free;
+        mealDrinks = priced.freeDrinks;
+      } else {
+        const priced = priceClaim("partner", lines, null, demoPartnerMealUsage());
+        if (priced.blocked) throw new Error(priced.blocked);
+        discount = priced.discount;
+        partnerAmount = priced.free;
+      }
+    }
+    const discountedGross = +(gross - discount).toFixed(2);
+    const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
+    const total = +(discountedGross + tip).toFixed(2);
+    const subtotal = +(discountedGross - tax).toFixed(2);
+
     const now = new Date().toISOString();
     const orderNumber = `ORD-${String(demo.orders.length + 1).padStart(4, "0")}`;
     const order: Order = {
@@ -100,6 +142,13 @@ export async function checkoutOrder(
       kitchen_notes: payload.kitchenNotes ?? null,
       source: "pos",
       created_at: now,
+      discount: +discount.toFixed(2),
+      staff_discount_employee_id: claim === "meal" ? demo.me.id : null,
+      staff_discount_amount: claim === "meal" ? +(discount - mealAmount).toFixed(2) : 0,
+      staff_meal_amount: mealAmount,
+      staff_meal_drinks: mealDrinks,
+      partner_meal_user_id: claim === "partner" ? demo.me.user_id : null,
+      partner_meal_amount: partnerAmount,
     };
     demo.orders.unshift(order);
     for (const p of payload.payments) {
@@ -132,7 +181,7 @@ export async function checkoutOrder(
     return { order_id: order.id, order_number: orderNumber, total };
   }
 
-  const { data, error } = await getSupabase().rpc("checkout_order", {
+  const args: Record<string, unknown> = {
     _org: orgId,
     _items: payload.items,
     _order_type: payload.orderType,
@@ -142,7 +191,15 @@ export async function checkoutOrder(
     _tip: tip,
     _payments: payload.payments,
     _address: payload.address ?? null,
-  });
+  };
+  // The claim arguments are only sent when there IS a claim, so ordinary checkouts are byte-for-byte what they
+  // were — and still work on a database that hasn't had migration 0070 yet.
+  if (payload.staffDiscountEmployeeId && payload.mealPin) {
+    args._staff_employee_id = payload.staffDiscountEmployeeId;
+    args._meal_pin = payload.mealPin;
+  }
+  if (payload.partnerMeal) args._partner_meal = true;
+  const { data, error } = await getSupabase().rpc("checkout_order", args);
   if (error) throw error;
   return data as CheckoutResult;
 }

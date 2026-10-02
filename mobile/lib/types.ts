@@ -307,6 +307,15 @@ export interface Order {
   kitchen_notes: string | null;
   source: string;
   created_at: string;
+  // Discounts and meal claims (web migrations 0033 / 0048 / 0070). Optional so older rows and demo data still fit.
+  discount?: number;
+  employee_id?: string | null;
+  staff_discount_employee_id?: string | null;
+  staff_discount_amount?: number;
+  staff_meal_amount?: number;
+  staff_meal_drinks?: number;
+  partner_meal_user_id?: string | null;
+  partner_meal_amount?: number;
 }
 
 export interface Payment {

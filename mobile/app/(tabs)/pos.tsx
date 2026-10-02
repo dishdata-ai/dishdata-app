@@ -20,9 +20,12 @@ import {
   useOpenOrders,
   useCustomers,
   useTables,
+  useStaffMealUsage,
+  usePartnerMealUsage,
 } from "@/lib/hooks";
 import { useOrg } from "@/lib/org-context";
 import { money } from "@/lib/format";
+import { priceClaim, PARTNER_ROLES, type MealClaim } from "@/lib/staff-meal";
 import { colors } from "@/lib/theme";
 import type { Recipe, OrderLine, OrderType, PaymentMethod, Order } from "@/lib/types";
 import { setKitchenStatus, type PaymentInput } from "@/lib/api/orders";
@@ -363,6 +366,13 @@ export default function Pos() {
   const [address, setAddress] = useState("");
   const [tipPct, setTipPct] = useState(0);
   const [method, setMethod] = useState<PaymentMethod>("card");
+  // Staff / partner meal claim. "meal" is the signed-in employee's own staff meal (confirmed with their own PIN);
+  // "partner" is one of the signed-in partner's free meals this month. See migrations 0048 / 0070.
+  const [claim, setClaim] = useState<MealClaim>("none");
+  const [mealPin, setMealPin] = useState("");
+  // Why the last checkout failed — a wrong PIN or "no partner meals left" is an expected outcome, and without this
+  // the button would just stop spinning and nothing would explain why.
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState(false);
   const [settling, setSettling] = useState<Order | null>(null);
   const [receipt, setReceipt] = useState<{
@@ -374,6 +384,8 @@ export default function Pos() {
     tip: number;
     method: string;
     sentToKitchen: boolean;
+    discount?: number;
+    discountLabel?: string;
   } | null>(null);
   const [belegEmail, setBelegEmail] = useState("");
   const [belegSending, setBelegSending] = useState(false);
@@ -452,10 +464,37 @@ export default function Pos() {
   // `subtotal` is NET — which is what PayModal expects, since net × rate/100
   // equals the VAT contained in the gross price.
   const gross = lines.reduce((s, l) => s + l.rec.price * l.qty, 0);
-  const tax = +(gross * (taxRate / (100 + taxRate))).toFixed(2);
-  const subtotal = +(gross - tax).toFixed(2);
-  const tip = +(gross * (tipPct / 100)).toFixed(2);
-  const total = +(gross + tip).toFixed(2);
+
+  // Meal claims. Staff meals use the signed-in person's own staff record — the fallback "employee" built for a
+  // login with no staff record has id === user_id, and the database would reject it, so it doesn't get the option.
+  const me = ctx?.me;
+  const isRealEmployee = !!me && me.user_id != null && me.id !== me.user_id;
+  const staffMealOn = (ctx?.org.staff_meal_daily_limit ?? 0) > 0 && isRealEmployee;
+  const partnerMealOn =
+    Boolean(ctx?.role && PARTNER_ROLES.has(ctx.role)) && (ctx?.org.partner_meal_monthly_count ?? 0) > 0;
+  const staffQ = useStaffMealUsage(staffMealOn && claim === "meal");
+  const partnerQ = usePartnerMealUsage(partnerMealOn && claim === "partner");
+  const staffUsage = staffQ.data ?? null;
+  const partnerUsage = partnerQ.data ?? null;
+  const claimLoadFailed = (claim === "meal" && staffQ.isError) || (claim === "partner" && partnerQ.isError);
+  // The same maths the database runs (lib/staff-meal.ts). A claim that can't be priced yet is blocked, never guessed.
+  const claimPrice = priceClaim(
+    claim,
+    lines.map((l) => ({ price: l.rec.price, qty: l.qty, category: l.rec.category })),
+    staffUsage,
+    partnerUsage,
+  );
+  const discount = claimPrice.discount;
+  const claimLabel = claim === "partner" ? "Partner meal" : "Staff meal";
+  const claimIncomplete =
+    claim !== "none" && (claimPrice.blocked !== null || gross <= 0 || (claim === "meal" && mealPin.trim() === ""));
+
+  // With no claim, discount is 0 and every figure below is exactly what it was before meal claims existed.
+  const discountedGross = +(gross - discount).toFixed(2);
+  const tax = +(discountedGross * (taxRate / (100 + taxRate))).toFixed(2);
+  const subtotal = +(discountedGross - tax).toFixed(2);
+  const tip = +(discountedGross * (tipPct / 100)).toFixed(2);
+  const total = +(discountedGross + tip).toFixed(2);
 
   const openTabs = useMemo(
     () => (ordersQ.data ?? []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at)),
@@ -479,6 +518,9 @@ export default function Pos() {
     setCart({});
     setCartOpen(false);
     setTipPct(0);
+    setClaim("none");
+    setMealPin("");
+    setCheckoutError(null);
     setKitchenNotes("");
     setCustomerId("");
     setTableId("");
@@ -497,13 +539,27 @@ export default function Pos() {
     kitchenNotes: kitchenNotes || null,
     tip: tipAmount,
     address: orderType === "delivery" ? address : null,
+    staffDiscountEmployeeId: claim === "meal" && me ? me.id : null,
+    mealPin: claim === "meal" ? mealPin : null,
+    partnerMeal: claim === "partner",
     payments,
   });
 
   const finishCheckout = (payments: PaymentInput[], tipAmount: number) => {
     const snapshot = billLines;
     const snapTax = tax;
+    const snapDiscount = discount;
+    const snapDiscountLabel = claimLabel;
+    setCheckoutError(null);
     checkout.mutate(payload(payments, tipAmount), {
+      onError: (e) => {
+        // Supabase errors are plain objects with a message, not Error instances.
+        const msg = e instanceof Error ? e.message : (e as { message?: string } | null)?.message;
+        setCheckoutError(msg || "Checkout failed — please try again.");
+        // The split sheet sits on top of everything; go back to the order, where the message is shown.
+        setPayOpen(false);
+        setCartOpen(true);
+      },
       onSuccess: (res) => {
         const paid = payments.length > 0;
         // Pre-prepared event menu: hand-over is immediate, so don't queue a
@@ -525,6 +581,8 @@ export default function Pos() {
             tip: tipAmount,
             method: payments.length > 1 ? "split" : payments[0].method,
             sentToKitchen: !skipKitchen,
+            discount: snapDiscount,
+            discountLabel: snapDiscountLabel,
           });
         } else {
           setView("tabs");
@@ -851,8 +909,103 @@ export default function Pos() {
                     ))}
                   </View>
 
+                  {/* Staff / partner meal */}
+                  {staffMealOn || partnerMealOn ? (
+                    <>
+                      <Muted className="mt-1">Staff / partner meal</Muted>
+                      <View className="flex-row gap-1.5">
+                        {(
+                          [
+                            ["none", "None"],
+                            ...(staffMealOn ? ([["meal", "My meal"]] as [MealClaim, string][]) : []),
+                            ...(partnerMealOn ? ([["partner", "Partner meal"]] as [MealClaim, string][]) : []),
+                          ] as [MealClaim, string][]
+                        ).map(([key, label]) => (
+                          <Pressable
+                            key={key}
+                            onPress={() => {
+                              setClaim(key);
+                              setMealPin("");
+                              setCheckoutError(null);
+                            }}
+                            className={`flex-1 items-center rounded-lg border py-2 ${
+                              claim === key ? "border-brand-500 bg-brand-500/15" : "border-line bg-white/5"
+                            }`}
+                          >
+                            <Text
+                              className={`text-xs font-bold ${claim === key ? "text-brand-300" : "text-zinc-300"}`}
+                            >
+                              {label}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      {claim === "meal" && staffUsage ? (
+                        <Muted>
+                          {staffUsage.working_today === false
+                            ? `Not clocked in today, so no free credit — ${claimPrice.pct}% off instead.`
+                            : `${money(staffUsage.remaining)} left today${
+                                staffUsage.limit != null ? ` of ${money(staffUsage.limit)}` : ""
+                              }${
+                                staffUsage.drinks_remaining != null
+                                  ? ` · ${staffUsage.drinks_remaining} free drink${
+                                      staffUsage.drinks_remaining === 1 ? "" : "s"
+                                    } left`
+                                  : ""
+                              }${
+                                gross - claimPrice.free > 0.004
+                                  ? ` · ${money(gross - claimPrice.free)} over, charged at ${claimPrice.pct}% off`
+                                  : ""
+                              }`}
+                        </Muted>
+                      ) : null}
+                      {claim === "partner" && partnerUsage ? (
+                        <Muted>
+                          {`${partnerUsage.remaining} of ${partnerUsage.count ?? 0} free partner meals left this month${
+                            partnerUsage.max_value != null
+                              ? ` · free up to ${money(partnerUsage.max_value)}, the rest at full price`
+                              : ""
+                          }`}
+                        </Muted>
+                      ) : null}
+                      {claim === "meal" ? (
+                        <Input
+                          placeholder="Your own PIN"
+                          value={mealPin}
+                          onChangeText={(v) => {
+                            setMealPin(v);
+                            setCheckoutError(null);
+                          }}
+                          secureTextEntry
+                          keyboardType="number-pad"
+                          autoCapitalize="none"
+                        />
+                      ) : null}
+                      {claim !== "none" && claimPrice.blocked ? (
+                        <Text className="text-sm text-amber-soft">
+                          {claimLoadFailed
+                            ? "Couldn't check your allowance — check your connection and try again."
+                            : claimPrice.blocked}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   {/* Totals */}
                   <View className="mt-2 gap-1 border-t border-line pt-3">
+                    {discount > 0 ? (
+                      <>
+                        <View className="flex-row justify-between">
+                          <Muted>Items</Muted>
+                          <Text className="text-zinc-300">{money(gross)}</Text>
+                        </View>
+                        <View className="flex-row justify-between">
+                          <Text className="text-brand-300">{claimLabel}</Text>
+                          <Text className="text-brand-300">−{money(discount)}</Text>
+                        </View>
+                      </>
+                    ) : null}
                     <View className="flex-row justify-between">
                       <Muted>Subtotal</Muted>
                       <Text className="text-zinc-300">{money(subtotal)}</Text>
@@ -902,11 +1055,13 @@ export default function Pos() {
             {/* Actions */}
             {lines.length > 0 ? (
               <View className="gap-2 border-t border-line p-5 pt-3">
+                {checkoutError ? <Text className="text-sm font-semibold text-rose-soft">{checkoutError}</Text> : null}
                 {orderType === "dine_in" ? (
                   <Button
                     title="Send to kitchen · pay later"
                     variant="ghost"
                     loading={checkout.isPending}
+                    disabled={claimIncomplete}
                     onPress={() => finishCheckout([], 0)}
                   />
                 ) : null}
@@ -915,6 +1070,7 @@ export default function Pos() {
                     title={`Charge ${money(total)}`}
                     className="flex-[2]"
                     loading={checkout.isPending}
+                    disabled={claimIncomplete}
                     onPress={() =>
                       finishCheckout([{ method, amount: total, tip_amount: tip }], tip)
                     }
@@ -922,6 +1078,7 @@ export default function Pos() {
                   <Button
                     title="Split"
                     variant="ghost"
+                    disabled={claimIncomplete}
                     className="flex-1"
                     onPress={() => {
                       setCartOpen(false);
@@ -991,6 +1148,12 @@ export default function Pos() {
                     <Text className="text-zinc-300">{money(l.price * l.qty)}</Text>
                   </View>
                 ))}
+                {receipt.discount && receipt.discount > 0 ? (
+                  <View className="flex-row justify-between">
+                    <Text className="text-brand-300">{receipt.discountLabel ?? "Discount"}</Text>
+                    <Text className="text-brand-300">−{money(receipt.discount)}</Text>
+                  </View>
+                ) : null}
                 <View className="mt-1 flex-row justify-between border-t border-line pt-2">
                   <Muted>Incl. tax ({taxRate}%)</Muted>
                   <Text className="text-zinc-400">{money(receipt.tax)}</Text>
