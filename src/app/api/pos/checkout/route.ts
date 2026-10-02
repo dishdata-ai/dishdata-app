@@ -56,6 +56,7 @@ export async function POST(req: NextRequest) {
     staffDiscountEmployeeId?: string | null;
     approvalPin?: string | null;
     mealPin?: string | null;
+    partnerMeal?: boolean;
     payments: { method: string; amount: number; tip_amount?: number; split_label?: string }[];
   };
 
@@ -77,6 +78,8 @@ export async function POST(req: NextRequest) {
     _staff_employee_id: p.staffDiscountEmployeeId ?? null,
     _approval_pin: p.approvalPin ?? null,
     _meal_pin: p.mealPin ?? null,
+    // Only sent for a partner meal, so ordinary checkouts keep working on a database that predates 0070.
+    ...(p.partnerMeal ? { _partner_meal: true } : {}),
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
 

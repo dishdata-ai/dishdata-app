@@ -41,7 +41,7 @@ import { useAuth } from "@/lib/hooks/useAuth";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { clockIn, clockOut, toggleBreak, workedSeconds } from "@/lib/api/timeclock";
 import { linkEmployeeToUser, setMyPin } from "@/lib/api/people";
-import { getStaffMealUsage } from "@/lib/api/orders";
+import { getStaffMealUsage, getPartnerMealUsage } from "@/lib/api/orders";
 import { updateTask } from "@/lib/api/tasks";
 import { myDuties, isMyDutyTask, DUTY_LABELS } from "@/lib/api/duties";
 import { isDoneToday } from "@/lib/daily";
@@ -146,7 +146,7 @@ function MyPinCard({ orgId, employeeId, hasPin }: { orgId: string; employeeId: s
 
 export function MyDayView() {
   // Hours and pay are hidden from staff for now — admins still see their own.
-  const { org, moduleIds, isAdmin } = useOrg();
+  const { org, moduleIds, isAdmin, isPartner } = useOrg();
   const { user } = useAuth();
   const fmt = useFmt();
   const invalidate = useInvalidate();
@@ -254,6 +254,13 @@ export function MyDayView() {
 
   const geofence = org ? geofenceOf(org) : null;
 
+  // Partner meals (0070): only for partners, and only when the org has set a monthly number.
+  const partnerMealEnabled = isPartner && (org?.partner_meal_monthly_count ?? 0) > 0;
+  const partnerMealQ = useQuery({
+    queryKey: ["partnerMealUsage", org?.id],
+    queryFn: () => getPartnerMealUsage(org!.id),
+    enabled: !!org?.id && partnerMealEnabled,
+  });
   const mealEnabled = (org?.staff_meal_daily_limit ?? 0) > 0;
   const mealUsageQ = useQuery({
     queryKey: ["staffMealUsage", org?.id, me?.id],
@@ -569,10 +576,34 @@ export function MyDayView() {
         {mealEnabled && (
           <Card className="p-4 text-center">
             <UtensilsCrossed className="mx-auto h-4 w-4 text-brand-300" />
+            {mealUsageQ.data?.working_today === false ? (
+              <>
+                <p className="mt-1.5 font-display text-lg font-bold text-white">{mealUsageQ.data.pct}% off</p>
+                <p className="text-[11px] text-zinc-500">
+                  staff meals today &middot; clock in for your free {fmt(mealUsageQ.data.limit ?? 0)}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="mt-1.5 font-display text-lg font-bold text-white">
+                  {mealUsageQ.data ? fmt(mealUsageQ.data.remaining) : "—"}
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  meal allowance left today
+                  {mealUsageQ.data?.drinks_remaining != null &&
+                    ` · ${mealUsageQ.data.drinks_remaining} free drink${mealUsageQ.data.drinks_remaining === 1 ? "" : "s"} left`}
+                </p>
+              </>
+            )}
+          </Card>
+        )}
+        {partnerMealEnabled && (
+          <Card className="p-4 text-center">
+            <UtensilsCrossed className="mx-auto h-4 w-4 text-accent-400" />
             <p className="mt-1.5 font-display text-lg font-bold text-white">
-              {mealUsageQ.data ? fmt(mealUsageQ.data.remaining) : "—"}
+              {partnerMealQ.data ? `${partnerMealQ.data.remaining} of ${partnerMealQ.data.count ?? 0}` : "—"}
             </p>
-            <p className="text-[11px] text-zinc-500">meal allowance left today</p>
+            <p className="text-[11px] text-zinc-500">free partner meals left this month</p>
           </Card>
         )}
       </div>

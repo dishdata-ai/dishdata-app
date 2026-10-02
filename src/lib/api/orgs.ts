@@ -68,6 +68,11 @@ export async function createOrganization(name: string, currency: string, taxRate
       clockin_radius_m: null,
       max_shift_hours: 14,
       staff_meal_daily_limit: null,
+      staff_meal_pct_working: null,
+      staff_meal_pct_off: null,
+      staff_meal_free_drinks: null,
+      partner_meal_monthly_count: null,
+      partner_meal_max_value: null,
     };
     demoOrgs.insert(org);
     return org.id;

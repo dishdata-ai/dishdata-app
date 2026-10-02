@@ -3,6 +3,7 @@ import { demoTable, demoDelay } from "@/lib/api/demoDb";
 import { uid } from "@/lib/utils";
 import { pushDemoAudit, pushDemoNotification } from "@/lib/api/notifications";
 import { computeTaxGroups, sumTax } from "@/lib/tax";
+import { quoteStaffMeal, type MealLine } from "@/lib/staff-meal";
 import { isTseEnabledForOrg } from "@/lib/tse-config";
 import type {
   Order,
@@ -20,6 +21,7 @@ import type {
   InventoryTransaction,
   Customer,
   Delivery,
+  TimeEntry,
 } from "@/lib/api/database.types";
 
 const dOrders = demoTable<Order>("orders");
@@ -30,6 +32,7 @@ const dIngredients = demoTable<RecipeIngredient>("recipe_ingredients");
 const dItems = demoTable<InventoryItem>("inventory_items");
 const dTx = demoTable<InventoryTransaction>("inventory_transactions");
 const dCustomers = demoTable<Customer>("customers");
+const dTimeEntries = demoTable<TimeEntry>("time_entries");
 
 export async function listOrders(orgId: string, limit = 500): Promise<Order[]> {
   if (!isSupabaseConfigured) {
@@ -122,6 +125,12 @@ export interface CheckoutPayload {
    */
   mealPin?: string | null;
   /**
+   * Claim one of the signed-in partner's free meals this month (0070). Identity is the session, not a
+   * parameter, so a partner can only ever claim for themselves; the server refuses anyone who isn't a
+   * partner, and refuses once the month's meals are used. Mutually exclusive with the staff options above.
+   */
+  partnerMeal?: boolean;
+  /**
    * The caller's org, used only to decide whether checkout routes through the
    * signing endpoint. The server re-reads its own config before signing, so
    * this never determines whether a sale is actually signed.
@@ -155,6 +164,28 @@ export interface StaffMealUsage {
   used: number;
   orders: number;
   limit: number | null;
+  /** Free € left today. 0 on a day the employee hasn't clocked in (when the org uses the working-day rule). */
+  remaining: number;
+  /** Clocked in today. Absent from an older server; treat as true. */
+  working_today?: boolean;
+  /** % off whatever the free credit doesn't cover, today. Absent from an older server; fall back to the org's staff discount %. */
+  pct?: number;
+  drinks_used?: number;
+  /** Cap on drinks the free credit may cover per day; null = no cap. */
+  drinks_limit?: number | null;
+  /** Drinks the free credit may still cover today; null = no cap. */
+  drinks_remaining?: number | null;
+}
+
+/** The signed-in partner's free meals this calendar month. */
+export interface PartnerMealUsage {
+  /** Owner / admin / partner. Anyone else never sees partner meals. */
+  eligible: boolean;
+  /** Free meals per month; null/0 = feature off. */
+  count: number | null;
+  /** € ceiling on one free meal; null = the whole order is free. */
+  max_value: number | null;
+  used: number;
   remaining: number;
 }
 
@@ -202,7 +233,16 @@ function demoStaffUsage(orgId: string, employeeId: string): StaffDiscountUsage {
   };
 }
 
-/** Demo-mode mirror of staff_meal_usage (0048) — today's allowance, not this month's. */
+/** True when the employee has clocked in today — the demo mirror of the time_entries check in 0070. */
+function demoWorkedToday(orgId: string, employeeId: string): boolean {
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  return dTimeEntries
+    .list({ org_id: orgId, employee_id: employeeId } as Partial<TimeEntry>)
+    .some((e) => new Date(e.clock_in) >= dayStart);
+}
+
+/** Demo-mode mirror of staff_meal_usage (0070) — today's allowance, not this month's. */
 function demoMealUsage(orgId: string, employeeId: string): StaffMealUsage {
   const org = dOrgs.get(orgId);
   const dayStart = new Date();
@@ -218,12 +258,22 @@ function demoMealUsage(orgId: string, employeeId: string): StaffMealUsage {
         new Date(o.created_at) >= dayStart,
     );
   const used = +mine.reduce((s, o) => s + (o.staff_meal_amount ?? 0), 0).toFixed(2);
+  const drinksUsed = mine.reduce((s, o) => s + (o.staff_meal_drinks ?? 0), 0);
   const limit = org?.staff_meal_daily_limit ?? null;
+  const offPct = org?.staff_meal_pct_off ?? null;
+  // An off-day rate is what switches the working-day rule on; without it every day counts as a working day.
+  const working = offPct == null ? true : demoWorkedToday(orgId, employeeId);
+  const freeDrinks = org?.staff_meal_free_drinks ?? null;
   return {
     used,
     orders: mine.length,
     limit,
-    remaining: limit == null || limit <= 0 ? 0 : Math.max(limit - used, 0),
+    remaining: !working || limit == null || limit <= 0 ? 0 : Math.max(limit - used, 0),
+    working_today: working,
+    pct: working ? (org?.staff_meal_pct_working ?? org?.staff_discount_max_pct ?? 0) : (offPct ?? 0),
+    drinks_used: drinksUsed,
+    drinks_limit: freeDrinks,
+    drinks_remaining: freeDrinks == null ? null : Math.max(freeDrinks - drinksUsed, 0),
   };
 }
 
@@ -236,6 +286,45 @@ export async function getStaffMealUsage(orgId: string, employeeId: string): Prom
   const { data, error } = await getSupabase().rpc("staff_meal_usage", { _org: orgId, _employee: employeeId });
   if (error) throw error;
   return data as StaffMealUsage;
+}
+
+/** The demo has no auth users to tell apart, so every demo claim is by this one partner (matches DEMO_USER in useAuth). */
+const DEMO_PARTNER_ID = "demo-user";
+
+/** Demo-mode mirror of partner_meal_usage (0070): this calendar month, voided/refunded meals don't count. */
+function demoPartnerUsage(orgId: string): PartnerMealUsage {
+  const org = dOrgs.get(orgId);
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const used = dOrders
+    .list({ org_id: orgId } as Partial<Order>)
+    .filter(
+      (o) =>
+        o.partner_meal_user_id === DEMO_PARTNER_ID &&
+        o.status !== "void" &&
+        o.status !== "refunded" &&
+        new Date(o.created_at) >= monthStart,
+    ).length;
+  const count = org?.partner_meal_monthly_count ?? null;
+  return {
+    eligible: true,
+    count,
+    max_value: org?.partner_meal_max_value ?? null,
+    used,
+    remaining: count == null || count <= 0 ? 0 : Math.max(count - used, 0),
+  };
+}
+
+/** The signed-in partner's free meals this month. */
+export async function getPartnerMealUsage(orgId: string): Promise<PartnerMealUsage> {
+  if (!isSupabaseConfigured) {
+    await demoDelay();
+    return demoPartnerUsage(orgId);
+  }
+  const { data, error } = await getSupabase().rpc("partner_meal_usage", { _org: orgId });
+  if (error) throw error;
+  return data as PartnerMealUsage;
 }
 
 /** Per-employee staff-meal totals over a date range (null bounds = all time). */
@@ -406,6 +495,20 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     // them, so it has to reject the same things or the two modes disagree.
     const staffId = payload.staffDiscountEmployeeId ?? null;
     let mealAmount = 0;
+    let mealDrinks = 0;
+    let partnerAmount = 0;
+    if (payload.partnerMeal) {
+      // Same rules as checkout_order (0070): one of this month's free meals, free up to the optional cap,
+      // refused once they're used. Overrides any manual discount sent.
+      if (staffId) throw new Error("a partner meal can't be combined with a staff discount or staff meal");
+      const usage = demoPartnerUsage(orgId);
+      if ((usage.count ?? 0) <= 0) throw new Error("partner meals are not enabled for this restaurant");
+      if (usage.remaining <= 0) {
+        throw new Error(`no free partner meals left this month (${usage.used} of ${usage.count} used)`);
+      }
+      partnerAmount = +Math.min(gross, usage.max_value ?? gross).toFixed(2);
+      discount = partnerAmount;
+    }
     if (staffId) {
       if (payload.mealPin) {
         // Staff meal/drink claim (0048): own-PIN identity check, then free up
@@ -417,11 +520,23 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
         }
         const dailyLimit = org?.staff_meal_daily_limit ?? 0;
         if (dailyLimit <= 0) throw new Error("staff meals are not enabled for this restaurant");
-        const used = demoMealUsage(orgId, staffId).used;
-        mealAmount = +Math.min(gross, Math.max(dailyLimit - used, 0)).toFixed(2);
-        const residual = gross - mealAmount;
-        const maxPct = org?.staff_discount_max_pct ?? 0;
-        discount = +(mealAmount + (residual * maxPct) / 100).toFixed(2);
+        // Same rules as checkout_order (0070): free credit first (food, plus up to N drinks a day),
+        // then the working-day rate on the rest; a day off is the off-day rate and no credit.
+        const usage = demoMealUsage(orgId, staffId);
+        const mealLines: MealLine[] = payload.items.map((l) => ({
+          price: l.price,
+          qty: l.qty,
+          category: dRecipes.get(l.recipe_id)?.category,
+        }));
+        const quote = quoteStaffMeal(mealLines, {
+          working: usage.working_today ?? true,
+          credit: usage.remaining,
+          drinksLeft: usage.drinks_remaining ?? null,
+          pct: usage.pct ?? 0,
+        });
+        mealAmount = quote.free;
+        mealDrinks = quote.freeDrinks;
+        discount = quote.discount;
       } else {
         assertStaffDiscountAllowed(orgId, staffId, discount, gross, payload.approvalPin ?? null);
       }
@@ -443,6 +558,9 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       staff_discount_employee_id: staffId,
       staff_discount_amount: staffId ? +(discount - mealAmount).toFixed(2) : 0,
       staff_meal_amount: +mealAmount.toFixed(2),
+      staff_meal_drinks: mealDrinks,
+      partner_meal_user_id: payload.partnerMeal ? DEMO_PARTNER_ID : null,
+      partner_meal_amount: partnerAmount,
     };
     dOrders.insert(order);
     for (const p of payload.payments) {
@@ -468,7 +586,7 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
       dItems.update(itemId, { stock: newStock });
       dTx.insert({
         id: uid(), org_id: orgId, item_id: itemId, item_name: item.name, delta: -u.used,
-        reason: mealAmount > 0 ? "staff_meal" : "sale", waste_reason: null, ref_order_id: order.id, note: null, created_at: now,
+        reason: mealAmount > 0 || partnerAmount > 0 ? "staff_meal" : "sale", waste_reason: null, ref_order_id: order.id, note: null, created_at: now,
       });
       if (newStock < item.par_level * 0.5 && item.stock >= item.par_level * 0.5) {
         pushDemoNotification(
@@ -539,6 +657,9 @@ export async function checkoutOrder(orgId: string, payload: CheckoutPayload): Pr
     _staff_employee_id: payload.staffDiscountEmployeeId ?? null,
     _approval_pin: payload.approvalPin ?? null,
     _meal_pin: payload.mealPin ?? null,
+    // Only sent when it's actually a partner meal: an older database (migration 0070 not run yet) has no such
+    // argument, and sending it unconditionally would make every ordinary checkout fail until it is.
+    ...(payload.partnerMeal ? { _partner_meal: true } : {}),
   });
   if (error) throw error;
   return data as CheckoutResult;

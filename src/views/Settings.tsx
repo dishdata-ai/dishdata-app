@@ -381,6 +381,8 @@ function ClockInLocationCard({ isAdmin }: { isAdmin: boolean }) {
 type SettingsForm = {
   name: string; currency: string; tax: string; target: string;
   staffMaxPct: string; staffCap: string; staffPinAt: string; staffMealLimit: string;
+  staffMealPctWorking: string; staffMealPctOff: string; staffMealDrinks: string;
+  partnerMealCount: string; partnerMealMax: string;
 };
 
 /**
@@ -518,16 +520,115 @@ function StaffDiscountCard({
             className="max-w-[10rem]"
           />
         </Field>
+        {+form.staffMealLimit > 0 && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <Field label="% off the rest (working days)">
+              <Input
+                type="number" min="0" max="100" step="1"
+                value={form.staffMealPctWorking}
+                onChange={(e) => setForm((f) => ({ ...f, staffMealPctWorking: e.target.value }))}
+                disabled={!isAdmin}
+                placeholder={form.staffMaxPct || "0"}
+              />
+            </Field>
+            <Field label="% off on days off">
+              <Input
+                type="number" min="0" max="100" step="1"
+                value={form.staffMealPctOff}
+                onChange={(e) => setForm((f) => ({ ...f, staffMealPctOff: e.target.value }))}
+                disabled={!isAdmin}
+                placeholder="same as a working day"
+              />
+            </Field>
+            <Field label="Free drinks per day">
+              <Input
+                type="number" min="0" step="1"
+                value={form.staffMealDrinks}
+                onChange={(e) => setForm((f) => ({ ...f, staffMealDrinks: e.target.value }))}
+                disabled={!isAdmin}
+                placeholder="no limit"
+              />
+            </Field>
+          </div>
+        )}
         <p className="mt-2 text-xs text-zinc-500">
           {+form.staffMealLimit > 0 ? (
             <>
-              Each active employee gets <strong className="text-zinc-300">{fmt(+form.staffMealLimit, 2)}</strong> free
-              per day, self-served at the till with their own PIN. Ordering more, or taking a parcel home, isn&rsquo;t
-              blocked — the rest is just charged at the staff discount rate above ({form.staffMaxPct || 0}%) instead
-              of full price.
+              On a day they&rsquo;ve clocked in, each active employee gets{" "}
+              <strong className="text-zinc-300">{fmt(+form.staffMealLimit, 2)}</strong> free
+              {form.staffMealDrinks.trim() !== "" && (
+                <>
+                  {" "}(food, plus at most <strong className="text-zinc-300">{form.staffMealDrinks}</strong> drink
+                  {+form.staffMealDrinks === 1 ? "" : "s"})
+                </>
+              )}
+              , self-served at the till with their own PIN. Ordering more, or taking a parcel home, isn&rsquo;t
+              blocked &mdash; the rest is charged at{" "}
+              <strong className="text-zinc-300">{form.staffMealPctWorking.trim() !== "" ? form.staffMealPctWorking : form.staffMaxPct || 0}%</strong> off.
+              {form.staffMealPctOff.trim() !== "" ? (
+                <>
+                  {" "}On a day they haven&rsquo;t clocked in there&rsquo;s no free credit and everything is{" "}
+                  <strong className="text-zinc-300">{form.staffMealPctOff}%</strong> off.
+                </>
+              ) : (
+                <> Leave &ldquo;% off on days off&rdquo; blank and every day counts the same.</>
+              )}
             </>
           ) : (
             <>Set an amount above 0 to let staff self-serve a free meal/drink each day at the till.</>
+          )}
+        </p>
+      </div>
+
+      <div className="mt-4 border-t border-line pt-4">
+        <div className="mb-2 flex items-center gap-2">
+          <p className="text-xs font-medium text-zinc-400">Partner meals</p>
+          <Badge tone={+form.partnerMealCount > 0 ? "green" : "neutral"}>
+            {+form.partnerMealCount > 0 ? "On" : "Off"}
+          </Badge>
+          <span className="text-[11px] text-zinc-600">only partners see this at the till</span>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Free meals per partner, per month">
+            <Input
+              type="number" min="0" step="1"
+              value={form.partnerMealCount}
+              onChange={(e) => setForm((f) => ({ ...f, partnerMealCount: e.target.value }))}
+              disabled={!isAdmin}
+              placeholder="0"
+            />
+          </Field>
+          {+form.partnerMealCount > 0 && (
+            <Field label="Max € per free meal (optional)">
+              <Input
+                type="number" min="0" step="1"
+                value={form.partnerMealMax}
+                onChange={(e) => setForm((f) => ({ ...f, partnerMealMax: e.target.value }))}
+                disabled={!isAdmin}
+                placeholder="no limit"
+              />
+            </Field>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          {+form.partnerMealCount > 0 ? (
+            <>
+              Each partner (owner, admin and partner logins) gets{" "}
+              <strong className="text-zinc-300">{form.partnerMealCount}</strong> completely free meal
+              {+form.partnerMealCount === 1 ? "" : "s"} a month, claimed at the till with the Partner button. One order is one
+              meal
+              {form.partnerMealMax.trim() !== "" ? (
+                <>
+                  , free up to <strong className="text-zinc-300">{fmt(+form.partnerMealMax, 2)}</strong> &mdash; anything over
+                  that is charged at full price
+                </>
+              ) : (
+                <>, free whatever it comes to</>
+              )}
+              . Once the month&rsquo;s meals are used the button says so and the order is just rung up normally.
+            </>
+          ) : (
+            <>Set a number above 0 to give partners a number of completely free meals each month.</>
           )}
         </p>
       </div>
@@ -711,6 +812,11 @@ export default function Settings() {
     staffCap: org?.staff_discount_monthly_cap == null ? "" : String(org.staff_discount_monthly_cap),
     staffPinAt: org?.staff_discount_pin_threshold == null ? "" : String(org.staff_discount_pin_threshold),
     staffMealLimit: org?.staff_meal_daily_limit == null ? "" : String(org.staff_meal_daily_limit),
+    staffMealPctWorking: org?.staff_meal_pct_working == null ? "" : String(org.staff_meal_pct_working),
+    staffMealPctOff: org?.staff_meal_pct_off == null ? "" : String(org.staff_meal_pct_off),
+    staffMealDrinks: org?.staff_meal_free_drinks == null ? "" : String(org.staff_meal_free_drinks),
+    partnerMealCount: org?.partner_meal_monthly_count == null ? "" : String(org.partner_meal_monthly_count),
+    partnerMealMax: org?.partner_meal_max_value == null ? "" : String(org.partner_meal_max_value),
   });
   const [accent, setAccent] = useState<string | null>(org?.accent_color ?? null);
   const [enabled, setEnabled] = useState<Set<string>>(() => {
@@ -741,6 +847,14 @@ export default function Settings() {
         staff_discount_pin_threshold: form.staffPinAt.trim() === "" ? null : +form.staffPinAt,
         // Blank/0 turns the whole feature off — see 0048.
         staff_meal_daily_limit: form.staffMealLimit.trim() === "" ? null : Math.max(+form.staffMealLimit || 0, 0),
+        // Blank = not set, which is a real setting (see 0070): working % falls back to the staff discount %,
+        // no day-off % means every day counts as a working day, no drinks limit means no cap.
+        staff_meal_pct_working: form.staffMealPctWorking.trim() === "" ? null : Math.min(Math.max(+form.staffMealPctWorking || 0, 0), 100),
+        staff_meal_pct_off: form.staffMealPctOff.trim() === "" ? null : Math.min(Math.max(+form.staffMealPctOff || 0, 0), 100),
+        staff_meal_free_drinks: form.staffMealDrinks.trim() === "" ? null : Math.max(Math.floor(+form.staffMealDrinks || 0), 0),
+        // Partner meals (0070): blank/0 turns them off; a blank max means the whole order is free.
+        partner_meal_monthly_count: form.partnerMealCount.trim() === "" ? null : Math.max(Math.floor(+form.partnerMealCount || 0), 0),
+        partner_meal_max_value: form.partnerMealMax.trim() === "" ? null : Math.max(+form.partnerMealMax || 0, 0),
         accent_color: accent,
         settings: { ...org.settings, enabled_modules: [...enabled] },
       });

@@ -58,6 +58,16 @@ export interface Org {
   max_shift_hours: number;
   /** € comped per employee per calendar day for staff meals/drinks. null/0 = feature off. */
   staff_meal_daily_limit: number | null;
+  /** % off the rest of a staff meal on a day the employee clocked in (after the free credit). null = use staff_discount_max_pct. */
+  staff_meal_pct_working?: number | null;
+  /** % off a staff meal on a day the employee did NOT clock in — no free credit that day. null = no working-day rule at all. */
+  staff_meal_pct_off?: number | null;
+  /** Most drinks the free credit may cover per employee per day. null = no cap. */
+  staff_meal_free_drinks?: number | null;
+  /** Free meals per partner per calendar month (owner / admin / partner). null/0 = partner meals off. */
+  partner_meal_monthly_count?: number | null;
+  /** Optional € ceiling on one free partner meal; the rest is paid at full price. null = the whole order is free. */
+  partner_meal_max_value?: number | null;
 }
 
 export interface Profile {
@@ -354,6 +364,12 @@ export interface Order {
   staff_discount_amount?: number;
   /** The free-daily-allowance portion of `discount` — separate budget from staff_discount_amount, see 0048. */
   staff_meal_amount?: number;
+  /** How many drinks of this order the free credit covered — drives the per-day drink cap, see 0070. */
+  staff_meal_drinks?: number;
+  /** Which partner's monthly free meals paid for this order (their login). Null = not a partner meal. */
+  partner_meal_user_id?: string | null;
+  /** € comped as a partner meal. */
+  partner_meal_amount?: number;
 
   // --- TSE (KassenSichV §146a AO), migration 0035 ---------------------------
   /** 'not_required' on pre-TSE orders and at restaurants with no TSE configured. */

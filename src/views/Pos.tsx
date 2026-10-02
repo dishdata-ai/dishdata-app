@@ -35,6 +35,7 @@ import { useUi } from "@/lib/store";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { orderCategories } from "@/lib/category-order";
+import { quoteStaffMeal } from "@/lib/staff-meal";
 import { useFmt } from "@/lib/hooks/useFmt";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
 import {
@@ -43,6 +44,7 @@ import {
   setKitchenStatus,
   getStaffDiscountUsage,
   getStaffMealUsage,
+  getPartnerMealUsage,
   type CheckoutResult,
 } from "@/lib/api/orders";
 import { toast } from "@/lib/toast";
@@ -367,7 +369,7 @@ function ProductCard({ r, onAdd, fmt }: { r: Recipe; onAdd: () => void; fmt: (n:
 }
 
 export default function Pos() {
-  const { org, isManager } = useOrg();
+  const { org, isManager, isPartner } = useOrg();
   const { user } = useAuth();
   const fmt = useFmt();
   const recipesQ = useRecipes();
@@ -388,7 +390,7 @@ export default function Pos() {
   const [customerId, setCustomerId] = useState<string>("");
   const [kitchenNotes, setKitchenNotes] = useState("");
   const [tipPct, setTipPct] = useState<number>(0);
-  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff">("none");
+  const [discountType, setDiscountType] = useState<"none" | "percent" | "amount" | "staff" | "partner">("none");
   // Two different staff actions sharing one segmented-control slot rather
   // than two ("Staff" and "Staff Meal" side by side read as unrelated
   // buttons and crowded the row) — see the panel below.
@@ -566,13 +568,46 @@ export default function Pos() {
     enabled: !!org?.id && !!staffEmployeeId && isMealClaim,
   });
   const mealUsage = mealUsageQ.data;
-  const mealFreeAmount = isMealClaim && mealUsage ? Math.min(gross, mealUsage.remaining) : 0;
+  // Same maths the database runs (src/lib/staff-meal.ts). A server that predates the working-day
+  // rules doesn't send the new fields, and then this falls back to the old single-rate behaviour.
+  const mealQuote = useMemo(
+    () =>
+      isMealClaim && mealUsage
+        ? quoteStaffMeal(
+            lines.map((l) => ({ price: l.recipe!.price, qty: l.qty, category: l.recipe!.category })),
+            {
+              working: mealUsage.working_today ?? true,
+              credit: mealUsage.remaining,
+              drinksLeft: mealUsage.drinks_remaining ?? null,
+              pct: mealUsage.pct ?? staffMaxPct,
+            },
+          )
+        : null,
+    [isMealClaim, mealUsage, lines, staffMaxPct],
+  );
+  const mealFreeAmount = mealQuote?.free ?? 0;
   const mealResidual = isMealClaim ? gross - mealFreeAmount : 0;
-  const mealDiscount = isMealClaim ? +(mealFreeAmount + (mealResidual * staffMaxPct) / 100).toFixed(2) : 0;
+  const mealDiscount = mealQuote?.discount ?? 0;
 
-  const discount = isMealClaim
-    ? mealDiscount
-    : Math.min(discountAmountInput + gross * (discountPct / 100), gross);
+  // Partner meals (0070): a monthly number of completely free meals, shown only to partners. Who's
+  // claiming is the signed-in session, so there's no employee picker and no PIN. The server
+  // re-checks eligibility and the monthly count at checkout.
+  const canClaimPartnerMeal = isPartner && (org?.partner_meal_monthly_count ?? 0) > 0;
+  const isPartnerMeal = discountType === "partner" && canClaimPartnerMeal;
+  const partnerUsageQ = useQuery({
+    queryKey: ["partnerMealUsage", org?.id],
+    queryFn: () => getPartnerMealUsage(org!.id),
+    enabled: !!org?.id && canClaimPartnerMeal,
+  });
+  const partnerUsage = partnerUsageQ.data;
+  const partnerFree = isPartnerMeal ? +Math.min(gross, partnerUsage?.max_value ?? gross).toFixed(2) : 0;
+  const partnerOut = isPartnerMeal && !!partnerUsage && partnerUsage.remaining <= 0;
+
+  const discount = isPartnerMeal
+    ? partnerFree
+    : isMealClaim
+      ? mealDiscount
+      : Math.min(discountAmountInput + gross * (discountPct / 100), gross);
   const discountedGross = +(gross - discount).toFixed(2);
   const taxGroups = computeTaxGroups(billLines, taxRate, discount);
   const tax = sumTax(taxGroups);
@@ -591,7 +626,8 @@ export default function Pos() {
   // and clearer.
   const staffDiscountIncomplete =
     (isStaffDiscount && !isMealClaim && (!staffEmployeeId || discount <= 0 || (needsPin && !approvalPin.trim()))) ||
-    (isMealClaim && (!staffEmployeeId || !mealPin.trim() || gross <= 0));
+    (isMealClaim && (!staffEmployeeId || !mealPin.trim() || gross <= 0)) ||
+    (isPartnerMeal && (gross <= 0 || !partnerUsage || partnerUsage.remaining <= 0));
   // Below `md` the cart becomes a slide-up bottom sheet instead of a side column.
   const isDesktopCart = useMediaQuery("(min-width: 768px)");
 
@@ -642,6 +678,7 @@ export default function Pos() {
         staffDiscountEmployeeId: isStaffDiscount ? staffEmployeeId : null,
         approvalPin: isStaffDiscount && !isMealClaim ? approvalPin || null : null,
         mealPin: isMealClaim ? mealPin || null : null,
+        partnerMeal: isPartnerMeal,
         org,
         payments: vars.payments,
       }).then(async (result) => {
@@ -670,6 +707,7 @@ export default function Pos() {
       // discount/meal reads the real remaining balance, not the pre-sale one.
       staffUsageQ.refetch();
       mealUsageQ.refetch();
+      partnerUsageQ.refetch();
       if (paid) {
         const method = vars.payments.length > 1 ? "split" : vars.payments[0].method;
         setReceipt({ ...result, lines: snapshot, tax: +tax.toFixed(2), tip: vars.tip, method });
@@ -979,7 +1017,8 @@ export default function Pos() {
                         ["percent", "%"],
                         ["amount", "Amount"],
                         ...(canGiveDiscount || canClaimMeal ? ([["staff", "Staff"]] as ["staff", string][]) : []),
-                      ] as ["none" | "percent" | "amount" | "staff", string][]
+                        ...(canClaimPartnerMeal ? ([["partner", "Partner"]] as ["partner", string][]) : []),
+                      ] as ["none" | "percent" | "amount" | "staff" | "partner", string][]
                     ).map(([t, label]) => (
                       <button
                         key={t}
@@ -999,7 +1038,7 @@ export default function Pos() {
                         {label}
                       </button>
                     ))}
-                    {discountType !== "none" && !isMealClaim && (
+                    {discountType !== "none" && !isMealClaim && !isPartnerMeal && (
                       <Input
                         type="number"
                         min="0"
@@ -1013,6 +1052,28 @@ export default function Pos() {
                       />
                     )}
                   </div>
+
+                  {isPartnerMeal && (
+                    <div className="mt-2 space-y-1 rounded-xl border border-line bg-white/[0.02] p-2.5">
+                      <p className="text-xs text-zinc-500">
+                        One of your free partner meals this month
+                        {partnerUsage?.max_value != null ? (
+                          <>
+                            , free up to {fmt(partnerUsage.max_value, 2)}. Anything over that is charged at full price.
+                          </>
+                        ) : (
+                          <>.</>
+                        )}
+                      </p>
+                      {partnerUsage && (
+                        <p className="text-xs text-zinc-500">
+                          <strong className={cn(partnerOut ? "text-rose-300" : "text-zinc-300")}>{partnerUsage.remaining}</strong>{" "}
+                          of {partnerUsage.count ?? 0} left this month
+                          {partnerOut && <> &mdash; ring this one up normally instead.</>}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {isStaffDiscount && (
                     <div className="mt-2 space-y-2 rounded-xl border border-line bg-white/[0.02] p-2.5">
@@ -1093,17 +1154,32 @@ export default function Pos() {
                               "something is selected." */}
                           {(isManager ? !!staffEmployeeId : staffEmployeeId === myEmployee?.id && !!myEmployee) && (
                             <>
-                              {mealUsage && (
+                              {mealUsage && mealQuote && (
                                 <p className="text-xs text-zinc-500">
-                                  <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
-                                    {fmt(mealUsage.remaining, 2)}
-                                  </strong>{" "}
-                                  left today
-                                  {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
-                                  {mealResidual > 0 && (
+                                  {mealUsage.working_today === false ? (
                                     <>
-                                      {" "}
-                                      · {fmt(mealResidual, 2)} over, charged at {staffMaxPct}% off
+                                      Not clocked in today, so no free credit &mdash;{" "}
+                                      <strong className="text-zinc-300">{mealQuote.pct}% off</strong> instead.
+                                    </>
+                                  ) : (
+                                    <>
+                                      <strong className={cn(mealFreeAmount < gross ? "text-amber-300" : "text-zinc-300")}>
+                                        {fmt(mealUsage.remaining, 2)}
+                                      </strong>{" "}
+                                      left today
+                                      {mealUsage.limit != null && <> of {fmt(mealUsage.limit, 2)}</>}
+                                      {mealUsage.drinks_remaining != null && (
+                                        <>
+                                          {" "}
+                                          · {mealUsage.drinks_remaining} free drink{mealUsage.drinks_remaining === 1 ? "" : "s"} left
+                                        </>
+                                      )}
+                                      {mealResidual > 0 && (
+                                        <>
+                                          {" "}
+                                          · {fmt(mealResidual, 2)} over, charged at {mealQuote.pct}% off
+                                        </>
+                                      )}
                                     </>
                                   )}
                                 </p>
@@ -1184,8 +1260,8 @@ export default function Pos() {
                   {discount > 0 && (
                     <div className="flex justify-between text-brand-300">
                       <span>
-                        {isMealClaim ? "Staff meal" : isStaffDiscount ? "Staff discount" : "Discount"}
-                        {discountType !== "amount" && !isMealClaim ? ` (${discountPct}%)` : ""}
+                        {isPartnerMeal ? "Partner meal" : isMealClaim ? "Staff meal" : isStaffDiscount ? "Staff discount" : "Discount"}
+                        {discountType !== "amount" && !isMealClaim && !isPartnerMeal ? ` (${discountPct}%)` : ""}
                       </span>
                       <span>−{fmt(discount, 2)}</span>
                     </div>
