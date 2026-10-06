@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Alert, ScrollView, View, Text, Pressable } from "react-native";
+import { Alert, ScrollView, View, Text, Pressable, Image, ActivityIndicator } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
 import { Card, Badge, Muted, Divider } from "@/components/ui";
 import { useOrg } from "@/lib/org-context";
-import { useTasks, useDuties, useDailyTaskMutation } from "@/lib/hooks";
+import { useTasks, useDuties, useDailyTaskMutation, useAddProofPhoto } from "@/lib/hooks";
 import { DUTY_LABELS, DUTY_ORDER, myDuties } from "@/lib/duties";
-import { isDoneToday, stepsToday, proofToday } from "@/lib/daily";
+import { isDoneToday, stepsToday, proofToday, photoProofOn } from "@/lib/daily";
+import { errorMessage } from "@/lib/errors";
 import { colors } from "@/lib/theme";
 import type { StaffRole, Task } from "@/lib/types";
 
@@ -33,6 +35,9 @@ export default function DailyChecklist() {
   const tasksQ = useTasks();
   const dutiesQ = useDuties();
   const mut = useDailyTaskMutation();
+  const photoMut = useAddProofPhoto();
+  const photosOn = photoProofOn(ctx?.org);
+  const [shooting, setShooting] = useState<string | null>(null);
   const [view, setView] = useState<"mine" | "all" | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
 
@@ -58,13 +63,12 @@ export default function DailyChecklist() {
 
   const toggleTask = (task: Task) => {
     const done = !isDoneToday(task);
-    if (done && task.requires_photo && proofToday(task).length === 0) {
-      // Taking and uploading the proof photo isn't built into this app yet, so say where to do it rather than
-      // letting the box be ticked without the proof the manager asked for.
-      Alert.alert(
-        "Photo needed",
-        "This one needs a photo of the finished work. Add it on the website (Tasks → Daily), then tick it off here.",
-      );
+    if (done && photosOn && task.requires_photo && proofToday(task).length === 0) {
+      // The manager asked for proof: open the camera instead of ticking it off without one.
+      Alert.alert("Photo needed", "This one needs a photo of the finished work.", [
+        { text: "Not now", style: "cancel" },
+        { text: "Take photo", onPress: () => takePhoto(task, true) },
+      ]);
       return;
     }
     mut.mutate({
@@ -75,6 +79,35 @@ export default function DailyChecklist() {
         checklist: stepsToday(task).map((c) => ({ ...c, done })),
       },
     });
+  };
+
+  /** Open the camera, upload the shot, and (when it was needed to finish the task) tick the task off. */
+  const takePhoto = async (task: Task, thenTick = false) => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert("Camera is off", "Allow camera access for DishData in your phone's settings to add a photo.");
+        return;
+      }
+      const shot = await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.5, exif: false });
+      if (shot.canceled || !shot.assets?.[0]) return;
+      setShooting(task.id);
+      await photoMut.mutateAsync({ task, uri: shot.assets[0].uri });
+      if (thenTick) {
+        mut.mutate({
+          id: task.id,
+          patch: {
+            status: "done",
+            completed_at: new Date().toISOString(),
+            checklist: stepsToday(task).map((c) => ({ ...c, done: true })),
+          },
+        });
+      }
+    } catch (e) {
+      Alert.alert("Couldn't add the photo", errorMessage(e));
+    } finally {
+      setShooting(null);
+    }
   };
 
   const toggleStep = (task: Task, stepId: string) => {
@@ -143,7 +176,8 @@ export default function DailyChecklist() {
                 {tasks.map((task, i) => {
                   const steps = stepsToday(task);
                   const finished = isDoneToday(task);
-                  const needsPhoto = !!task.requires_photo && proofToday(task).length === 0;
+                  const proof = proofToday(task);
+                  const needsPhoto = photosOn && !!task.requires_photo && proof.length === 0;
                   const expanded = open.has(task.id);
                   return (
                     <View key={task.id}>
@@ -187,6 +221,35 @@ export default function DailyChecklist() {
                               </View>
                             ) : null}
                           </View>
+                          {photosOn && (task.requires_photo || proof.length > 0 || task.example_photo_url) ? (
+                            <View className="mt-2 gap-2">
+                              <View className="flex-row flex-wrap items-center gap-2">
+                                {proof.map((p) => (
+                                  <Image key={p.id} source={{ uri: p.url }} className="h-16 w-16 rounded-lg" />
+                                ))}
+                                <Pressable
+                                  onPress={() => takePhoto(task)}
+                                  disabled={shooting === task.id}
+                                  className="flex-row items-center gap-1.5 rounded-lg border border-line bg-white/5 px-3 py-2 active:opacity-70"
+                                >
+                                  {shooting === task.id ? (
+                                    <ActivityIndicator size="small" color={colors.brand300} />
+                                  ) : (
+                                    <Ionicons name="camera-outline" size={16} color={colors.brand300} />
+                                  )}
+                                  <Text className="text-xs font-semibold text-brand-300">
+                                    {proof.length > 0 ? "Add another" : "Add photo"}
+                                  </Text>
+                                </Pressable>
+                              </View>
+                              {task.example_photo_url ? (
+                                <View>
+                                  <Text className="mb-1 text-[11px] uppercase tracking-wide text-zinc-500">How it should look</Text>
+                                  <Image source={{ uri: task.example_photo_url }} className="h-28 w-40 rounded-lg" resizeMode="cover" />
+                                </View>
+                              ) : null}
+                            </View>
+                          ) : null}
                           {expanded
                             ? steps.map((c) => (
                                 <Pressable

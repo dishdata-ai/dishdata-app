@@ -8,7 +8,7 @@ import { useOrg } from "@/lib/hooks/useOrg";
 import { useAuth } from "@/lib/hooks/useAuth";
 import { createTask, updateTask } from "@/lib/api/tasks";
 import { DUTY_ROLES, DUTY_LABELS, addDuty, removeDuty, myDuties } from "@/lib/api/duties";
-import { isDoneToday, stepsToday, proofToday, recentProof } from "@/lib/daily";
+import { isDoneToday, stepsToday, proofToday, recentProof, photoProofOn } from "@/lib/daily";
 import { uploadOrgAsset } from "@/lib/api/orgs";
 import TaskDetail from "@/views/TaskDetail";
 import { toast } from "@/lib/toast";
@@ -48,6 +48,7 @@ const isImageUrl = (url: string) => /\.(png|jpe?g|webp|gif|avif)(\?.*)?$/i.test(
 /** Daily-checklists view, mounted as a tab inside Tasks (src/views/Tasks.tsx). */
 export default function DailyBoard() {
   const { org, isManager } = useOrg();
+  const photosOn = photoProofOn(org);
   const { user } = useAuth();
   const tasksQ = useTasks();
   const employeesQ = useEmployees();
@@ -118,7 +119,7 @@ export default function DailyBoard() {
 
   const toggleTask = (task: Task) => {
     const done = !isDoneToday(task);
-    if (done && task.requires_photo && proofToday(task).length === 0) {
+    if (done && photosOn && task.requires_photo && proofToday(task).length === 0) {
       setOpen((prev) => new Set(prev).add(task.id));
       toast.info("Photo needed", "Add a photo of your finished work, then tick it off.");
       return;
@@ -221,7 +222,8 @@ export default function DailyBoard() {
                     const steps = stepsToday(task);
                     const links = task.links ?? [];
                     const proof = proofToday(task);
-                    const expandable = steps.length > 0 || links.length > 0 || !!task.example_photo_url || task.requires_photo;
+                    const needsPhoto = photosOn && task.requires_photo;
+                    const expandable = steps.length > 0 || links.length > 0 || (photosOn && !!task.example_photo_url) || needsPhoto;
                     const expanded = open.has(task.id);
                     const finished = isDoneToday(task);
                     return (
@@ -237,7 +239,7 @@ export default function DailyBoard() {
                           <div className="min-w-0 flex-1">
                             <h4 className={cn("text-sm font-medium", finished && "text-zinc-500 line-through")}>{task.title}</h4>
                             {task.description && <p className="mt-0.5 text-xs text-zinc-400">{task.description}</p>}
-                            {task.requires_photo && (
+                            {needsPhoto && (
                               <span
                                 className={cn(
                                   "mt-1 inline-flex items-center gap-1 text-xs",
@@ -261,7 +263,7 @@ export default function DailyBoard() {
                             )}
                             {expanded && (
                               <div className="mt-2 space-y-3">
-                                {(task.example_photo_url || task.requires_photo) && (
+                                {photosOn && (task.example_photo_url || task.requires_photo) && (
                                   <div className="grid gap-3 sm:grid-cols-2">
                                     <div>
                                       <p className="mb-1 text-[11px] font-semibold tracking-wide text-zinc-500 uppercase">How it should look</p>
@@ -361,7 +363,7 @@ export default function DailyBoard() {
       )}
 
       <Modal open={adding} onClose={() => setAdding(false)} title="New daily task">
-        <NewDailyForm orgId={org!.id} onDone={() => setAdding(false)} />
+        <NewDailyForm orgId={org!.id} photosOn={photosOn} onDone={() => setAdding(false)} />
       </Modal>
 
       <Modal open={!!editing} onClose={() => setEditId(null)} title="Edit daily task" wide>
@@ -380,6 +382,7 @@ export default function DailyBoard() {
                 ))}
               </Select>
             </Field>
+            {photosOn && (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Example photo — how it should look">
                 <div className="flex items-start gap-3">
@@ -415,6 +418,7 @@ export default function DailyBoard() {
                 </label>
               </Field>
             </div>
+            )}
             <TaskDetail
               task={editing}
               assignees={employees.map((e) => ({ id: e.id, name: e.name, hue: e.avatar_hue }))}
@@ -524,7 +528,7 @@ function DutyBoard({
   );
 }
 
-function NewDailyForm({ orgId, onDone }: { orgId: string; onDone: () => void }) {
+function NewDailyForm({ orgId, photosOn, onDone }: { orgId: string; photosOn: boolean; onDone: () => void }) {
   const invalidate = useInvalidate();
   const [form, setForm] = useState({ title: "", description: "", priority: "medium" as TaskPriority, duty: "" as StaffRole | "", photo: false });
   const [saving, setSaving] = useState(false);
@@ -586,6 +590,7 @@ function NewDailyForm({ orgId, onDone }: { orgId: string; onDone: () => void }) 
           </Select>
         </Field>
       </div>
+      {photosOn && (
       <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
         <input
           type="checkbox"
@@ -595,6 +600,7 @@ function NewDailyForm({ orgId, onDone }: { orgId: string; onDone: () => void }) 
         />
         Must attach a photo of the finished work
       </label>
+      )}
       <Button className="w-full" disabled={!form.title.trim() || saving} onClick={submit}>
         Add daily task
       </Button>

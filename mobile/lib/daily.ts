@@ -11,3 +11,11 @@ export const stepsToday = (t: Task): ChecklistItem[] =>
 
 /** Proof photos uploaded today — yesterday's don't count toward today's checklist. */
 export const proofToday = (t: Task): TaskPhoto[] => (t.proof_photos ?? []).filter((p) => isToday(p.at));
+
+/** Photo proof is an org option, off until an owner/admin turns it on (website Settings → Daily task photos). */
+export const photoProofOn = (org: { settings?: Record<string, unknown> | null } | null | undefined) =>
+  org?.settings?.dailyPhotoProof === true;
+
+/** Keeps the stored list from growing forever; files stay in storage, only the references are trimmed. */
+export const recentProof = (t: Task, days = 14): TaskPhoto[] =>
+  (t.proof_photos ?? []).filter((p) => Date.now() - new Date(p.at).getTime() < days * 86400000);

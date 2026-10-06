@@ -52,6 +52,13 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "cameraPermission": "DishData uses the camera to photograph finished daily tasks.",
+          "photosPermission": false
+        }
+      ],
+      [
         "expo-location",
         {
           "locationWhenInUsePermission": "DishData shares your location with customers while you're out on a delivery."

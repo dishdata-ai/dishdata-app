@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect } from "react";
-import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer, MapPin, LocateFixed } from "lucide-react";
+import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer, MapPin, LocateFixed, Camera } from "lucide-react";
 import { Card, SectionTitle, Button, Badge, Input, Field, Select } from "@/components/ui";
 import { PaymentsCard } from "@/components/PaymentsCard";
 import { SiteCard } from "@/components/SiteCard";
@@ -17,6 +17,7 @@ import { MODULES, MODULE_GROUPS, ALWAYS_ENABLED_MODULES } from "@/lib/modules";
 import { toast } from "@/lib/toast";
 import { cn, errorMessage } from "@/lib/utils";
 import { getCurrentPosition, GeoError } from "@/lib/geo";
+import { photoProofOn } from "@/lib/daily";
 import {
   listDeliveryZones,
   upsertDeliveryZone,
@@ -392,6 +393,50 @@ type SettingsForm = {
  * the till is the thing being restrained, so it can't be the thing enforcing
  * the restraint. This card just configures them.
  */
+/**
+ * Photo proof on daily tasks. Off by default: a restaurant that doesn't want the extra step never sees it. Turning
+ * it on lets each daily task ask for a photo of the finished work and lets staff add one (web and phone app).
+ * The per-task "must attach a photo" choices are kept while it's off and apply again when it's on.
+ */
+function DailyPhotoProofCard({ isAdmin }: { isAdmin: boolean }) {
+  const { org, refresh } = useOrg();
+  const [saving, setSaving] = useState(false);
+  const on = photoProofOn(org);
+
+  const toggle = async () => {
+    if (!org) return;
+    setSaving(true);
+    try {
+      await updateOrg(org.id, { settings: { ...org.settings, dailyPhotoProof: !on } });
+      refresh();
+      toast.success(on ? "Photo proof turned off" : "Photo proof turned on");
+    } catch (e) {
+      toast.error("Could not save", errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <Camera className="h-4 w-4 text-accent-400" />
+        <h3 className="font-semibold text-white">Daily task photos</h3>
+        <Badge tone={on ? "green" : "neutral"}>{on ? "On" : "Off"}</Badge>
+      </div>
+      <p className="mb-4 text-xs text-zinc-500">
+        When on, a daily task can require a photo of the finished work, and staff can add photos from the website or
+        the phone app. When off, nobody is asked for a photo — tasks you already set to need one are remembered and
+        apply again if you switch this back on.
+      </p>
+      <Button variant={on ? "ghost" : "primary"} disabled={!isAdmin || saving} onClick={toggle}>
+        {on ? "Turn off photo proof" : "Turn on photo proof"}
+      </Button>
+      {!isAdmin && <p className="mt-2 text-xs text-zinc-500">Only an owner or admin can change this.</p>}
+    </Card>
+  );
+}
+
 function StaffDiscountCard({
   isAdmin,
   form,
@@ -1044,6 +1089,7 @@ export default function Settings() {
         <StaffDiscountCard isAdmin={isAdmin} form={form} setForm={setForm} />
         <ReceiptPrinterCard isAdmin={isAdmin} />
         <ClockInLocationCard isAdmin={isAdmin} />
+        <DailyPhotoProofCard isAdmin={isAdmin} />
       </div>
 
       <Card className="p-5">

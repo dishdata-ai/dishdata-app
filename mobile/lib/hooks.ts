@@ -28,6 +28,7 @@ import {
 } from "@/lib/api/kitchen";
 import { buildDemand, liveRows, waitingByDish, OPEN_HOUR, LAST_HOUR, nextServiceDay } from "@/lib/kitchen-ops";
 import { useMemo, useEffect, useState } from "react";
+import { addProofPhoto } from "@/lib/api/proofPhotos";
 import { listMenu } from "@/lib/api/menu";
 import { listEventMenus } from "@/lib/api/eventMenus";
 import {
@@ -60,7 +61,7 @@ import {
 import { listInventory, adjustStock } from "@/lib/api/inventory";
 import { listMyDeliveries, listOrgDeliveries, startTrip, reportLocation, markDelivered } from "@/lib/api/delivery";
 import { listTiers, listEarnRules, listRewards, awardPoints, redeemReward } from "@/lib/api/loyalty";
-import type { Reservation, ReservationStatus, TableStatus, TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType, Order, KitchenDish } from "@/lib/types";
+import type { Task, Reservation, ReservationStatus, TableStatus, TaskStatus, KitchenStatus, TimeEntry, LoyaltyActionType, Order, KitchenDish } from "@/lib/types";
 
 function useIds() {
   const { ctx } = useOrg();
@@ -612,4 +613,14 @@ export function usePreorderMutations() {
     cancel: useMutation({ mutationFn: (id: string) => cancelPreorderOrder(orgId, id), onSuccess: refresh }),
     restore: useMutation({ mutationFn: (id: string) => restorePreorderOrder(orgId, id), onSuccess: refresh }),
   };
+}
+
+export function useAddProofPhoto() {
+  const { ctx } = useOrg();
+  const { orgId } = useIds();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ task, uri }: { task: Task; uri: string }) => addProofPhoto(orgId, task, uri, ctx?.me.name ?? null),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks", orgId] }),
+  });
 }
