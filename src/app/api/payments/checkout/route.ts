@@ -12,9 +12,6 @@ import { getOrgBrand } from "@/lib/notify/brand";
  * is taken from the order row server-side (never trusted from the client).
  */
 export async function POST(req: NextRequest) {
-  if (!isStripeConfigured()) {
-    return NextResponse.json({ error: "Stripe is not configured on the server." }, { status: 400 });
-  }
   const admin = createSupabaseAdmin();
   if (!admin) {
     return NextResponse.json({ error: "Payments require a connected Supabase backend." }, { status: 400 });
@@ -52,6 +49,16 @@ export async function POST(req: NextRequest) {
   }
 
   const settings = readPaymentsSettings(org.settings as Record<string, unknown>);
+  const direct = settings.mode === "direct";
+  if (!direct && !isStripeConfigured()) {
+    return NextResponse.json({ error: "Stripe is not configured on the server." }, { status: 400 });
+  }
+  let secretKey: string | undefined;
+  if (direct) {
+    const { data: sec } = await admin.from("org_payment_secrets").select("stripe_secret_key").eq("org_id", org.id).maybeSingle();
+    secretKey = sec?.stripe_secret_key ?? undefined;
+    if (!secretKey) return NextResponse.json({ error: "This restaurant's Stripe key is missing." }, { status: 409 });
+  }
   if (!settings.account_id || !settings.charges_enabled) {
     return NextResponse.json(
       { error: "This restaurant is not set up to accept online payments yet." },
@@ -75,6 +82,7 @@ export async function POST(req: NextRequest) {
       successUrl: body.successUrl ?? `${home}/?paid=${order.order_number}`,
       cancelUrl: body.cancelUrl ?? `${home}/?cancelled=${order.order_number}`,
       lang: body.lang === "de" ? "de" : "en",
+      secretKey,
     });
     return NextResponse.json({ url: result.url, sessionId: result.sessionId });
   } catch (e) {

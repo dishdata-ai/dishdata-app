@@ -66,9 +66,10 @@ export const stripeProvider: PaymentProvider = {
   },
 
   async createCheckout(params: CheckoutParams): Promise<CheckoutResult> {
-    const sc = getStripe();
+    // Direct mode charges the restaurant's own account with its own key; otherwise the platform client.
+    const sc = params.secretKey ? new Stripe(params.secretKey) : getStripe();
     const amountInCents = Math.round(params.amount * 100);
-    const fee = applicationFeeAmount(amountInCents);
+    const fee = params.secretKey ? 0 : applicationFeeAmount(amountInCents);
 
     // Direct charge: the connected account is the merchant of record, so it
     // bears Stripe's processing fee and we keep only the application fee.
@@ -93,7 +94,7 @@ export const stripeProvider: PaymentProvider = {
         success_url: params.successUrl,
         cancel_url: params.cancelUrl,
       },
-      { stripeAccount: params.accountId },
+      params.secretKey ? undefined : { stripeAccount: params.accountId },
     );
 
     if (!session.url) throw new Error("Stripe did not return a checkout URL");

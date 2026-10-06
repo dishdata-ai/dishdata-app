@@ -4,7 +4,9 @@ import { resolveActiveOrg } from "@/lib/payments/org-server";
 // Manages the restaurant's email sending domain in the platform's Resend account.
 //   POST  { fromAddress }  register the domain of that address, return the DNS records to add
 //   GET                    re-check: ask Resend to verify, return the current status and records
-// Only owners/admins. The Resend key stays on the server (RESEND_API_KEY).
+// Only owners/admins. Managing domains needs a Resend key with full access, kept apart from the
+// sending key: set RESEND_ADMIN_KEY (falls back to RESEND_API_KEY if that one has full access).
+const adminKey = () => process.env.RESEND_ADMIN_KEY || process.env.RESEND_API_KEY;
 
 const RESEND = "https://api.resend.com";
 
@@ -19,7 +21,7 @@ interface ResendDomain {
 async function resend(path: string, init?: RequestInit): Promise<{ ok: boolean; data: ResendDomain }> {
   const res = await fetch(`${RESEND}${path}`, {
     ...init,
-    headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, "content-type": "application/json" },
+    headers: { authorization: `Bearer ${adminKey()}`, "content-type": "application/json" },
     cache: "no-store",
   }).catch(() => null);
   const data = (res ? await res.json().catch(() => ({})) : { message: "Could not reach Resend." }) as ResendDomain;
@@ -29,7 +31,7 @@ async function resend(path: string, init?: RequestInit): Promise<{ ok: boolean; 
 const toStatus = (s?: string) => (s === "verified" ? "verified" : s === "failed" || s === "temporary_failure" ? "failed" : "pending");
 
 export async function POST(req: Request) {
-  if (!process.env.RESEND_API_KEY) return NextResponse.json({ error: "Email sending is not configured on the server (RESEND_API_KEY)." }, { status: 400 });
+  if (!adminKey()) return NextResponse.json({ error: "Email sending is not configured on the server (RESEND_ADMIN_KEY)." }, { status: 400 });
   const res = await resolveActiveOrg(req);
   if (!res.ok) return NextResponse.json({ error: res.error }, { status: res.status });
   const { sb, org, isAdmin } = res.value;
@@ -48,7 +50,7 @@ export async function POST(req: Request) {
     // Already registered in this account: find it instead of failing.
     const list = await resend("/domains");
     const found = ((list.data as unknown as { data?: ResendDomain[] }).data ?? []).find((d) => d.name === domain);
-    if (!found?.id) return NextResponse.json({ error: created.data.message ?? "Resend refused the domain." }, { status: 502 });
+    if (!found?.id) return NextResponse.json({ error: created.data.message ?? "Resend refused the domain. The key may need full access (RESEND_ADMIN_KEY)." }, { status: 502 });
     domainData = (await resend(`/domains/${found.id}`)).data;
   }
 
@@ -65,7 +67,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  if (!process.env.RESEND_API_KEY) return NextResponse.json({ error: "Email sending is not configured on the server (RESEND_API_KEY)." }, { status: 400 });
+  if (!adminKey()) return NextResponse.json({ error: "Email sending is not configured on the server (RESEND_ADMIN_KEY)." }, { status: 400 });
   const res = await resolveActiveOrg(req);
   if (!res.ok) return NextResponse.json({ error: res.error }, { status: res.status });
   const { sb, org, isAdmin } = res.value;

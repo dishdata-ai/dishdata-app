@@ -50,8 +50,8 @@ export async function notifyWebsiteOrder(admin: SupabaseClient, orderId: string,
   // ---- Guest
   if (customer?.email) {
     const t = de
-      ? { subject: `Deine Bestellung ${claimed.order_number} bei ${orgName}`, hi: `Hallo ${guest},`, intro: when ? `danke für deine Bestellung! Wir haben alles für ${when} eingeplant.` : "danke für deine Bestellung! Wir bereiten alles für dich vor.", pay: paid ? "Bezahlt. Danke!" : "Bezahlt wird im Restaurant.", guests: "Personen", total: "Gesamt", link: "Deine Bestellung ansehen", checkin: "Tippe auf der Bestellseite „Ich bin in 10 Minuten da“, dann fangen wir an zu kochen." }
-      : { subject: `Your order ${claimed.order_number} at ${orgName}`, hi: `Hi ${guest},`, intro: when ? `thank you for your order! We have everything planned for ${when}.` : "thank you for your order! We are getting everything ready for you.", pay: paid ? "Paid. Thank you!" : "You pay at the restaurant.", guests: "Guests", total: "Total", link: "View your order", checkin: "On your order page, tap \"I'm 10 minutes away\" and we start cooking." };
+      ? { subject: `Deine Bestellung ${claimed.order_number} bei ${orgName}`, hi: `Hallo ${guest},`, intro: when ? `danke für deine Bestellung! Wir haben alles für ${when} eingeplant.` : "danke für deine Bestellung! Wir bereiten alles für dich vor.", pay: paid ? "Bezahlt. Danke!" : "Bezahlt wird im Restaurant.", guests: "Personen", total: "Gesamt", link: "Deine Bestellung ansehen", checkin: "Wir kochen so, dass alles zu deiner Zeit fertig ist. Tippe auf der Bestellseite „Ich bin unterwegs“, damit die Küche weiß, dass du kommst." }
+      : { subject: `Your order ${claimed.order_number} at ${orgName}`, hi: `Hi ${guest},`, intro: when ? `thank you for your order! We have everything planned for ${when}.` : "thank you for your order! We are getting everything ready for you.", pay: paid ? "Paid. Thank you!" : "You pay at the restaurant.", guests: "Guests", total: "Total", link: "View your order", checkin: "We cook so everything is ready at your time. On your order page, tap \"I'm on my way\" so the kitchen knows you are coming." };
     await sendEmail({
       to: customer.email,
       from: brand.from,
@@ -63,8 +63,9 @@ export async function notifyWebsiteOrder(admin: SupabaseClient, orderId: string,
   }
 
   // ---- Restaurant
-  const staff = brand.staffEmail;
-  if (staff) {
+  // The alert can go to several people: separate addresses with commas in the Website & brand card.
+  const staff = brand.staffEmail?.split(/[,;\s]+/).filter((e) => e.includes("@"));
+  if (staff && staff.length) {
     await sendEmail({
       to: staff,
       from: brand.from,
@@ -74,5 +75,30 @@ export async function notifyWebsiteOrder(admin: SupabaseClient, orderId: string,
       text: `New website order ${claimed.order_number}\n${kind}${when ? ` · ${when}` : ""}\n${guest}${customer?.phone ? ` · ${customer.phone}` : ""}\n${plain}\n${eur(Number(claimed.total), false)} · ${paid ? "PAID online" : "pay at the restaurant"}\n${claimed.kitchen_notes ?? ""}`,
     });
   }
+  return "sent";
+}
+
+/** The guest confirmed they are on their way: tell the kitchen (once, right after the tap). */
+export async function notifyCheckIn(admin: SupabaseClient, orderId: string): Promise<"sent" | "skipped"> {
+  const { data: o } = await admin
+    .from("orders")
+    .select("org_id, order_number, guest_name, scheduled_for, checked_in_at, source")
+    .eq("id", orderId)
+    .maybeSingle();
+  // Only a fresh tap on a website order; a repeated call must not email again.
+  if (!o || o.source !== "storefront" || !o.checked_in_at || !o.scheduled_for) return "skipped";
+  if (Date.now() - new Date(o.checked_in_at).getTime() > 2 * 60_000) return "skipped";
+  const brand = await getOrgBrand(admin, o.org_id);
+  const staff = brand.staffEmail?.split(/[,;\s]+/).filter((e) => e.includes("@"));
+  if (!staff || !staff.length) return "skipped";
+  const at = new Date(o.scheduled_for).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+  await sendEmail({
+    to: staff,
+    from: brand.from,
+    replyTo: brand.replyTo,
+    subject: `On the way: ${o.order_number} for ${at}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:480px"><h3>${esc(o.guest_name ?? "Guest")} confirmed they are coming</h3><p>${esc(o.order_number)} for <b>${esc(at)}</b>. Cook from the usual start time.</p></div>`,
+    text: `${o.guest_name ?? "Guest"} confirmed they are coming.\n${o.order_number} for ${at}.`,
+  });
   return "sent";
 }

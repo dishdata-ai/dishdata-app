@@ -59,7 +59,12 @@ function Ticket({
   // A timed order counts down to its time instead of ageing from when it was placed.
   const dueIn = order.scheduled_for ? Math.round((new Date(order.scheduled_for).getTime() - now) / 60000) : null;
   const age = ageMinutes(order.created_at, now);
-  const urgent = (dueIn !== null ? dueIn <= 10 : age >= 15) && order.kitchen_status !== "ready";
+  // Minutes until cooking should START (arrival time minus the prep time).
+  const startIn = dueIn !== null ? dueIn - PREP_MINUTES : null;
+  const toTime = (iso: string, minus = 0) =>
+    new Date(new Date(iso).getTime() - minus * 60000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" });
+  const urgent =
+    (dueIn !== null ? (startIn! <= 0 && order.kitchen_status === "new") || dueIn <= 5 : age >= 15) && order.kitchen_status !== "ready";
   const readyCount = order.items.filter((l) => l.ready).length;
   const partly = readyCount > 0 && readyCount < order.items.length;
 
@@ -86,17 +91,30 @@ function Ticket({
         <span
           className={cn("rounded-full px-2 py-0.5 text-[11px] font-bold", urgent ? "bg-rose-soft/15 text-rose-soft" : "bg-white/5 text-zinc-400")}
         >
-          {dueIn === null ? `${age}m` : dueIn > 0 ? `in ${dueIn >= 60 ? `${Math.floor(dueIn / 60)}h ${dueIn % 60}m` : `${dueIn}m`}` : "due now"}
+          {dueIn === null
+            ? `${age}m`
+            : order.kitchen_status === "new"
+              ? startIn! > 0
+                ? `cook in ${startIn! >= 60 ? `${Math.floor(startIn! / 60)}h ${startIn! % 60}m` : `${startIn}m`}`
+                : "start now"
+              : dueIn > 0
+                ? `ready in ${dueIn}m`
+                : "due now"}
         </span>
       </div>
       {order.checked_in_at && (
         <p className="mt-1 mr-1 inline-flex items-center gap-1 rounded-full bg-brand-400/20 px-2 py-0.5 text-[11px] font-bold text-brand-300">
-          On the way · start cooking
+          Guest is on the way ✓
+        </p>
+      )}
+      {order.scheduled_for && !order.checked_in_at && order.kitchen_status === "new" && startIn !== null && startIn <= 5 && (
+        <p className="mt-1 mr-1 inline-flex items-center gap-1 rounded-full bg-rose-soft/15 px-2 py-0.5 text-[11px] font-bold text-rose-soft">
+          Guest has not confirmed · call before cooking
         </p>
       )}
       {order.scheduled_for && (
         <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-soft/15 px-2 py-0.5 text-[11px] font-bold text-amber-soft">
-          For {new Date(order.scheduled_for).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" })}
+          For {toTime(order.scheduled_for)} · cook from {toTime(order.scheduled_for, PREP_MINUTES)}
           {order.reservation_id ? " · table booked" : ""}
         </p>
       )}
@@ -416,6 +434,9 @@ function KitchenOps() {
     </div>
   );
 }
+
+// A timed website order is cooked so it is ready at the guest's time: the chef needs about this long.
+const PREP_MINUTES = 18;
 
 export default function Kitchen() {
   const { moduleIds } = useOrg();

@@ -4,6 +4,8 @@
 /** Per-org payment connection state, persisted in orgs.settings.payments (jsonb). */
 export interface OrgPaymentsSettings {
   provider?: PaymentProviderId;
+  /** 'connect' (default): charge on a Stripe Connect account. 'direct': the restaurant's own Stripe keys (stored server-side, migration 0079). */
+  mode?: "connect" | "direct";
   /** Connected account id, e.g. Stripe `acct_...`. */
   account_id?: string;
   /** Mirror of the provider's "can accept charges" flag, refreshed on status checks. */
@@ -42,6 +44,8 @@ export interface CheckoutParams {
   cancelUrl: string;
   /** The guest's language, carried through Stripe so the confirmation email matches. */
   lang?: string;
+  /** Direct mode: the restaurant's own secret key. Charges go to that account with no platform fee. */
+  secretKey?: string;
 }
 
 export interface CheckoutResult {

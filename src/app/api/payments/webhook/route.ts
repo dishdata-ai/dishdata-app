@@ -4,60 +4,15 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripe } from "@/lib/payments/stripe";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
 import { isStripeConfigured } from "@/lib/payments/config";
-import { notifyWebsiteOrder } from "@/lib/notify/orderEmails";
+import { markOrderPaid as markPaid } from "@/lib/payments/mark-paid";
+import type { PaidEvent } from "@/lib/payments/mark-paid";
 
 // Stripe requires the raw, unparsed request body to verify the signature.
 export const runtime = "nodejs";
 
-interface PaidEvent {
-  orgId: string;
-  orderId: string;
-  amount: number;
-  paymentIntentId: string | null;
-  lang?: string;
-}
-
-/** Record a Stripe payment and flip the order to paid. Idempotent per intent. */
 async function markOrderPaid(admin: SupabaseClient, e: PaidEvent): Promise<NextResponse> {
-  if (!e.orgId || !e.orderId) {
-    return NextResponse.json({ error: "Missing order metadata." }, { status: 400 });
-  }
-
-  // Idempotent: skip if a payment for this intent already exists.
-  if (e.paymentIntentId) {
-    const { data: existing } = await admin
-      .from("payments")
-      .select("id")
-      .eq("stripe_payment_intent_id", e.paymentIntentId)
-      .maybeSingle();
-    if (existing) return NextResponse.json({ received: true, deduped: true });
-  }
-
-  const { error: payErr } = await admin.from("payments").insert({
-    org_id: e.orgId,
-    order_id: e.orderId,
-    method: "stripe",
-    amount: e.amount,
-    tip_amount: 0,
-    stripe_payment_intent_id: e.paymentIntentId,
-  });
-  if (payErr) return NextResponse.json({ error: payErr.message }, { status: 500 });
-
-  const { error: ordErr } = await admin
-    .from("orders")
-    .update({ status: "paid" })
-    .eq("id", e.orderId)
-    .eq("org_id", e.orgId);
-  if (ordErr) return NextResponse.json({ error: ordErr.message }, { status: 500 });
-
-  // Website pre-orders wait as 'void' until paid: confirm the table and tell the kitchen and floor.
-  // A missing function (migration 0075 not applied yet) must not fail the payment record above.
-  const { error: confirmErr } = await admin.rpc("confirm_prepaid_order", { _order_id: e.orderId });
-  if (confirmErr) console.error("[payments] confirm_prepaid_order failed", confirmErr.message);
-  // Emails for the guest and the restaurant, now that the money is in. Never fails the webhook.
-  await notifyWebsiteOrder(admin, e.orderId, e.lang).catch((err) => console.error("[payments] order email failed", err));
-
-  return NextResponse.json({ received: true });
+  const r = await markPaid(admin, e);
+  return NextResponse.json(r.body, { status: r.status });
 }
 
 /**

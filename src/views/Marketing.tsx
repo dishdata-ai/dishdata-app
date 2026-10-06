@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, CalendarHeart, Link2, Megaphone, Newspaper, Sparkles } from "lucide-react";
+import { BarChart3, CalendarDays, CalendarHeart, Link2, Megaphone, Newspaper, Sparkles } from "lucide-react";
 import { SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import Campaigns from "@/views/marketing/Campaigns";
@@ -10,6 +10,7 @@ import Planner from "@/views/marketing/Planner";
 import Blog from "@/views/marketing/Blog";
 import SiteEvents from "@/views/marketing/SiteEvents";
 import WeeklyDish from "@/views/marketing/WeeklyDish";
+import Traffic from "@/views/marketing/Traffic";
 
 // Later phases add Inbox, Social, Shop and Insights tabs here.
 const TABS = [
@@ -18,6 +19,7 @@ const TABS = [
   { id: "blog", label: "Blog", icon: Newspaper },
   { id: "week", label: "Dish of the week", icon: Sparkles },
   { id: "events", label: "Events", icon: CalendarHeart },
+  { id: "traffic", label: "Website traffic", icon: BarChart3 },
   { id: "accounts", label: "Accounts", icon: Link2 },
 ] as const;
 
@@ -72,6 +74,7 @@ export default function Marketing() {
       {tab === "blog" && <Blog />}
       {tab === "week" && <WeeklyDish />}
       {tab === "events" && <SiteEvents />}
+      {tab === "traffic" && <Traffic />}
       {tab === "accounts" && <Accounts />}
     </div>
   );
