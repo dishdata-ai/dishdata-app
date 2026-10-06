@@ -15,7 +15,8 @@ import {
 } from "@/components/ui";
 import { QrCode as QrCodeImage } from "@/components/QrCode";
 import { QrSheetModal, TableQrSheetModal } from "@/components/QrSheet";
-import { useTables, useReservations, useInvalidate } from "@/lib/hooks/data";
+import { useTables, useReservations, useInvalidate, useOrgSite, useOrders } from "@/lib/hooks/data";
+import { tableOrderUrl, takeawayOrderUrl } from "@/lib/api/orgSite";
 import { useRealtimeInvalidate } from "@/lib/hooks/useRealtimeInvalidate";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { setTableStatus, addTable, createReservation, setReservationStatus } from "@/lib/api/service";
@@ -121,10 +122,27 @@ function NewReservationForm({ tables, onDone }: { tables: RestaurantTable[]; onD
 
 export default function Floor() {
   const { org } = useOrg();
+  const siteQ = useOrgSite();
+  const site = siteQ.data ?? null;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
   const tablesQ = useTables();
   const reservationsQ = useReservations();
   const invalidate = useInvalidate();
   useRealtimeInvalidate("reservations", ["reservations", "restaurant_tables"]);
+  useRealtimeInvalidate("orders", ["orders"]);
+
+  // What each table owes right now: its open tab from a QR scan this sitting. Staff charge this
+  // amount on the SumUp reader, and the till sync then settles the tab (migration 0063).
+  const ordersQ = useOrders();
+  const tabTotals = useMemo(() => {
+    const m = new Map<string, number>();
+    const sixHours = Date.now() - 6 * 3600000;
+    for (const o of ordersQ.data ?? []) {
+      if (!o.table_id || o.status !== "open" || o.merged_into || new Date(o.created_at).getTime() < sixHours) continue;
+      m.set(o.table_id, (m.get(o.table_id) ?? 0) + o.total);
+    }
+    return m;
+  }, [ordersQ.data]);
 
   const [booking, setBooking] = useState(false);
   const [addingTable, setAddingTable] = useState(false);
@@ -232,6 +250,11 @@ export default function Floor() {
                       <span className="flex items-center gap-1 text-[11px] text-zinc-400">
                         <Users className="h-3 w-3" /> {t.seats}
                       </span>
+                      {tabTotals.has(t.id) && (
+                        <span className="rounded-full bg-amber-soft/20 px-1.5 text-[10px] font-bold text-amber-soft">
+                          Tab €{tabTotals.get(t.id)!.toFixed(2)}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
@@ -307,11 +330,12 @@ export default function Floor() {
           <p className="text-sm text-zinc-400">
             Print these and place one on each table, plus the takeaway one at the counter or front door.
             Guests scan to browse your menu and order straight to the kitchen — no app needed.
+            {site?.site_url ? <> The codes open <b>{site.site_url.replace("https://", "")}</b>.</> : <> Set your website in Settings → Website &amp; brand to open your own site instead.</>}
           </p>
           <div className="grid max-h-96 grid-cols-2 gap-3 overflow-y-auto sm:grid-cols-3" id="qr-grid">
             <div className="rounded-xl border border-line bg-white p-3 text-center">
               <QrCodeImage
-                value={`${window.location.origin}/r/${org?.slug}?order=takeaway`}
+                value={takeawayOrderUrl(site, origin, org?.slug ?? "")}
                 size={112}
                 className="mx-auto"
               />
@@ -327,7 +351,7 @@ export default function Floor() {
               </button>
             </div>
             {tables.map((t) => {
-              const url = `${window.location.origin}/r/${org?.slug}?table=${encodeURIComponent(t.name)}`;
+              const url = tableOrderUrl(site, origin, org?.slug ?? "", t.name);
               return (
                 <div key={t.id} className="rounded-xl border border-line bg-white p-3 text-center">
                   <QrCodeImage value={url} size={112} className="mx-auto" />
@@ -351,7 +375,7 @@ export default function Floor() {
       <QrSheetModal
         open={printingTakeawaySheet}
         onClose={() => setPrintingTakeawaySheet(false)}
-        value={`${typeof window !== "undefined" ? window.location.origin : ""}/r/${org?.slug}?order=takeaway`}
+        value={takeawayOrderUrl(site, origin, org?.slug ?? "")}
         title="Scan to order"
       />
 
@@ -361,7 +385,7 @@ export default function Floor() {
         tables={tables.map((t) => ({
           id: t.id,
           name: t.name,
-          url: `${typeof window !== "undefined" ? window.location.origin : ""}/r/${org?.slug}?table=${encodeURIComponent(t.name)}`,
+          url: tableOrderUrl(site, origin, org?.slug ?? "", t.name),
         }))}
       />
 

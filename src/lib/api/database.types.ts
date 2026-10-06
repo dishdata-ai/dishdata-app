@@ -318,6 +318,8 @@ export interface Customer {
   tier_id?: string | null;
   newsletter_opt_in?: boolean;
   instagram_handle?: string | null;
+  /** The website login linked to this customer (migration 0076). */
+  auth_user_id?: string | null;
 }
 
 export interface OrderLine {
@@ -348,6 +350,16 @@ export interface Order {
   status: OrderStatus;
   kitchen_status: KitchenStatus;
   kitchen_notes: string | null;
+  /** When the guest wants the food (timed website orders, migration 0074). Null = as soon as possible. */
+  scheduled_for?: string | null;
+  /** The table booked by a dine-in pre-order from the website (migration 0074). */
+  reservation_id?: string | null;
+  /** Website pre-orders: null = pay at the restaurant, 'awaiting' = Stripe payment pending (order is void until paid), 'paid' (migration 0075). */
+  payment_state?: "awaiting" | "paid" | null;
+  /** When the guest tapped "I'm 10 minutes away" (migration 0075). */
+  checked_in_at?: string | null;
+  /** When the confirmation emails for a website order went out (migration 0077). */
+  notified_at?: string | null;
   /** Set when a QR tab was settled by another order (its SumUp sale). Excluded from revenue — see migration 0063 and countsAsRevenue(). */
   merged_into?: string | null;
   /** Stamped by the DB when the ticket changes kitchen status (see migration 0057). Absent on older / synced orders. */
@@ -1208,4 +1220,81 @@ export interface SocialTarget {
   posts_per_week: number;
   followers_now: number | null;
   followers_goal: number | null;
+}
+
+export type BlogStatus = "draft" | "published";
+export type BlogLang = "de" | "en";
+
+export interface BlogPost {
+  id: string;
+  org_id: string;
+  slug: string;
+  title: string;
+  excerpt: string | null;
+  /** Markdown source; rendered by the public website. */
+  body_md: string;
+  cover_url: string | null;
+  lang: BlogLang;
+  status: BlogStatus;
+  /** Set when first published; the public site hides posts dated in the future. */
+  published_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type WebsiteEventStatus = "draft" | "published";
+
+export interface WebsiteEvent {
+  id: string;
+  org_id: string;
+  title: string;
+  description: string | null;
+  /** YYYY-MM-DD */
+  event_date: string;
+  /** Free text shown as-is, e.g. "19:00". */
+  event_time: string | null;
+  /** Short badge next to the title, e.g. "Halloween". */
+  tag: string | null;
+  cta_url: string | null;
+  status: WebsiteEventStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The one dish spotlighted on the website for the week starting `starts_on` (runs seven days). */
+export interface WeeklyDish {
+  id: string;
+  org_id: string;
+  /** YYYY-MM-DD */
+  starts_on: string;
+  recipe_id: string;
+  headline: string | null;
+  region: string | null;
+  /** Blank lines separate paragraphs. */
+  story: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+
+/** Website, brand and email identity of a restaurant (migration 0078). Staff-only; the website reads the public part through get_site_info(). */
+export interface OrgSite {
+  org_id: string;
+  site_url: string | null;
+  display_name: string | null;
+  logo_url: string | null;
+  primary_color: string | null;
+  /** Where a table QR lands on the site; "{table}" is replaced by the table name. */
+  table_path: string;
+  custom_domain: string | null;
+  from_name: string | null;
+  from_address: string | null;
+  reply_to: string | null;
+  staff_alert_email: string | null;
+  email_domain: string | null;
+  resend_domain_id: string | null;
+  email_domain_status: "none" | "pending" | "verified" | "failed";
+  email_dns_records: { record: string; name: string; type: string; value: string; status?: string; priority?: number }[] | null;
+  created_at: string;
+  updated_at: string;
 }

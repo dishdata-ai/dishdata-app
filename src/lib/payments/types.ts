@@ -40,6 +40,8 @@ export interface CheckoutParams {
   description: string;
   successUrl: string;
   cancelUrl: string;
+  /** The guest's language, carried through Stripe so the confirmation email matches. */
+  lang?: string;
 }
 
 export interface CheckoutResult {

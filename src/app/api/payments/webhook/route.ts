@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getStripe } from "@/lib/payments/stripe";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
 import { isStripeConfigured } from "@/lib/payments/config";
+import { notifyWebsiteOrder } from "@/lib/notify/orderEmails";
 
 // Stripe requires the raw, unparsed request body to verify the signature.
 export const runtime = "nodejs";
@@ -13,6 +14,7 @@ interface PaidEvent {
   orderId: string;
   amount: number;
   paymentIntentId: string | null;
+  lang?: string;
 }
 
 /** Record a Stripe payment and flip the order to paid. Idempotent per intent. */
@@ -47,6 +49,13 @@ async function markOrderPaid(admin: SupabaseClient, e: PaidEvent): Promise<NextR
     .eq("id", e.orderId)
     .eq("org_id", e.orgId);
   if (ordErr) return NextResponse.json({ error: ordErr.message }, { status: 500 });
+
+  // Website pre-orders wait as 'void' until paid: confirm the table and tell the kitchen and floor.
+  // A missing function (migration 0075 not applied yet) must not fail the payment record above.
+  const { error: confirmErr } = await admin.rpc("confirm_prepaid_order", { _order_id: e.orderId });
+  if (confirmErr) console.error("[payments] confirm_prepaid_order failed", confirmErr.message);
+  // Emails for the guest and the restaurant, now that the money is in. Never fails the webhook.
+  await notifyWebsiteOrder(admin, e.orderId, e.lang).catch((err) => console.error("[payments] order email failed", err));
 
   return NextResponse.json({ received: true });
 }
@@ -88,6 +97,7 @@ export async function POST(req: NextRequest) {
       return markOrderPaid(admin, {
         orgId: session.metadata?.org_id ?? "",
         orderId: session.metadata?.order_id ?? "",
+        lang: session.metadata?.lang,
         amount: (session.amount_total ?? 0) / 100,
         paymentIntentId:
           typeof session.payment_intent === "string"

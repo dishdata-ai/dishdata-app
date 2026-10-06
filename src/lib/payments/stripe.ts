@@ -89,7 +89,7 @@ export const stripeProvider: PaymentProvider = {
           ...(fee > 0 ? { application_fee_amount: fee } : {}),
           metadata: { org_id: params.orgId, order_id: params.orderId },
         },
-        metadata: { org_id: params.orgId, order_id: params.orderId },
+        metadata: { org_id: params.orgId, order_id: params.orderId, ...(params.lang ? { lang: params.lang } : {}) },
         success_url: params.successUrl,
         cancel_url: params.cancelUrl,
       },

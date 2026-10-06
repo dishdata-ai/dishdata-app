@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from "react";
 import { Check, Upload, Trash2, Puzzle, Truck, Plus, X, Percent, Printer, MapPin, LocateFixed } from "lucide-react";
 import { Card, SectionTitle, Button, Badge, Input, Field, Select } from "@/components/ui";
 import { PaymentsCard } from "@/components/PaymentsCard";
+import { SiteCard } from "@/components/SiteCard";
 import { useOrg } from "@/lib/hooks/useOrg";
 import { useEmployees, useInvalidate } from "@/lib/hooks/data";
 import { updateEmployee } from "@/lib/api/people";
@@ -1038,6 +1039,7 @@ export default function Settings() {
             </div>
           </div>
         </Card>
+        <SiteCard isAdmin={isAdmin} />
         <PaymentsCard isAdmin={isAdmin} />
         <StaffDiscountCard isAdmin={isAdmin} form={form} setForm={setForm} />
         <ReceiptPrinterCard isAdmin={isAdmin} />

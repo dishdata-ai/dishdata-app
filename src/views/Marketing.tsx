@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, Link2, Megaphone } from "lucide-react";
+import { CalendarDays, CalendarHeart, Link2, Megaphone, Newspaper, Sparkles } from "lucide-react";
 import { SectionTitle } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import Campaigns from "@/views/marketing/Campaigns";
 import Accounts from "@/views/marketing/Accounts";
 import Planner from "@/views/marketing/Planner";
+import Blog from "@/views/marketing/Blog";
+import SiteEvents from "@/views/marketing/SiteEvents";
+import WeeklyDish from "@/views/marketing/WeeklyDish";
 
 // Later phases add Inbox, Social, Shop and Insights tabs here.
 const TABS = [
   { id: "campaigns", label: "Campaigns", icon: Megaphone },
   { id: "planner", label: "Planner", icon: CalendarDays },
+  { id: "blog", label: "Blog", icon: Newspaper },
+  { id: "week", label: "Dish of the week", icon: Sparkles },
+  { id: "events", label: "Events", icon: CalendarHeart },
   { id: "accounts", label: "Accounts", icon: Link2 },
 ] as const;
 
@@ -63,6 +69,9 @@ export default function Marketing() {
 
       {tab === "campaigns" && <Campaigns />}
       {tab === "planner" && <Planner />}
+      {tab === "blog" && <Blog />}
+      {tab === "week" && <WeeklyDish />}
+      {tab === "events" && <SiteEvents />}
       {tab === "accounts" && <Accounts />}
     </div>
   );

@@ -5059,3 +5059,1005 @@ grant execute on function public.checkout_order(uuid, jsonb, order_type, uuid, u
 update public.orgs set staff_meal_pct_working = 40 where name = 'Kokoland Berlin' and staff_meal_pct_working is null;
 update public.orgs set staff_meal_pct_off = 30 where name = 'Kokoland Berlin' and staff_meal_pct_off is null;
 update public.orgs set staff_meal_free_drinks = 2 where name = 'Kokoland Berlin' and staff_meal_free_drinks is null;
+
+-- ============================================================================
+-- 0071 · Blog posts (see supabase/migrations/0071_blog_posts.sql)
+-- ============================================================================
+
+create table if not exists public.blog_posts (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  slug text not null,
+  title text not null,
+  excerpt text,
+  body_md text not null default '',
+  cover_url text,
+  lang text not null default 'en' check (lang in ('de', 'en')),
+  status text not null default 'draft' check (status in ('draft', 'published')),
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, slug)
+);
+
+create index if not exists blog_posts_org_idx on public.blog_posts (org_id, status, published_at desc);
+
+drop trigger if exists blog_posts_updated_at on public.blog_posts;
+create trigger blog_posts_updated_at before update on public.blog_posts
+  for each row execute function public.set_updated_at();
+
+alter table public.blog_posts enable row level security;
+
+drop policy if exists blog_posts_member_read on public.blog_posts;
+create policy blog_posts_member_read on public.blog_posts for select using (is_org_member(org_id));
+
+drop policy if exists blog_posts_manage on public.blog_posts;
+create policy blog_posts_manage on public.blog_posts for all
+  using (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'))
+  with check (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'));
+
+drop policy if exists blog_posts_public_read on public.blog_posts;
+create policy blog_posts_public_read on public.blog_posts for select to anon
+  using (status = 'published' and published_at is not null and published_at <= now());
+
+-- ============================================================================
+-- 0072 · Website events (see supabase/migrations/0072_website_events.sql)
+-- ============================================================================
+
+create table if not exists public.website_events (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  title text not null,
+  description text,
+  event_date date not null,
+  -- Free text such as "19:00" or "from 19:00": it is only displayed.
+  event_time text,
+  -- Short badge shown next to the title, e.g. "Live" or "Halloween".
+  tag text,
+  -- Optional "more info / tickets" link; the website falls back to its booking form.
+  cta_url text,
+  status text not null default 'draft' check (status in ('draft', 'published')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists website_events_org_idx on public.website_events (org_id, event_date);
+
+drop trigger if exists website_events_updated_at on public.website_events;
+create trigger website_events_updated_at before update on public.website_events
+  for each row execute function public.set_updated_at();
+
+alter table public.website_events enable row level security;
+
+drop policy if exists website_events_member_read on public.website_events;
+create policy website_events_member_read on public.website_events for select using (is_org_member(org_id));
+
+drop policy if exists website_events_manage on public.website_events;
+create policy website_events_manage on public.website_events for all
+  using (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'))
+  with check (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'));
+
+drop policy if exists website_events_public_read on public.website_events;
+create policy website_events_public_read on public.website_events for select to anon
+  using (status = 'published');
+
+-- Kokoland Berlin's first real event. Further dates are added in the app.
+insert into public.website_events (org_id, title, description, event_date, tag, status)
+select o.id, 'Halloween at kokoland',
+       'A Halloween-themed night at kokoland. More details coming soon.',
+       date '2026-10-31', 'Halloween', 'published'
+from public.orgs o
+where o.slug = 'kokoland-berlin'
+  and not exists (
+    select 1 from public.website_events e where e.org_id = o.id and e.event_date = date '2026-10-31'
+  );
+
+-- ============================================================================
+-- 0073 · Dish of the week (see supabase/migrations/0073_weekly_dish.sql)
+-- ============================================================================
+
+create table if not exists public.weekly_dish (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.orgs(id) on delete cascade,
+  starts_on date not null,
+  recipe_id uuid not null references public.recipes(id) on delete cascade,
+  -- One punchy line shown big, e.g. "Sunday biryani, the Malabar way".
+  headline text,
+  -- Where in Kerala it comes from, e.g. "Malabar" or "Travancore".
+  region text,
+  -- The story behind the dish; blank lines separate paragraphs.
+  story text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (org_id, starts_on)
+);
+
+create index if not exists weekly_dish_org_idx on public.weekly_dish (org_id, starts_on);
+
+drop trigger if exists weekly_dish_updated_at on public.weekly_dish;
+create trigger weekly_dish_updated_at before update on public.weekly_dish
+  for each row execute function public.set_updated_at();
+
+alter table public.weekly_dish enable row level security;
+
+drop policy if exists weekly_dish_member_read on public.weekly_dish;
+create policy weekly_dish_member_read on public.weekly_dish for select using (is_org_member(org_id));
+
+drop policy if exists weekly_dish_manage on public.weekly_dish;
+create policy weekly_dish_manage on public.weekly_dish for all
+  using (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'))
+  with check (has_org_role(org_id, 'owner', 'admin', 'partner', 'manager'));
+
+drop policy if exists weekly_dish_public_read on public.weekly_dish;
+create policy weekly_dish_public_read on public.weekly_dish for select to anon
+  using (
+    starts_on <= (now() at time zone 'Europe/Berlin')::date
+    and (now() at time zone 'Europe/Berlin')::date < starts_on + 7
+  );
+
+
+-- ============================================================================
+-- 0074 · Timed orders and dine-in pre-orders from the website
+--
+-- A guest can now say WHEN they want the food: delivery or takeaway for a chosen
+-- time, or "dine in" with a date, time and party size. A dine-in order also books
+-- the table (a `reservations` row, source 'public') and the order points back at
+-- it, so the floor sees food is already ordered and the kitchen can cook to the
+-- clock instead of guessing. Less waiting for the guest, less over-prepping.
+--
+--   orders.scheduled_for   when the guest wants the food (null = as soon as possible)
+--   orders.reservation_id  the table booked by a dine-in pre-order
+--
+-- The function gains three optional parameters, so the old 10-argument version
+-- is dropped first: two overloads that differ only by defaults make the call
+-- from the website ambiguous (see 0019).
+-- ============================================================================
+
+alter table public.orders
+  add column if not exists scheduled_for timestamptz,
+  add column if not exists reservation_id uuid references public.reservations(id) on delete set null;
+create index if not exists orders_org_scheduled_idx on public.orders (org_id, scheduled_for) where scheduled_for is not null;
+
+drop function if exists public.place_public_order(text,jsonb,text,text,text,text,text,text,text,text);
+
+create or replace function public.place_public_order(
+  _slug text, _items jsonb, _guest_name text default 'Guest',
+  _table_name text default null, _notes text default null,
+  _email text default null, _code text default null,
+  _order_type text default 'dine_in', _address text default null,
+  _postcode text default null,
+  _scheduled_for timestamptz default null, _party_size int default null, _phone text default null
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  _org uuid; _rate numeric; _subtotal numeric := 0; _tax numeric := 0; _total numeric; _discount numeric := 0;
+  _no int; _order_number text; _order_id uuid; _full_items jsonb := '[]'::jsonb;
+  _cust uuid; _voucher jsonb; _prog record; _mult numeric := 1; _earn int := 0;
+  _delivery_fee numeric := 0; _zone record; grp record; _grp_net numeric;
+  it jsonb; r record;
+  _res_id uuid; _when_note text := '';
+  _table_id uuid; _tab record; _merged jsonb; _idx int; i int; _appended boolean := false; _tab_total numeric;
+begin
+  select id, tax_rate into _org, _rate from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  if jsonb_array_length(_items) = 0 or jsonb_array_length(_items) > 50 then raise exception 'invalid order'; end if;
+
+  -- Timed orders: the guest picks when the food should be ready. Never in the
+  -- past, with a little lead time so the kitchen can plan, and not months out.
+  if _scheduled_for is not null then
+    if _scheduled_for < now() + interval '20 minutes' then raise exception 'pick a time at least 20 minutes from now'; end if;
+    if _scheduled_for > now() + interval '45 days' then raise exception 'pick a time within the next 45 days'; end if;
+    _when_note := 'For ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'DD.MM. HH24:MI') || '. ';
+  end if;
+  -- A website dine-in order is a booking too: it needs a time, a phone number and a party size.
+  if _order_type = 'dine_in' and (_table_name is null or length(trim(_table_name)) = 0) and _party_size is not null then
+    if _scheduled_for is null then raise exception 'pick a time for your table'; end if;
+    if _phone is null or length(trim(_phone)) < 5 then raise exception 'a phone number is needed to hold your table'; end if;
+    if _party_size < 1 or _party_size > 30 then raise exception 'invalid party size'; end if;
+  end if;
+
+  for it in select * from jsonb_array_elements(_items) loop
+    select id, name, price, tax_rate into r from recipes
+      where id = (it->>'recipe_id')::uuid and org_id = _org and is_active = true
+        and (sold_out_until is null or sold_out_until <= now())
+        and name not ilike '%(Tournament)%'
+        and (
+          not exists (select 1 from event_menu_items emi where emi.recipe_id = recipes.id)
+          or exists (
+            select 1 from event_menu_items emi
+            join event_menus em on em.id = emi.event_menu_id
+            where emi.recipe_id = recipes.id
+              and em.org_id = _org and em.is_active = true and em.show_on_website = true
+          )
+        );
+    if not found then raise exception 'item unavailable'; end if;
+    _subtotal := _subtotal + r.price * (it->>'qty')::numeric;
+    _full_items := _full_items || jsonb_build_object(
+      'recipe_id', r.id, 'name', r.name, 'qty', (it->>'qty')::numeric, 'price', r.price,
+      'tax_rate', coalesce(r.tax_rate, _rate)
+    );
+  end loop;
+
+  if _code is not null and length(trim(_code)) > 0 then
+    _voucher := loyalty_voucher_value(_org, _code, _subtotal);
+    if (_voucher->>'valid')::boolean then _discount := coalesce((_voucher->>'discount')::numeric,0); end if;
+  end if;
+
+  -- Delivery: server-computed fee, never trust a client-submitted amount.
+  if _order_type = 'delivery' then
+    select * into _zone from delivery_zones
+      where org_id = _org and is_active = true
+        and lower(regexp_replace(postcode, '\s', '', 'g')) = lower(regexp_replace(coalesce(_postcode, ''), '\s', '', 'g'))
+      limit 1;
+    if not found then raise exception 'we do not deliver to this postcode yet'; end if;
+    if _subtotal < _zone.min_order then
+      raise exception 'minimum order for delivery to this postcode is %', _zone.min_order;
+    end if;
+    _delivery_fee := _zone.delivery_fee;
+  end if;
+
+  -- VAT extracted per rate group (see checkout_order) — the delivery fee is
+  -- added to the total as its own gross line, not re-taxed here.
+  for grp in
+    select rate, sum(gross) as gross from (
+      select coalesce((item.value->>'tax_rate')::numeric, _rate) as rate,
+             (item.value->>'price')::numeric * (item.value->>'qty')::numeric as gross
+      from jsonb_array_elements(_full_items) item
+    ) lines
+    group by rate
+  loop
+    _grp_net := greatest(
+      grp.gross - (case when _subtotal > 0 then _discount * grp.gross / _subtotal else 0 end),
+      0
+    );
+    _tax := _tax + round(_grp_net * grp.rate / (100 + grp.rate), 2);
+  end loop;
+
+  _total    := round(greatest(_subtotal - _discount, 0) + _delivery_fee, 2);
+  _subtotal := round(greatest(_subtotal - _discount, 0) - _tax, 2);  -- store NET
+
+  if _email is not null and length(trim(_email)) > 0 then
+    select id into _cust from customers where org_id = _org and lower(email) = lower(_email) limit 1;
+    if _cust is null then
+      insert into customers (org_id, name, email) values (_org, coalesce(nullif(trim(_guest_name),''),'Guest'), lower(_email)) returning id into _cust;
+    end if;
+  end if;
+
+  -- The QR code carries a table NAME; everything downstream wants the id.
+  if _order_type = 'dine_in' and _table_name is not null and length(trim(_table_name)) > 0 then
+    select id into _table_id from restaurant_tables
+     where org_id = _org
+       and lower(name) = lower(trim(_table_name))
+       and lower(name) <> 'takeaway'
+     limit 1;
+  end if;
+
+  -- An unpaid order already open at this table, from this sitting.
+  if _table_id is not null and _discount = 0 then
+    select o.id, o.order_number, o.items into _tab
+      from orders o
+     where o.org_id = _org and o.table_id = _table_id and o.source = 'storefront'
+       and o.status = 'open' and o.created_at > now() - interval '6 hours'
+     order by o.created_at desc
+     limit 1;
+    _appended := found;
+  end if;
+
+  if _appended then
+    -- Fold the new lines into the tab: same dish at the same price bumps its
+    -- quantity, anything else joins as a new line. A bumped line loses its
+    -- `ready` tick, because the extra portions still have to be cooked.
+    _merged := _tab.items;
+    for it in select * from jsonb_array_elements(_full_items) loop
+      _idx := null;
+      for i in 0 .. jsonb_array_length(_merged) - 1 loop
+        if _merged->i->>'recipe_id' = it->>'recipe_id'
+           and coalesce((_merged->i->>'price')::numeric, 0) = coalesce((it->>'price')::numeric, 0) then
+          _idx := i; exit;
+        end if;
+      end loop;
+      if _idx is null then
+        _merged := _merged || it;
+      else
+        _merged := jsonb_set(
+          _merged, array[_idx::text],
+          (_merged->_idx) - 'ready'
+            || jsonb_build_object('qty', (_merged->_idx->>'qty')::numeric + (it->>'qty')::numeric)
+        );
+      end if;
+    end loop;
+
+    update orders set
+      items          = _merged,
+      subtotal       = subtotal + _subtotal,
+      tax            = tax + _tax,
+      total          = total + _total,
+      -- Food just arrived on a tab the kitchen had finished, so it goes back
+      -- on the board rather than sitting silently as ready/served.
+      kitchen_status = case when kitchen_status in ('ready','served')
+                            then 'preparing'::kitchen_status else kitchen_status end,
+      kitchen_notes  = coalesce(kitchen_notes, '') || coalesce(' + ' || nullif(trim(_notes), ''), ''),
+      customer_id    = coalesce(customer_id, _cust)
+    where id = _tab.id
+    returning total into _tab_total;
+
+    _order_id := _tab.id;
+    _order_number := _tab.order_number;
+  else
+    update orgs set next_order_no = next_order_no + 1 where id = _org returning next_order_no - 1 into _no;
+    _order_number := 'ORD-' || lpad(_no::text, 4, '0');
+
+    -- Dine-in from the website: hold a table for the same time. The reservation
+    -- carries the order number so the floor knows food is already coming.
+    if _order_type = 'dine_in' and _table_id is null and _party_size is not null then
+      insert into reservations (org_id, guest_name, phone, party_size, starts_at, note, source)
+      values (_org, coalesce(nullif(trim(_guest_name),''),'Guest'), trim(_phone), _party_size, _scheduled_for,
+              'Pre-order ' || _order_number || coalesce('. ' || nullif(trim(_notes), ''), ''), 'public')
+      returning id into _res_id;
+    end if;
+
+    insert into orders (org_id, order_number, order_type, guest_name, customer_id, table_id, items, subtotal, tax, total, status, kitchen_status, kitchen_notes, source, scheduled_for, reservation_id)
+    values (_org, _order_number, _order_type::order_type, _guest_name, _cust, _table_id, _full_items, _subtotal, _tax, _total, 'open', 'new',
+            coalesce('Table: ' || _table_name || '. ', '') || _when_note
+              || case when _party_size is not null then _party_size || ' guests. ' else '' end
+              || case when _phone is not null and length(trim(_phone)) > 0 then 'Phone: ' || trim(_phone) || '. ' else '' end
+              || coalesce(_notes, ''),
+            'storefront', _scheduled_for, _res_id)
+    returning id into _order_id;
+  end if;
+
+  if _order_type = 'delivery' then
+    insert into deliveries (org_id, order_id, address, postcode, delivery_fee, status)
+    values (_org, _order_id, coalesce(_address, ''), _postcode, _delivery_fee, 'pending');
+  end if;
+
+  if _voucher is not null and (_voucher->>'valid')::boolean then
+    update loyalty_redemptions set status = 'applied', applied_order_id = _order_id where id = (_voucher->>'redemption_id')::uuid;
+  end if;
+
+  if _cust is not null then
+    update customers set visits = visits + 1, total_spend = total_spend + _total, last_visit_at = now() where id = _cust;
+    select * into _prog from loyalty_programs where org_id = _org;
+    if found and _prog.enabled then
+      select coalesce((t.perks->>'earn_multiplier')::numeric,1) into _mult
+        from customers c left join loyalty_tiers t on t.id = c.tier_id where c.id = _cust;
+      _earn := floor(_total * coalesce(_prog.earn_rate,1) * coalesce(_mult,1))::int;
+      if _earn > 0 then
+        update customers set points = points + _earn, status_points = status_points + _earn where id = _cust;
+        insert into loyalty_transactions (org_id, customer_id, points_delta, reason, order_id, action_type)
+          values (_org, _cust, _earn, 'Order ' || _order_number, _order_id, 'purchase');
+      end if;
+      perform loyalty_recompute_tier(_org, _cust);
+    end if;
+  end if;
+
+  insert into notifications (org_id, type, title, body, ref)
+  values (_org, 'public_order',
+          case when _appended then 'Added to ' || _order_number else 'Online order ' || _order_number end,
+          _guest_name || coalesce(' at table ' || _table_name, '')
+            || case when _scheduled_for is not null then ' — ' || _order_type || ' for ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'DD.MM. HH24:MI') else '' end
+            || case when _appended then ' — more items on the tab' else ' — pay at counter' end,
+          'kitchen');
+
+  if _res_id is not null then
+    insert into notifications (org_id, type, title, body, ref)
+    values (_org, 'reservation', 'New reservation: ' || _guest_name,
+            _party_size || ' guests on ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'Mon DD HH24:MI') || ' with pre-order ' || _order_number, 'floor');
+  end if;
+
+  return jsonb_build_object(
+    'order_number', _order_number,
+    -- What the whole table now owes, so a second round doesn't show the guest
+    -- only that round's price. Loyalty above still earns on _total, which is
+    -- the amount actually added.
+    'total', case when _appended then _tab_total else _total end,
+    'discount', _discount,
+    'order_id', _order_id, 'delivery_fee', _delivery_fee, 'appended', _appended,
+    'scheduled_for', _scheduled_for, 'reservation_id', _res_id
+  );
+end $$;
+
+grant execute on function public.place_public_order(text,jsonb,text,text,text,text,text,text,text,text,timestamptz,int,text) to anon;
+
+
+-- ============================================================================
+-- 0075 · Pay online (Stripe) for pre-orders, and guest check-in
+--
+-- Stops no-shows and wasted food on website pre-orders:
+--   * A takeaway/dine-in pre-order over 25 EUR must be paid online once the
+--     restaurant's Stripe account is connected. Smaller ones may still be paid
+--     at the restaurant.
+--   * A prepay order is created as 'void' with payment_state = 'awaiting', so no
+--     kitchen board, report or reservation list counts it. The Stripe webhook
+--     flips it to paid and calls confirm_prepaid_order(), which confirms the
+--     table and raises the kitchen / floor notifications.
+--   * The guest taps "I'm 10 minutes away" on their order page
+--     (guest_check_in), the kitchen sees it and starts cooking, so food is
+--     ready when they arrive instead of being made for nobody.
+--
+-- orders.payment_state  null = pay at the restaurant, 'awaiting', 'paid'
+-- orders.checked_in_at  when the guest said they are on their way
+--
+-- place_public_order gains `_prepay`, so the 13-argument version from 0074 is
+-- dropped first (two overloads that differ only by defaults make the call
+-- ambiguous, see 0019).
+-- ============================================================================
+
+alter table public.orders
+  add column if not exists payment_state text check (payment_state in ('awaiting','paid')),
+  add column if not exists checked_in_at timestamptz;
+
+drop function if exists public.place_public_order(text,jsonb,text,text,text,text,text,text,text,text,timestamptz,int,text);
+
+create or replace function public.place_public_order(
+  _slug text, _items jsonb, _guest_name text default 'Guest',
+  _table_name text default null, _notes text default null,
+  _email text default null, _code text default null,
+  _order_type text default 'dine_in', _address text default null,
+  _postcode text default null,
+  _scheduled_for timestamptz default null, _party_size int default null, _phone text default null,
+  _prepay boolean default false
+) returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  _org uuid; _rate numeric; _subtotal numeric := 0; _tax numeric := 0; _total numeric; _discount numeric := 0;
+  _no int; _order_number text; _order_id uuid; _full_items jsonb := '[]'::jsonb;
+  _cust uuid; _voucher jsonb; _prog record; _mult numeric := 1; _earn int := 0;
+  _delivery_fee numeric := 0; _zone record; grp record; _grp_net numeric;
+  it jsonb; r record;
+  _res_id uuid; _when_note text := ''; _pay_ok boolean := false; _prepay_over constant numeric := 25;
+  _table_id uuid; _tab record; _merged jsonb; _idx int; i int; _appended boolean := false; _tab_total numeric;
+begin
+  select id, tax_rate into _org, _rate from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+
+  -- Online payment is only on offer once the restaurant has finished connecting its Stripe account.
+  select coalesce((settings->'payments'->>'charges_enabled')::boolean, false) into _pay_ok from orgs where id = _org;
+  if _prepay and not _pay_ok then raise exception 'online payment is not available yet'; end if;
+  if _prepay and _order_type = 'delivery' then raise exception 'online payment is for takeaway and dine-in only'; end if;
+  if jsonb_array_length(_items) = 0 or jsonb_array_length(_items) > 50 then raise exception 'invalid order'; end if;
+
+  -- Timed orders: the guest picks when the food should be ready. Never in the
+  -- past, with a little lead time so the kitchen can plan, and not months out.
+  if _scheduled_for is not null then
+    if _scheduled_for < now() + interval '20 minutes' then raise exception 'pick a time at least 20 minutes from now'; end if;
+    if _scheduled_for > now() + interval '45 days' then raise exception 'pick a time within the next 45 days'; end if;
+    _when_note := 'For ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'DD.MM. HH24:MI') || '. ';
+  end if;
+  -- A website dine-in order is a booking too: it needs a time, a phone number and a party size.
+  if _order_type = 'dine_in' and (_table_name is null or length(trim(_table_name)) = 0) and _party_size is not null then
+    if _scheduled_for is null then raise exception 'pick a time for your table'; end if;
+    if _phone is null or length(trim(_phone)) < 5 then raise exception 'a phone number is needed to hold your table'; end if;
+    if _party_size < 1 or _party_size > 30 then raise exception 'invalid party size'; end if;
+  end if;
+
+  for it in select * from jsonb_array_elements(_items) loop
+    select id, name, price, tax_rate into r from recipes
+      where id = (it->>'recipe_id')::uuid and org_id = _org and is_active = true
+        and (sold_out_until is null or sold_out_until <= now())
+        and name not ilike '%(Tournament)%'
+        and (
+          not exists (select 1 from event_menu_items emi where emi.recipe_id = recipes.id)
+          or exists (
+            select 1 from event_menu_items emi
+            join event_menus em on em.id = emi.event_menu_id
+            where emi.recipe_id = recipes.id
+              and em.org_id = _org and em.is_active = true and em.show_on_website = true
+          )
+        );
+    if not found then raise exception 'item unavailable'; end if;
+    _subtotal := _subtotal + r.price * (it->>'qty')::numeric;
+    _full_items := _full_items || jsonb_build_object(
+      'recipe_id', r.id, 'name', r.name, 'qty', (it->>'qty')::numeric, 'price', r.price,
+      'tax_rate', coalesce(r.tax_rate, _rate)
+    );
+  end loop;
+
+  if _code is not null and length(trim(_code)) > 0 then
+    _voucher := loyalty_voucher_value(_org, _code, _subtotal);
+    if (_voucher->>'valid')::boolean then _discount := coalesce((_voucher->>'discount')::numeric,0); end if;
+  end if;
+
+  -- Delivery: server-computed fee, never trust a client-submitted amount.
+  if _order_type = 'delivery' then
+    select * into _zone from delivery_zones
+      where org_id = _org and is_active = true
+        and lower(regexp_replace(postcode, '\s', '', 'g')) = lower(regexp_replace(coalesce(_postcode, ''), '\s', '', 'g'))
+      limit 1;
+    if not found then raise exception 'we do not deliver to this postcode yet'; end if;
+    if _subtotal < _zone.min_order then
+      raise exception 'minimum order for delivery to this postcode is %', _zone.min_order;
+    end if;
+    _delivery_fee := _zone.delivery_fee;
+  end if;
+
+  -- VAT extracted per rate group (see checkout_order) — the delivery fee is
+  -- added to the total as its own gross line, not re-taxed here.
+  for grp in
+    select rate, sum(gross) as gross from (
+      select coalesce((item.value->>'tax_rate')::numeric, _rate) as rate,
+             (item.value->>'price')::numeric * (item.value->>'qty')::numeric as gross
+      from jsonb_array_elements(_full_items) item
+    ) lines
+    group by rate
+  loop
+    _grp_net := greatest(
+      grp.gross - (case when _subtotal > 0 then _discount * grp.gross / _subtotal else 0 end),
+      0
+    );
+    _tax := _tax + round(_grp_net * grp.rate / (100 + grp.rate), 2);
+  end loop;
+
+  _total    := round(greatest(_subtotal - _discount, 0) + _delivery_fee, 2);
+
+  -- No-show and waste guard: a timed order above the limit has to be paid up front
+  -- (once online payment exists). Small ones can still be paid at the restaurant.
+  if _pay_ok and not _prepay and _scheduled_for is not null and _order_type in ('dine_in','takeaway')
+     and _total > _prepay_over then
+    raise exception 'pre-orders over % EUR are paid online', _prepay_over;
+  end if;
+  _subtotal := round(greatest(_subtotal - _discount, 0) - _tax, 2);  -- store NET
+
+  if _email is not null and length(trim(_email)) > 0 then
+    select id into _cust from customers where org_id = _org and lower(email) = lower(_email) limit 1;
+    if _cust is null then
+      insert into customers (org_id, name, email) values (_org, coalesce(nullif(trim(_guest_name),''),'Guest'), lower(_email)) returning id into _cust;
+    end if;
+  end if;
+
+  -- The QR code carries a table NAME; everything downstream wants the id.
+  if _order_type = 'dine_in' and _table_name is not null and length(trim(_table_name)) > 0 then
+    select id into _table_id from restaurant_tables
+     where org_id = _org
+       and lower(name) = lower(trim(_table_name))
+       and lower(name) <> 'takeaway'
+     limit 1;
+  end if;
+
+  -- An unpaid order already open at this table, from this sitting.
+  if _table_id is not null and _discount = 0 then
+    select o.id, o.order_number, o.items into _tab
+      from orders o
+     where o.org_id = _org and o.table_id = _table_id and o.source = 'storefront'
+       and o.status = 'open' and o.created_at > now() - interval '6 hours'
+     order by o.created_at desc
+     limit 1;
+    _appended := found;
+  end if;
+
+  if _appended then
+    -- Fold the new lines into the tab: same dish at the same price bumps its
+    -- quantity, anything else joins as a new line. A bumped line loses its
+    -- `ready` tick, because the extra portions still have to be cooked.
+    _merged := _tab.items;
+    for it in select * from jsonb_array_elements(_full_items) loop
+      _idx := null;
+      for i in 0 .. jsonb_array_length(_merged) - 1 loop
+        if _merged->i->>'recipe_id' = it->>'recipe_id'
+           and coalesce((_merged->i->>'price')::numeric, 0) = coalesce((it->>'price')::numeric, 0) then
+          _idx := i; exit;
+        end if;
+      end loop;
+      if _idx is null then
+        _merged := _merged || it;
+      else
+        _merged := jsonb_set(
+          _merged, array[_idx::text],
+          (_merged->_idx) - 'ready'
+            || jsonb_build_object('qty', (_merged->_idx->>'qty')::numeric + (it->>'qty')::numeric)
+        );
+      end if;
+    end loop;
+
+    update orders set
+      items          = _merged,
+      subtotal       = subtotal + _subtotal,
+      tax            = tax + _tax,
+      total          = total + _total,
+      -- Food just arrived on a tab the kitchen had finished, so it goes back
+      -- on the board rather than sitting silently as ready/served.
+      kitchen_status = case when kitchen_status in ('ready','served')
+                            then 'preparing'::kitchen_status else kitchen_status end,
+      kitchen_notes  = coalesce(kitchen_notes, '') || coalesce(' + ' || nullif(trim(_notes), ''), ''),
+      customer_id    = coalesce(customer_id, _cust)
+    where id = _tab.id
+    returning total into _tab_total;
+
+    _order_id := _tab.id;
+    _order_number := _tab.order_number;
+  else
+    update orgs set next_order_no = next_order_no + 1 where id = _org returning next_order_no - 1 into _no;
+    _order_number := 'ORD-' || lpad(_no::text, 4, '0');
+
+    -- Dine-in from the website: hold a table for the same time. The reservation
+    -- carries the order number so the floor knows food is already coming.
+    if _order_type = 'dine_in' and _table_id is null and _party_size is not null then
+      insert into reservations (org_id, guest_name, phone, party_size, starts_at, note, source, status)
+      values (_org, coalesce(nullif(trim(_guest_name),''),'Guest'), trim(_phone), _party_size, _scheduled_for,
+              'Pre-order ' || _order_number || coalesce('. ' || nullif(trim(_notes), ''), ''), 'public',
+              -- A prepaid booking only counts once the payment has gone through.
+              case when _prepay then 'cancelled'::reservation_status else 'booked'::reservation_status end)
+      returning id into _res_id;
+    end if;
+
+    insert into orders (org_id, order_number, order_type, guest_name, customer_id, table_id, items, subtotal, tax, total, status, kitchen_status, kitchen_notes, source, scheduled_for, reservation_id, payment_state)
+    values (_org, _order_number, _order_type::order_type, _guest_name, _cust, _table_id, _full_items, _subtotal, _tax, _total,
+            -- Unpaid prepay orders stay 'void' (kept off every kitchen board and report) until the Stripe payment arrives.
+            case when _prepay then 'void'::order_status else 'open'::order_status end, 'new',
+            coalesce('Table: ' || _table_name || '. ', '') || _when_note
+              || case when _party_size is not null then _party_size || ' guests. ' else '' end
+              || case when _phone is not null and length(trim(_phone)) > 0 then 'Phone: ' || trim(_phone) || '. ' else '' end
+              || coalesce(_notes, ''),
+            'storefront', _scheduled_for, _res_id, case when _prepay then 'awaiting' end)
+    returning id into _order_id;
+  end if;
+
+  if _order_type = 'delivery' then
+    insert into deliveries (org_id, order_id, address, postcode, delivery_fee, status)
+    values (_org, _order_id, coalesce(_address, ''), _postcode, _delivery_fee, 'pending');
+  end if;
+
+  if _voucher is not null and (_voucher->>'valid')::boolean then
+    update loyalty_redemptions set status = 'applied', applied_order_id = _order_id where id = (_voucher->>'redemption_id')::uuid;
+  end if;
+
+  if _cust is not null and not _prepay then
+    update customers set visits = visits + 1, total_spend = total_spend + _total, last_visit_at = now() where id = _cust;
+    select * into _prog from loyalty_programs where org_id = _org;
+    if found and _prog.enabled then
+      select coalesce((t.perks->>'earn_multiplier')::numeric,1) into _mult
+        from customers c left join loyalty_tiers t on t.id = c.tier_id where c.id = _cust;
+      _earn := floor(_total * coalesce(_prog.earn_rate,1) * coalesce(_mult,1))::int;
+      if _earn > 0 then
+        update customers set points = points + _earn, status_points = status_points + _earn where id = _cust;
+        insert into loyalty_transactions (org_id, customer_id, points_delta, reason, order_id, action_type)
+          values (_org, _cust, _earn, 'Order ' || _order_number, _order_id, 'purchase');
+      end if;
+      perform loyalty_recompute_tier(_org, _cust);
+    end if;
+  end if;
+
+  if not _prepay then
+  insert into notifications (org_id, type, title, body, ref)
+  values (_org, 'public_order',
+          case when _appended then 'Added to ' || _order_number else 'Online order ' || _order_number end,
+          _guest_name || coalesce(' at table ' || _table_name, '')
+            || case when _scheduled_for is not null then ' — ' || _order_type || ' for ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'DD.MM. HH24:MI') else '' end
+            || case when _appended then ' — more items on the tab' else ' — pay at counter' end,
+          'kitchen');
+
+  if _res_id is not null then
+    insert into notifications (org_id, type, title, body, ref)
+    values (_org, 'reservation', 'New reservation: ' || _guest_name,
+            _party_size || ' guests on ' || to_char(_scheduled_for at time zone 'Europe/Berlin', 'Mon DD HH24:MI') || ' with pre-order ' || _order_number, 'floor');
+  end if;
+  end if;
+
+  return jsonb_build_object(
+    'order_number', _order_number,
+    -- What the whole table now owes, so a second round doesn't show the guest
+    -- only that round's price. Loyalty above still earns on _total, which is
+    -- the amount actually added.
+    'total', case when _appended then _tab_total else _total end,
+    'discount', _discount,
+    'order_id', _order_id, 'delivery_fee', _delivery_fee, 'appended', _appended,
+    'scheduled_for', _scheduled_for, 'reservation_id', _res_id, 'prepay', _prepay
+  );
+end $$;
+
+grant execute on function public.place_public_order(text,jsonb,text,text,text,text,text,text,text,text,timestamptz,int,text,boolean) to anon;
+
+-- What the website's order page needs, by order id (an unguessable uuid, like get_public_order_status).
+create or replace function public.get_public_order_card(_slug text, _order_id uuid)
+returns jsonb language plpgsql stable security definer set search_path = public as $$
+declare _org uuid; o record; _party int;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  select * into o from orders where id = _order_id and org_id = _org and source = 'storefront';
+  if not found then raise exception 'order not found'; end if;
+  select party_size into _party from reservations where id = o.reservation_id;
+  return jsonb_build_object(
+    'order_number', o.order_number, 'order_type', o.order_type, 'total', o.total,
+    'status', o.status, 'payment_state', o.payment_state,
+    'scheduled_for', o.scheduled_for, 'checked_in_at', o.checked_in_at,
+    'party_size', _party
+  );
+end $$;
+grant execute on function public.get_public_order_card(text, uuid) to anon;
+
+-- "I'm 10 minutes away": tells the kitchen to start. Only for paid or pay-at-restaurant timed orders.
+create or replace function public.guest_check_in(_slug text, _order_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare _org uuid; o record;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  select * into o from orders where id = _order_id and org_id = _org and source = 'storefront' for update;
+  if not found then raise exception 'order not found'; end if;
+  if o.status not in ('open','paid') or o.scheduled_for is null then raise exception 'this order cannot be checked in'; end if;
+  if o.checked_in_at is null then
+    update orders set checked_in_at = now() where id = o.id;
+    insert into notifications (org_id, type, title, body, ref)
+    values (_org, 'public_order', 'On the way: ' || o.order_number,
+            coalesce(o.guest_name, 'Guest') || ' is about 10 minutes away. Start cooking.', 'kitchen');
+  end if;
+  return jsonb_build_object('order_number', o.order_number, 'checked_in_at', coalesce(o.checked_in_at, now()));
+end $$;
+grant execute on function public.guest_check_in(text, uuid) to anon;
+
+-- Called by the Stripe webhook (service role) once a prepay order is paid.
+create or replace function public.confirm_prepaid_order(_order_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare o record;
+begin
+  select * into o from orders where id = _order_id for update;
+  if not found or o.payment_state is distinct from 'awaiting' then return; end if;
+  update orders set payment_state = 'paid', status = 'paid' where id = o.id;
+  if o.reservation_id is not null then
+    update reservations set status = 'booked' where id = o.reservation_id and status = 'cancelled';
+  end if;
+  insert into notifications (org_id, type, title, body, ref)
+  values (o.org_id, 'public_order', 'Paid online ' || o.order_number,
+          coalesce(o.guest_name, 'Guest') || ' paid ' || o.total || ' EUR'
+            || case when o.scheduled_for is not null then ' for ' || to_char(o.scheduled_for at time zone 'Europe/Berlin', 'DD.MM. HH24:MI') else '' end,
+          'kitchen');
+  if o.reservation_id is not null then
+    insert into notifications (org_id, type, title, body, ref)
+    values (o.org_id, 'reservation', 'New reservation: ' || coalesce(o.guest_name, 'Guest'),
+            'Table booked with a paid pre-order ' || o.order_number, 'floor');
+  end if;
+end $$;
+revoke all on function public.confirm_prepaid_order(uuid) from public, anon, authenticated;
+grant execute on function public.confirm_prepaid_order(uuid) to service_role;
+-- ============================================================================
+-- 0076 · Customer accounts for the website
+--
+-- A guest signs in on the restaurant's website with an emailed code (Supabase
+-- Auth, no password). Their login is linked to the same `customers` row staff see
+-- in DishData, so points, tier, orders and vouchers are one record, not two.
+--
+--   customers.auth_user_id   the website login this customer record belongs to
+--
+-- Everything goes through SECURITY DEFINER functions that act only on the
+-- signed-in user's own record (auth.uid()): the customers table itself stays
+-- staff-only under RLS.
+--
+-- Linking is by VERIFIED email: the sign-in code proves the guest owns the
+-- address, so an existing customer row with that email (from an earlier guest
+-- order, the till or a staff entry) is claimed by the login. Otherwise a new
+-- customer row is created and the "signup" loyalty bonus is awarded (once).
+--
+-- Staff accounts are never deleted by delete_my_account (they are org members).
+-- ============================================================================
+
+alter table public.customers
+  add column if not exists auth_user_id uuid references auth.users(id) on delete set null;
+create unique index if not exists customers_org_auth_user_idx
+  on public.customers (org_id, auth_user_id) where auth_user_id is not null;
+
+-- The signed-in user's customer row for this restaurant (found, claimed by email, or created).
+create or replace function public._my_customer(_org uuid)
+returns uuid language plpgsql security definer set search_path = public as $$
+declare _uid uuid := auth.uid(); _email text; _conf timestamptz; _meta jsonb; _cid uuid; _name text;
+begin
+  if _uid is null then raise exception 'sign in first'; end if;
+  select email, email_confirmed_at, raw_user_meta_data into _email, _conf, _meta from auth.users where id = _uid;
+  if _email is null or _conf is null then raise exception 'confirm your email first'; end if;
+
+  select id into _cid from customers where org_id = _org and auth_user_id = _uid;
+  if _cid is null then
+    select id into _cid from customers
+     where org_id = _org and auth_user_id is null and lower(email) = lower(_email)
+     order by created_at limit 1;
+    if _cid is not null then
+      update customers set auth_user_id = _uid where id = _cid;
+    else
+      _name := coalesce(nullif(trim(_meta->>'full_name'), ''), split_part(_email, '@', 1));
+      insert into customers (org_id, name, email, auth_user_id) values (_org, _name, lower(_email), _uid) returning id into _cid;
+    end if;
+    perform loyalty_award(_org, _cid, 'signup');
+    perform loyalty_recompute_tier(_org, _cid);
+  end if;
+  return _cid;
+end $$;
+revoke all on function public._my_customer(uuid) from public, anon, authenticated;
+
+create or replace function public.get_my_account(_slug text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare _org uuid; _cid uuid; c record; _prog record;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  _cid := _my_customer(_org);
+  select * into c from customers where id = _cid;
+  select * into _prog from loyalty_programs where org_id = _org;
+
+  return jsonb_build_object(
+    'customer', jsonb_build_object(
+      'id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'birthday', c.birthday,
+      'newsletter_opt_in', c.newsletter_opt_in, 'points', c.points, 'status_points', c.status_points,
+      'tier', c.tier, 'tier_id', c.tier_id, 'visits', c.visits, 'total_spend', c.total_spend),
+    'program', case when _prog.org_id is null then null else jsonb_build_object(
+      'enabled', _prog.enabled, 'points_name', _prog.points_name, 'tier_basis', _prog.tier_basis) end,
+    'tiers', coalesce((select jsonb_agg(jsonb_build_object('id', t.id, 'name', t.name, 'threshold', t.threshold, 'color', t.color, 'sort_order', t.sort_order) order by t.threshold)
+                         from loyalty_tiers t where t.org_id = _org), '[]'::jsonb),
+    'rewards', coalesce((select jsonb_agg(jsonb_build_object('id', r.id, 'label', r.label, 'description', r.description, 'cost_points', r.cost_points,
+                         'reward_type', r.reward_type, 'value', r.value, 'min_tier_id', r.min_tier_id) order by r.sort_order)
+                         from loyalty_rewards r where r.org_id = _org and r.enabled), '[]'::jsonb),
+    'earn_rules', coalesce((select jsonb_agg(jsonb_build_object('action_type', e.action_type, 'label', e.label, 'points', e.points))
+                         from loyalty_earn_rules e where e.org_id = _org and e.enabled and e.action_type <> 'purchase'), '[]'::jsonb),
+    'vouchers', coalesce((select jsonb_agg(jsonb_build_object('code', v.code, 'label', v.reward_snapshot->>'label', 'expires_at', v.expires_at) order by v.created_at desc)
+                         from loyalty_redemptions v where v.customer_id = _cid and v.status = 'issued' and (v.expires_at is null or v.expires_at > now())), '[]'::jsonb),
+    'orders', coalesce((select jsonb_agg(x order by x->>'created_at' desc) from (
+                         select jsonb_build_object('id', o.id, 'order_number', o.order_number, 'order_type', o.order_type, 'total', o.total,
+                                'status', o.status, 'payment_state', o.payment_state, 'created_at', o.created_at, 'scheduled_for', o.scheduled_for,
+                                'items', o.items, 'party_size', r.party_size) as x
+                           from orders o left join reservations r on r.id = o.reservation_id
+                          where o.customer_id = _cid and o.org_id = _org and o.status <> 'void'
+                          order by o.created_at desc limit 30) q), '[]'::jsonb)
+  );
+end $$;
+revoke all on function public.get_my_account(text) from public, anon;
+grant execute on function public.get_my_account(text) to authenticated;
+
+create or replace function public.update_my_account(_slug text, _name text, _phone text, _birthday date, _newsletter boolean)
+returns void language plpgsql security definer set search_path = public as $$
+declare _org uuid; _cid uuid; _was boolean;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  _cid := _my_customer(_org);
+  if _name is null or length(trim(_name)) < 1 then raise exception 'name is required'; end if;
+  select newsletter_opt_in into _was from customers where id = _cid;
+  update customers set name = trim(_name), phone = nullif(trim(_phone), ''), birthday = _birthday,
+         newsletter_opt_in = coalesce(_newsletter, false)
+   where id = _cid;
+  if coalesce(_newsletter, false) and not coalesce(_was, false) then
+    perform loyalty_award(_org, _cid, 'newsletter');
+  end if;
+end $$;
+revoke all on function public.update_my_account(text, text, text, date, boolean) from public, anon;
+grant execute on function public.update_my_account(text, text, text, date, boolean) to authenticated;
+
+-- Spend points on a reward; returns the voucher code to enter as the discount code at checkout.
+create or replace function public.redeem_my_reward(_slug text, _reward uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare _org uuid; _cid uuid;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  _cid := _my_customer(_org);
+  return loyalty_redeem(_org, _cid, _reward);
+end $$;
+revoke all on function public.redeem_my_reward(text, uuid) from public, anon;
+grant execute on function public.redeem_my_reward(text, uuid) to authenticated;
+
+-- A copy of everything held about the signed-in guest (GDPR access / portability).
+create or replace function public.export_my_data(_slug text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare _org uuid; _cid uuid;
+begin
+  select id into _org from orgs where slug = _slug;
+  if _org is null then raise exception 'restaurant not found'; end if;
+  _cid := _my_customer(_org);
+  return jsonb_build_object(
+    'exported_at', now(),
+    'customer', (select to_jsonb(c) - 'org_id' - 'created_by' from customers c where c.id = _cid),
+    'orders', coalesce((select jsonb_agg(jsonb_build_object('order_number', o.order_number, 'type', o.order_type, 'items', o.items,
+                          'total', o.total, 'status', o.status, 'placed_at', o.created_at, 'scheduled_for', o.scheduled_for) order by o.created_at)
+                          from orders o where o.customer_id = _cid), '[]'::jsonb),
+    'loyalty_transactions', coalesce((select jsonb_agg(jsonb_build_object('points', t.points_delta, 'reason', t.reason, 'at', t.created_at) order by t.created_at)
+                          from loyalty_transactions t where t.customer_id = _cid), '[]'::jsonb),
+    'vouchers', coalesce((select jsonb_agg(jsonb_build_object('code', v.code, 'status', v.status, 'issued_at', v.created_at, 'expires_at', v.expires_at))
+                          from loyalty_redemptions v where v.customer_id = _cid), '[]'::jsonb)
+  );
+end $$;
+revoke all on function public.export_my_data(text) from public, anon;
+grant execute on function public.export_my_data(text) to authenticated;
+
+-- Delete the signed-in guest's account. Personal details are erased from every
+-- customer record linked to this login; orders stay (bookkeeping retention) but lose the name.
+-- Refuses for staff: members of any restaurant keep their login.
+create or replace function public.delete_my_account()
+returns void language plpgsql security definer set search_path = public as $$
+declare _uid uuid := auth.uid();
+begin
+  if _uid is null then raise exception 'sign in first'; end if;
+  if exists (select 1 from org_members where user_id = _uid) then
+    raise exception 'staff accounts cannot be deleted here';
+  end if;
+  update orders set guest_name = null
+   where customer_id in (select id from customers where auth_user_id = _uid);
+  update customers set name = 'Deleted guest', email = null, phone = null, birthday = null,
+         instagram_handle = null, newsletter_opt_in = false, auth_user_id = null
+   where auth_user_id = _uid;
+  delete from auth.users where id = _uid;
+end $$;
+revoke all on function public.delete_my_account() from public, anon;
+grant execute on function public.delete_my_account() to authenticated;
+-- ============================================================================
+-- 0077 · Remember that a website order's confirmation email has been sent
+--
+-- The confirmation (guest) and alert (restaurant) emails are sent by the app
+-- server. This column makes it safe to ask twice: whoever stamps it first sends
+-- the emails, everyone else does nothing, so a double click or a retried Stripe
+-- webhook never emails the guest twice.
+-- ============================================================================
+
+alter table public.orders add column if not exists notified_at timestamptz;
+-- ============================================================================
+-- 0078 · Website, brand and email settings per restaurant
+--
+-- Until now one restaurant's identity lived in server environment variables
+-- (site address, email sender, alert address). That cannot serve a second
+-- restaurant. Each org now stores its own in one row:
+--
+--   site_url           its own website, e.g. https://kokoland.de. Table QR codes,
+--                      email links and payment return pages point here.
+--   display_name, logo_url, primary_color   brand for emails and pages
+--   table_path         where a table QR lands, "{table}" is replaced, e.g. /t/{table}
+--   custom_domain      a domain DishData itself serves the storefront on (later)
+--   from_name / from_address / reply_to / staff_alert_email / email_domain...
+--                      email identity, and the state of the sending-domain check
+--
+-- Staff-only (RLS): the email addresses are private. The website reads the
+-- public part (site, name, logo, colour) through get_site_info().
+--
+-- auth_code_requests backs the rate limit on emailed sign-in codes.
+-- ============================================================================
+
+create table if not exists public.org_sites (
+  org_id uuid primary key references public.orgs(id) on delete cascade,
+  site_url text,
+  display_name text,
+  logo_url text,
+  primary_color text,
+  table_path text not null default '/t/{table}',
+  custom_domain text unique,
+  from_name text,
+  from_address text,
+  reply_to text,
+  staff_alert_email text,
+  email_domain text,
+  resend_domain_id text,
+  email_domain_status text not null default 'none' check (email_domain_status in ('none','pending','verified','failed')),
+  email_dns_records jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop trigger if exists org_sites_updated_at on public.org_sites;
+create trigger org_sites_updated_at before update on public.org_sites
+  for each row execute function public.set_updated_at();
+
+alter table public.org_sites enable row level security;
+
+drop policy if exists org_sites_member_read on public.org_sites;
+create policy org_sites_member_read on public.org_sites for select using (is_org_member(org_id));
+
+drop policy if exists org_sites_admin_write on public.org_sites;
+create policy org_sites_admin_write on public.org_sites for all
+  using (has_org_role(org_id, 'owner', 'admin'))
+  with check (has_org_role(org_id, 'owner', 'admin'));
+
+-- The public part, for the restaurant's website and hosted pages.
+create or replace function public.get_site_info(_slug text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select coalesce(
+    (select jsonb_build_object(
+        'site_url', s.site_url, 'display_name', coalesce(s.display_name, o.name),
+        'logo_url', s.logo_url, 'primary_color', s.primary_color, 'table_path', s.table_path)
+       from orgs o left join org_sites s on s.org_id = o.id where o.slug = _slug),
+    '{}'::jsonb);
+$$;
+grant execute on function public.get_site_info(text) to anon, authenticated;
+
+-- Sign-in code requests (service role only; no policies on purpose).
+create table if not exists public.auth_code_requests (
+  id bigserial primary key,
+  email text not null,
+  ip text,
+  created_at timestamptz not null default now()
+);
+create index if not exists auth_code_requests_email_idx on public.auth_code_requests (email, created_at desc);
+create index if not exists auth_code_requests_ip_idx on public.auth_code_requests (ip, created_at desc);
+alter table public.auth_code_requests enable row level security;

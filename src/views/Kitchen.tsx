@@ -56,8 +56,10 @@ function Ticket({
   onToggleLine: (index: number, ready: boolean) => void;
 }) {
   const col = columns.find((c) => c.status === order.kitchen_status)!;
+  // A timed order counts down to its time instead of ageing from when it was placed.
+  const dueIn = order.scheduled_for ? Math.round((new Date(order.scheduled_for).getTime() - now) / 60000) : null;
   const age = ageMinutes(order.created_at, now);
-  const urgent = age >= 15 && order.kitchen_status !== "ready";
+  const urgent = (dueIn !== null ? dueIn <= 10 : age >= 15) && order.kitchen_status !== "ready";
   const readyCount = order.items.filter((l) => l.ready).length;
   const partly = readyCount > 0 && readyCount < order.items.length;
 
@@ -84,9 +86,20 @@ function Ticket({
         <span
           className={cn("rounded-full px-2 py-0.5 text-[11px] font-bold", urgent ? "bg-rose-soft/15 text-rose-soft" : "bg-white/5 text-zinc-400")}
         >
-          {age}m
+          {dueIn === null ? `${age}m` : dueIn > 0 ? `in ${dueIn >= 60 ? `${Math.floor(dueIn / 60)}h ${dueIn % 60}m` : `${dueIn}m`}` : "due now"}
         </span>
       </div>
+      {order.checked_in_at && (
+        <p className="mt-1 mr-1 inline-flex items-center gap-1 rounded-full bg-brand-400/20 px-2 py-0.5 text-[11px] font-bold text-brand-300">
+          On the way · start cooking
+        </p>
+      )}
+      {order.scheduled_for && (
+        <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-soft/15 px-2 py-0.5 text-[11px] font-bold text-amber-soft">
+          For {new Date(order.scheduled_for).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" })}
+          {order.reservation_id ? " · table booked" : ""}
+        </p>
+      )}
       <p className="mt-0.5 text-[11px] text-zinc-500 capitalize">
         {order.order_type.replace("_", "-")}
         {order.guest_name ? ` · ${order.guest_name}` : ""}
@@ -180,7 +193,10 @@ function Board({ sound, setSound }: { sound: boolean; setSound: (v: boolean | ((
         (o) =>
           o.kitchen_status !== "served" &&
           o.status !== "void" &&
-          Date.now() - new Date(o.created_at).getTime() < 12 * 3600000,
+          // Timed orders show for the next 24 hours until 6 hours after their time; the rest for 12 hours.
+          (o.scheduled_for
+            ? new Date(o.scheduled_for).getTime() - Date.now() < 24 * 3600000 && Date.now() - new Date(o.scheduled_for).getTime() < 6 * 3600000
+            : Date.now() - new Date(o.created_at).getTime() < 12 * 3600000),
       ),
     [ordersQ.data],
   );
@@ -293,7 +309,7 @@ function Board({ sound, setSound }: { sound: boolean; setSound: (v: boolean | ((
           {columns.map((col) => {
             const tickets = active
               .filter((o) => o.kitchen_status === col.status)
-              .sort((a, b) => a.created_at.localeCompare(b.created_at));
+              .sort((a, b) => (a.scheduled_for ?? a.created_at).localeCompare(b.scheduled_for ?? b.created_at));
             return (
               <div key={col.status} className="space-y-3">
                 <div className="flex items-center gap-2 px-1">

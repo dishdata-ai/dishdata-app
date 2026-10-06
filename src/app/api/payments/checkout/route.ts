@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase-admin";
 import { getPaymentProvider, readPaymentsSettings } from "@/lib/payments";
 import { appUrl, isStripeConfigured } from "@/lib/payments/config";
+import { getOrgBrand } from "@/lib/notify/brand";
 
 /**
  * POST /api/payments/checkout
@@ -19,7 +20,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Payments require a connected Supabase backend." }, { status: 400 });
   }
 
-  let body: { orderId?: string; successUrl?: string; cancelUrl?: string };
+  let body: { orderId?: string; successUrl?: string; cancelUrl?: string; lang?: string };
   try {
     body = await req.json();
   } catch {
@@ -58,6 +59,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Return pages live on the restaurant's own site when it has one.
+  const brand = await getOrgBrand(admin, org.id);
+  const home = brand.siteUrl || appUrl();
+
   try {
     const provider = getPaymentProvider(settings);
     const result = await provider.createCheckout({
@@ -67,8 +72,9 @@ export async function POST(req: NextRequest) {
       amount: order.total,
       currency: org.currency,
       description: `${org.name} · ${order.order_number}`,
-      successUrl: body.successUrl ?? `${appUrl()}/?paid=${order.order_number}`,
-      cancelUrl: body.cancelUrl ?? `${appUrl()}/?cancelled=${order.order_number}`,
+      successUrl: body.successUrl ?? `${home}/?paid=${order.order_number}`,
+      cancelUrl: body.cancelUrl ?? `${home}/?cancelled=${order.order_number}`,
+      lang: body.lang === "de" ? "de" : "en",
     });
     return NextResponse.json({ url: result.url, sessionId: result.sessionId });
   } catch (e) {
